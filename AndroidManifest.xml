@@ -42,5 +42,13 @@
             android:exported="false"
             android:grantUriPermissions="true" />
 
+        <receiver
+            android:name=".InstallReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="in.startv.hspatcher.INSTALL_STATUS" />
+            </intent-filter>
+        </receiver>
+
     </application>
 </manifest>

@@ -230,6 +230,15 @@ public class MainActivity extends Activity {
                 }
                 doInstall();
             }
+        } else if (requestCode == INSTALL_REQUEST) {
+            if (resultCode == RESULT_OK) {
+                log("✅ APK installation completed successfully!");
+            } else if (resultCode == RESULT_CANCELED) {
+                log("⚠️ Installation was cancelled or failed");
+                log("📁 APK is available at: " + (patchedApk != null ? patchedApk.getAbsolutePath() : "unknown"));
+            } else {
+                log("⚠️ Install result code: " + resultCode);
+            }
         }
     }
 
@@ -456,14 +465,24 @@ public class MainActivity extends Activity {
                 );
 
                 File result = engine.patch();
-                patchedApk = result;
 
-                // Copy to Downloads for easy access
+                // Keep patchedApk pointing to the internal file (app's private storage)
+                // The FileProvider can serve this to the package installer.
+                // Also copy to a stable internal location for install.
+                File installApk = new File(getFilesDir(), "patched_output.apk");
+                copyFile(result, installApk);
+                patchedApk = installApk;
+
+                // Also copy to Downloads for manual access / sharing
                 File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                 String timestamp = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
                 File outputFile = new File(downloads, "HSPatched_" + timestamp + ".apk");
-                copyFile(result, outputFile);
-                patchedApk = outputFile;
+                try {
+                    copyFile(result, outputFile);
+                    log("📁 Also saved to: " + outputFile.getAbsolutePath());
+                } catch (Exception ex) {
+                    log("⚠️ Could not copy to Downloads: " + ex.getMessage());
+                }
 
                 updateProgress(100, "Done!");
                 log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -620,26 +639,52 @@ public class MainActivity extends Activity {
 
     private void doInstall() {
         log("📲 Installing patched APK...");
-        try {
-            // Primary: Intent-based install via content URI (most reliable across OEMs)
-            Uri apkUri;
-            if (Build.VERSION.SDK_INT >= 24) {
-                apkUri = HspFileProvider.getUriForFile(this, patchedApk);
-            } else {
-                apkUri = Uri.fromFile(patchedApk);
-            }
+        log("   File: " + patchedApk.getAbsolutePath());
+        log("   Size: " + patchedApk.length() + " bytes");
+        log("   Exists: " + patchedApk.exists());
+        log("   Readable: " + patchedApk.canRead());
 
+        // Build content URI for Android 7+
+        Uri apkUri;
+        if (Build.VERSION.SDK_INT >= 24) {
+            apkUri = HspFileProvider.getUriForFile(this, patchedApk);
+        } else {
+            apkUri = Uri.fromFile(patchedApk);
+        }
+        log("   URI: " + apkUri);
+
+        // Try Method 1: ACTION_INSTALL_PACKAGE (most explicit for APK installation)
+        try {
+            log("↪ Method 1: ACTION_INSTALL_PACKAGE...");
+            Intent intent = new Intent(Intent.ACTION_INSTALL_PACKAGE);
+            intent.setData(apkUri);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            intent.putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, false);
+            intent.putExtra(Intent.EXTRA_RETURN_RESULT, true);
+            startActivityForResult(intent, INSTALL_REQUEST);
+            log("✅ Install dialog launched — please confirm installation");
+            return;
+        } catch (Exception e) {
+            log("⚠️ Method 1 failed: " + e.getMessage());
+        }
+
+        // Try Method 2: ACTION_VIEW with MIME type
+        try {
+            log("↪ Method 2: ACTION_VIEW...");
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
             log("✅ Install dialog launched — please confirm installation");
+            return;
         } catch (Exception e) {
-            log("⚠️ Intent install failed: " + e.getMessage());
-            log("↪ Trying PackageInstaller session fallback...");
-            doInstallViaSession();
+            log("⚠️ Method 2 failed: " + e.getMessage());
         }
+
+        // Try Method 3: PackageInstaller Session API
+        log("↪ Method 3: PackageInstaller Session...");
+        doInstallViaSession();
     }
 
     private void doInstallViaSession() {
@@ -653,6 +698,7 @@ public class MainActivity extends Activity {
             int sessionId = installer.createSession(params);
             android.content.pm.PackageInstaller.Session session = installer.openSession(sessionId);
 
+            log("   Writing APK to session " + sessionId + "...");
             InputStream apkIn = new java.io.FileInputStream(patchedApk);
             java.io.OutputStream sessionOut = session.openWrite("patched.apk", 0, patchedApk.length());
             byte[] buf = new byte[65536];
@@ -662,9 +708,10 @@ public class MainActivity extends Activity {
             sessionOut.close();
             apkIn.close();
 
-            Intent callbackIntent = new Intent(this, MainActivity.class);
-            callbackIntent.setAction("in.startv.hspatcher.INSTALL_STATUS");
-            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
+            // Use BroadcastReceiver for session callback (required on Android 14+)
+            Intent callbackIntent = new Intent("in.startv.hspatcher.INSTALL_STATUS");
+            callbackIntent.setPackage(getPackageName());
+            android.app.PendingIntent pi = android.app.PendingIntent.getBroadcast(
                 this, sessionId, callbackIntent,
                 android.app.PendingIntent.FLAG_UPDATE_CURRENT
                     | android.app.PendingIntent.FLAG_MUTABLE);
@@ -672,6 +719,9 @@ public class MainActivity extends Activity {
             log("📲 Session install triggered — please confirm installation");
         } catch (Exception e) {
             log("❌ All install methods failed: " + e.getMessage());
+            for (StackTraceElement st : e.getStackTrace()) {
+                log("   " + st.toString());
+            }
             log("📁 Install manually from: " + patchedApk.getAbsolutePath());
             Toast.makeText(this,
                 "Install manually: " + patchedApk.getAbsolutePath(),
