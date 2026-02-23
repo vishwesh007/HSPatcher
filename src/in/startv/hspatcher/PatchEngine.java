@@ -8,6 +8,7 @@ import java.security.cert.*;
 import java.util.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.regex.*;
 import java.util.zip.*;
 import javax.security.auth.x500.X500Principal;
 
@@ -113,12 +114,22 @@ public class PatchEngine {
             log("   ℹ️ DEX unchanged — ContentProvider bootstrap mode");
         }
 
+        // ======== Step 3.5: Smali-level patches on remaining DEXes ========
+        progress(50, "Smali patches...");
+        log("\n🔧 Step 3.5: Smali-level patches (License hack + DexExtractor)...");
+        Map<String, File> extraPatched = patchRemainingDexes(inputApk, info, ws);
+        if (!extraPatched.isEmpty()) {
+            log("   ✅ Patched " + extraPatched.size() + " additional DEX file(s)");
+        } else {
+            log("   ℹ️ No additional DEX files needed patching");
+        }
+
         // ======== Step 4: Build patched APK ========
         progress(65, "Building APK...");
         log("\n📦 Step 4: Building patched APK...");
         File unsignedApk = new File(ws, "unsigned.apk");
         buildPatchedApk(inputApk, unsignedApk, info.hookDexName, patchedDex,
-                         injDexName, injDex, info.packageName);
+                         injDexName, injDex, info.packageName, extraPatched);
         log("   Unsigned: " + (unsignedApk.length() / 1024) + " KB");
 
         // ======== Step 5: Sign APK ========
@@ -138,6 +149,7 @@ public class PatchEngine {
     static class ApkInfo {
         String packageName = "unknown";
         int dexCount;
+        List<String> dexNames = new ArrayList<>();
         String hookClassName;
         String hookSmaliType;
         String hookDexName;
@@ -161,6 +173,7 @@ public class PatchEngine {
                 }
             }
             Collections.sort(dexNames);
+            info.dexNames = dexNames;
             info.dexCount = dexNames.size();
 
             // Detect DexGuard class encryption early:
@@ -651,6 +664,16 @@ public class PatchEngine {
         zf.close();
         log("   Extracted " + extracted + " smali from HSPatch module pack");
 
+        // Substitute htc600.smali license hack placeholders with actual app info
+        File htc600File = new File(tmpDir, "com/android/vending/licensing/htc600.smali");
+        if (htc600File.exists()) {
+            String htcContent = readFileStr(htc600File);
+            htcContent = htcContent.replace("LICENSE_HACK|", info.packageName + "|");
+            htcContent = htcContent.replace("LICENSE_HACK2", "1");
+            writeFileStr(htc600File, htcContent);
+            log("   Patched htc600.smali: package=" + info.packageName);
+        }
+
         generateHSPatchInit(tmpDir, info);
         extracted++;
         generateBootProvider(tmpDir);
@@ -955,6 +978,12 @@ public class PatchEngine {
 
         injectHook(targetSmali, info.isApplication);
 
+        // Apply smali-level patches (License hack + DexExtractor)
+        int smpCount = applySmaliPatches(smaliDir, info);
+        if (smpCount > 0) {
+            log("   🔧 Applied smali patches to " + smpCount + " files");
+        }
+
         log("   Reassembling DEX...");
         DexBuilder db = new DexBuilder(Opcodes.forApi(35));
         List<File> allSmali = new ArrayList<>();
@@ -1149,7 +1178,8 @@ public class PatchEngine {
     private void buildPatchedApk(File original, File output,
                                   String hookDexName, File hookDex,
                                   String injDexName, File injDex,
-                                  String packageName) throws Exception {
+                                  String packageName,
+                                  Map<String, File> extraPatched) throws Exception {
         ZipFile origZip = new ZipFile(original);
         ZipOutputStream zos = new ZipOutputStream(
             new BufferedOutputStream(new FileOutputStream(output)));
@@ -1186,6 +1216,8 @@ public class PatchEngine {
             }
             // Skip hook DEX only if we have a patched replacement
             if (hookDex != null && name.equals(hookDexName)) continue;
+            // Skip DEXes that have smali-patched replacements
+            if (extraPatched != null && extraPatched.containsKey(name)) continue;
 
             // Intercept manifest for activity + provider registration
             if (name.equals("AndroidManifest.xml")) {
@@ -1219,6 +1251,15 @@ public class PatchEngine {
 
         addToZip(zos, injDexName, injDex);
         log("   Added: " + injDexName + " (" + (injDex.length() / 1024) + " KB)");
+
+        // Add smali-patched DEXes
+        if (extraPatched != null) {
+            for (Map.Entry<String, File> ep : extraPatched.entrySet()) {
+                addToZip(zos, ep.getKey(), ep.getValue());
+                log("   Replaced: " + ep.getKey() + " (smali patches, " +
+                    (ep.getValue().length() / 1024) + " KB)");
+            }
+        }
 
         // Embed Frida gadget if available
         if (fridaZip != null && fridaZip.exists()) {
@@ -1350,6 +1391,199 @@ public class PatchEngine {
         zos.putNextEntry(e);
         zos.write(data);
         zos.closeEntry();
+    }
+
+    // ======================== SMALI-LEVEL PATCHES (License hack + DexExtractor) ========================
+
+    /**
+     * Apply regex-based smali patches to all .smali files in a directory.
+     * Patches: Signature.verify→true, getInstallerPackageName→"com.android.vending",
+     * LicenseValidator nonce bypass, and DexExtractor Method.invoke wrapping (for DexGuard).
+     * Returns the number of files that were modified.
+     */
+    private int applySmaliPatches(File smaliDir, ApkInfo info) {
+        int patchCount = 0;
+        List<File> smaliFiles = new ArrayList<>();
+        collectSmaliFiles(smaliDir, smaliFiles);
+
+        for (File f : smaliFiles) {
+            try {
+                String content = readFileStr(f);
+                String original = content;
+                content = applyLicensePatches(content);
+                if (info.dexguardEncrypted) {
+                    content = applyDexExtractorPatches(content);
+                }
+                if (!content.equals(original)) {
+                    writeFileStr(f, content);
+                    patchCount++;
+                }
+            } catch (Exception e) {
+                // Ignore individual file errors
+            }
+        }
+        return patchCount;
+    }
+
+    /**
+     * Apply license-related smali patches (from License_hack patch format).
+     * 1. Signature.verify() → always return true
+     * 2. getInstallerPackageName() → return "com.android.vending"
+     * 3. LicenseValidator nonce check → bypass (if-eq → goto)
+     */
+    private String applyLicensePatches(String content) {
+        // === 1. Signature.verify([B)Z → always true ===
+        // Before: invoke-virtual {vX, vY}, Ljava/security/Signature;->verify([B)Z
+        //         move-result vZ
+        // After:  invoke-virtual {vX, vY}, Ljava/security/Signature;->verify([B)Z
+        //         const/4 vZ, 0x1
+        content = Pattern.compile(
+            "(invoke-virtual \\{[vp]\\d+, [vp]\\d+\\}, Ljava/security/Signature;->verify\\(\\[B\\)Z)" +
+            "\n\n(\\s+)move-result ([vp]\\d+)"
+        ).matcher(content).replaceAll(
+            "$1\n\n$2const/4 $3, 0x1"
+        );
+
+        // === 2a. getInstallerPackageName → "com.android.vending" (simple variant) ===
+        // Before: invoke-virtual {vX, vY}, ...PackageManager;->getInstallerPackageName(...)
+        //         move-result-object vZ
+        // After:  ...same invoke...
+        //         const-string vZ, "com.android.vending"
+        content = Pattern.compile(
+            "(invoke-virtual \\{[pv]\\d+, [pv]\\d+\\}, Landroid/content/pm/PackageManager;->" +
+            "(?:getInstallerPackageName|InstallerPackageName)\\(Ljava/lang/String;\\)Ljava/lang/String;)" +
+            "\n\n(\\s+)move-result-object ([pv]\\d+)"
+        ).matcher(content).replaceAll(
+            "$1\n\n$2const-string $3, \"com.android.vending\""
+        );
+
+        // === 2b. getInstallerPackageName → "com.android.vending" (with try/catch) ===
+        content = Pattern.compile(
+            "(invoke-virtual \\{[pv]\\d+, [pv]\\d+\\}, Landroid/content/pm/PackageManager;->" +
+            "(?:getInstallerPackageName|InstallerPackageName)\\(Ljava/lang/String;\\)Ljava/lang/String;" +
+            "\n\\s+:try_end_\\S+\n\\s+\\.catch \\S+; \\{:try_start_\\S+ \\.\\. :try_end_\\S+\\} :catch_\\S+)" +
+            "\n\n(\\s+)move-result-object ([pv]\\d+)"
+        ).matcher(content).replaceAll(
+            "$1\n\n$2const-string $3, \"com.android.vending\""
+        );
+
+        // === 3. LicenseValidator nonce bypass: if-eq → goto ===
+        // Multiple variants — all change conditional jump to unconditional goto
+        // Variant: if-eq rA, rB, :cond_X  followed by "LicenseValidator" string
+        content = Pattern.compile(
+            "if-eq ([pv]\\d+), ([pv]\\d+), (:cond_\\S+)" +
+            "(\n\n\\s+const-string [pv]\\d+, \"LicenseValidator\")"
+        ).matcher(content).replaceAll(
+            "goto $3$4"
+        );
+
+        // Variant: if-eq followed by "Nonce doesn" string (with optional .line directive)
+        content = Pattern.compile(
+            "if-eq ([pv]\\d+), ([pv]\\d+), (:cond_\\S+)" +
+            "(\n\n\\s+(?:\\.line \\d+\n\\s+)?const-string [pv]\\d+, \"Nonce doesn)"
+        ).matcher(content).replaceAll(
+            "goto $3$4"
+        );
+
+        return content;
+    }
+
+    /**
+     * Apply DexExtractor patches — wrap Method.invoke() calls with reflection interceptor.
+     * Only applied when DexGuard encryption is detected, as DexGuard dispatches
+     * encrypted methods via reflection. The wrapper logs each reflected call.
+     */
+    private String applyDexExtractorPatches(String content) {
+        // Before: invoke-virtual {vM, vT, vA}, Ljava/lang/reflect/Method;->invoke(...)Ljava/lang/Object;
+        // After:  invoke-static {vM, vT, vA}, Lcom/anymy/ref;->invoke(Object,Object,[Object)V
+        //         invoke-virtual {vM, vT, vA}, Ljava/lang/reflect/Method;->invoke(...)Ljava/lang/Object;
+        content = Pattern.compile(
+            "(invoke-virtual \\{([vp]\\d+), ([vp]\\d+), ([vp]\\d+)\\}, " +
+            "Ljava/lang/reflect/Method;->invoke\\(Ljava/lang/Object;\\[Ljava/lang/Object;\\)Ljava/lang/Object;)"
+        ).matcher(content).replaceAll(
+            "invoke-static {$2, $3, $4}, Lcom/anymy/ref;->invoke(Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)V\n\n    $1"
+        );
+
+        return content;
+    }
+
+    /**
+     * Process all DEX files EXCEPT the hook DEX: baksmali, apply regex patches, reassemble.
+     * Quick-scans raw DEX bytes first to skip DEXes that don't contain patchable patterns.
+     * Returns a map of dexName → patchedFile for DEXes that were modified.
+     */
+    private Map<String, File> patchRemainingDexes(File apk, ApkInfo info, File ws) throws Exception {
+        Map<String, File> patched = new LinkedHashMap<>();
+        for (String dexName : info.dexNames) {
+            if (dexName.equals(info.hookDexName)) continue; // Already handled in patchHookDex
+
+            File origDex = new File(ws, "sp_" + dexName);
+            extractFileFromApk(apk, dexName, origDex);
+
+            // Quick check: does this DEX contain any patchable patterns?
+            byte[] dexBytes = readAllBytes(new FileInputStream(origDex));
+            String dexStr = new String(dexBytes, "ISO-8859-1");
+            boolean hasLicensePatterns = dexStr.contains("Ljava/security/Signature;") ||
+                dexStr.contains("getInstallerPackageName") ||
+                dexStr.contains("LicenseValidator") ||
+                dexStr.contains("ILicenseResultListener");
+            boolean hasReflectPatterns = info.dexguardEncrypted &&
+                dexStr.contains("Ljava/lang/reflect/Method;");
+            dexBytes = null;
+            dexStr = null;
+
+            if (!hasLicensePatterns && !hasReflectPatterns) {
+                origDex.delete();
+                continue;
+            }
+
+            log("   " + dexName + ": patchable patterns found, disassembling...");
+
+            // Baksmali
+            File smaliDir = new File(ws, "sp_smali_" + dexName.replace(".dex", ""));
+            smaliDir.mkdirs();
+            MultiDexContainer<? extends DexFile> container =
+                DexFileFactory.loadDexContainer(origDex, Opcodes.forApi(35));
+            for (String en : container.getDexEntryNames()) {
+                BaksmaliOptions opts = new BaksmaliOptions();
+                opts.apiLevel = 35;
+                Baksmali.disassembleDexFile(container.getEntry(en).getDexFile(), smaliDir, 4, opts);
+            }
+            container = null;
+            System.gc();
+
+            // Apply patches
+            int patches = applySmaliPatches(smaliDir, info);
+
+            if (patches > 0) {
+                log("   " + dexName + ": " + patches + " files patched, reassembling...");
+                DexBuilder db = new DexBuilder(Opcodes.forApi(35));
+                List<File> allSmali = new ArrayList<>();
+                collectSmaliFiles(smaliDir, allSmali);
+                int ok = 0, fail = 0;
+                for (File sf : allSmali) {
+                    try {
+                        SmaliMod.assembleSmaliFile(sf, db, 35, false, false);
+                        ok++;
+                    } catch (Exception e) {
+                        fail++;
+                    }
+                }
+                File outDex = new File(ws, dexName);
+                FileDataStore fds = new FileDataStore(outDex);
+                db.writeTo(fds);
+                fds.close();
+                patched.put(dexName, outDex);
+                log("   " + dexName + ": assembled " + ok + " classes" +
+                    (fail > 0 ? " (" + fail + " errors)" : ""));
+            } else {
+                log("   " + dexName + ": no patterns matched");
+            }
+
+            origDex.delete();
+            deleteDir(smaliDir);
+        }
+        return patched;
     }
 
     // ======================== SIGNATURE EXTRACTION ========================
