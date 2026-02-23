@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:background="#FF121212">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:paddingTop="32dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⚡ HSPatcher"
+            android:textSize="32sp"
+            android:textColor="#FF00E676"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="One-Click Universal APK Patcher"
+            android:textSize="14sp"
+            android:textColor="#99FFFFFF"
+            android:paddingTop="4dp" />
+    </LinearLayout>
+
+    <!-- Selected APK info -->
+    <LinearLayout
+        android:id="@+id/apk_info_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#FF1E1E1E"
+        android:padding="16dp"
+        android:layout_marginTop="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Selected APK"
+            android:textSize="12sp"
+            android:textColor="#99FFFFFF" />
+
+        <TextView
+            android:id="@+id/apk_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="16sp"
+            android:textColor="#FFFFFFFF"
+            android:textStyle="bold"
+            android:paddingTop="4dp" />
+
+        <TextView
+            android:id="@+id/apk_size"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="13sp"
+            android:textColor="#99FFFFFF"
+            android:paddingTop="2dp" />
+    </LinearLayout>
+
+    <!-- Log output -->
+    <ScrollView
+        android:id="@+id/log_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="16dp"
+        android:background="#FF1A1A1A"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/log_output"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Ready. Select an APK to patch."
+            android:textSize="12sp"
+            android:textColor="#CCCCCC"
+            android:fontFamily="monospace"
+            android:lineSpacingExtra="2dp" />
+    </ScrollView>
+
+    <!-- Progress bar -->
+    <ProgressBar
+        android:id="@+id/progress_bar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:max="100"
+        android:progress="0"
+        android:progressTint="#FF00E676"
+        android:progressBackgroundTint="#33FFFFFF"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/progress_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textSize="12sp"
+        android:textColor="#FF00E676"
+        android:gravity="center"
+        android:paddingTop="4dp"
+        android:visibility="gone" />
+
+    <!-- Buttons Row 1: Select / Patch -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="16dp">
+
+        <Button
+            android:id="@+id/btn_select"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_weight="1"
+            android:text="SELECT APK"
+            android:textColor="#FF000000"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:background="#FF00E676"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btn_patch"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_weight="1"
+            android:text="⚡ PATCH"
+            android:textColor="#FFFFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:background="#FF6200EA"
+            android:enabled="false"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+    <!-- Extract from installed apps -->
+    <Button
+        android:id="@+id/btn_extract"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="📱 EXTRACT FROM INSTALLED APP"
+        android:textColor="#FFFFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:background="#FF00796B"
+        android:layout_marginTop="8dp" />
+
+    <Button
+        android:id="@+id/btn_install"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:text="INSTALL PATCHED APK"
+        android:textColor="#FF000000"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:background="#FFFFAB00"
+        android:visibility="gone"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp" />
+
+</LinearLayout>

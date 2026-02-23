@@ -1,0 +1,302 @@
+/*
+ * HSPatch Universal Frida Script v2.0
+ * - SSL Certificate Pinning Bypass
+ * - Signature Verification Bypass (runtime layer)
+ * - Piracy / License / Integrity Checks Removal
+ * - Screenshot / Recording FLAG_SECURE Bypass
+ * - Network Traffic Monitoring & Logging
+ */
+
+setTimeout(function() {
+    Java.perform(function() {
+        var TAG = "HSPatch-Frida";
+
+        console.log('');
+        console.log('======================================================');
+        console.log('[#] HSPatch Universal Bypass Suite v2.0               [#]');
+        console.log('======================================================');
+
+        // =====================================================
+        // 1. SSL CERTIFICATE PINNING BYPASS
+        // =====================================================
+
+        // TrustManagerImpl
+        try {
+            var array_list = Java.use('java.util.ArrayList');
+            var TrustManagerImpl = Java.use('com.android.org.conscrypt.TrustManagerImpl');
+            TrustManagerImpl.checkTrustedRecursive.implementation = function(a, b, c, d, e, f, g, h) {
+                console.log('[+] SSL: Bypassing TrustManagerImpl for: ' + b);
+                return array_list.$new();
+            };
+        } catch (err) {
+            console.log('[-] TrustManagerImpl not found');
+        }
+
+        // OpenSSLSocketImpl
+        try {
+            var OpenSSLSocketImpl = Java.use('com.android.org.conscrypt.OpenSSLSocketImpl');
+            OpenSSLSocketImpl.verifyCertificateChain.implementation = function(g, i) {
+                console.log('[+] SSL: Bypassing OpenSSLSocketImpl');
+            };
+        } catch (err) {
+            console.log('[-] OpenSSLSocketImpl not found');
+        }
+
+        // OkHttp3 CertificatePinner
+        try {
+            var CertPinner = Java.use('okhttp3.CertificatePinner');
+            CertPinner.check.overload('java.lang.String', 'java.util.List').implementation = function(hostname, peerCerts) {
+                console.log('[+] SSL: Bypassing OkHttp3 CertificatePinner for: ' + hostname);
+            };
+        } catch (err) { }
+
+        try {
+            var CertPinner2 = Java.use('okhttp3.CertificatePinner');
+            CertPinner2['check$okhttp'].implementation = function(hostname, fn) {
+                console.log('[+] SSL: Bypassing OkHttp3 CertificatePinner$okhttp for: ' + hostname);
+            };
+        } catch (err) { }
+
+        // TrustManagerFactory
+        try {
+            var TrustManagerFactory = Java.use('javax.net.ssl.TrustManagerFactory');
+            TrustManagerFactory.getTrustManagers.implementation = function() {
+                var EmptyTrustManager = Java.registerClass({
+                    name: 'com.hspatch.TrustAllManager',
+                    implements: [Java.use('javax.net.ssl.X509TrustManager')],
+                    methods: {
+                        checkClientTrusted: function(chain, authType) {},
+                        checkServerTrusted: function(chain, authType) {},
+                        getAcceptedIssuers: function() { return []; }
+                    }
+                });
+                return [EmptyTrustManager.$new()];
+            };
+        } catch (err) { }
+
+        // HttpsURLConnection default hostname verifier
+        try {
+            var HostnameVerifier = Java.registerClass({
+                name: 'com.hspatch.GlobalHostnameVerifier',
+                implements: [Java.use('javax.net.ssl.HostnameVerifier')],
+                methods: {
+                    verify: function(hostname, session) { return true; }
+                }
+            });
+            var HttpsURLConnection = Java.use('javax.net.ssl.HttpsURLConnection');
+            HttpsURLConnection.setDefaultHostnameVerifier.implementation = function(verifier) {
+                this.setDefaultHostnameVerifier(HostnameVerifier.$new());
+            };
+        } catch (err) { }
+
+        console.log('[*] SSL Pinning bypass hooks installed');
+
+
+        // =====================================================
+        // 2. SIGNATURE VERIFICATION BYPASS (Runtime Layer)
+        // =====================================================
+
+        // Hook PackageManager.getPackageInfo to fix signatures
+        try {
+            var PM = Java.use('android.app.ApplicationPackageManager');
+
+            PM.getPackageInfo.overload('java.lang.String', 'int').implementation = function(name, flags) {
+                var pi = this.getPackageInfo(name, flags);
+
+                // Only patch our own package
+                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctx !== null && name === ctx.getPackageName()) {
+                    if ((flags & 0x40) !== 0 || (flags & 0x8000000) !== 0) {
+                        try {
+                            var storedSigs = Java.use('in.startv.hotstar.SignatureBypass').originalSignatures.value;
+                            if (storedSigs !== null) {
+                                pi.signatures.value = storedSigs;
+                                console.log('[+] SIG: Patched getPackageInfo signatures for ' + name);
+                            }
+                        } catch(e) {}
+                    }
+                }
+                return pi;
+            };
+            console.log('[*] Signature bypass hooks installed');
+        } catch (err) {
+            console.log('[-] PackageManager signature hook: ' + err);
+        }
+
+
+        // =====================================================
+        // 3. PIRACY / LICENSE / INTEGRITY CHECK REMOVAL
+        // =====================================================
+
+        // Google Play Licensing (LVL)
+        try {
+            var LicenseChecker = Java.use('com.google.android.vending.licensing.LicenseChecker');
+            LicenseChecker.checkAccess.implementation = function(callback) {
+                console.log('[+] PIRACY: Bypassing LicenseChecker.checkAccess');
+                try { callback.allow(0x100); } catch(e) { callback.allow(); }
+            };
+        } catch (err) { }
+
+        // Installer package check bypass
+        try {
+            var APM = Java.use('android.app.ApplicationPackageManager');
+            APM.getInstallerPackageName.implementation = function(pkg) {
+                console.log('[+] PIRACY: Spoofing installer to Play Store for: ' + pkg);
+                return "com.android.vending";
+            };
+        } catch (err) { }
+
+        // Debug detection bypass
+        try {
+            var Debug = Java.use('android.os.Debug');
+            Debug.isDebuggerConnected.implementation = function() { return false; };
+        } catch (err) { }
+
+        // Root detection - block common su checks
+        try {
+            var Runtime = Java.use('java.lang.Runtime');
+            var origExec = Runtime.exec.overload('java.lang.String');
+            origExec.implementation = function(cmd) {
+                if (cmd.indexOf('su') === 0 || cmd === 'which su' ||
+                    cmd.indexOf('/system/xbin/su') !== -1 ||
+                    cmd.indexOf('/system/bin/su') !== -1 ||
+                    cmd.indexOf('busybox') !== -1) {
+                    console.log('[+] ROOT: Blocking root detection exec: ' + cmd);
+                    throw Java.use('java.io.IOException').$new('Permission denied');
+                }
+                return origExec.call(this, cmd);
+            };
+        } catch (err) { }
+
+        // Root detection - hide known root paths
+        try {
+            var File = Java.use('java.io.File');
+            var origExists = File.exists;
+            File.exists.implementation = function() {
+                var path = this.getAbsolutePath();
+                var rootPaths = ['/system/app/Superuser.apk', '/system/xbin/su', '/system/bin/su',
+                    '/sbin/su', '/data/local/xbin/su', '/data/local/bin/su',
+                    '/su/bin/su', '/data/adb/magisk'];
+                for (var i = 0; i < rootPaths.length; i++) {
+                    if (path === rootPaths[i]) {
+                        console.log('[+] ROOT: Hiding path: ' + path);
+                        return false;
+                    }
+                }
+                return origExists.call(this);
+            };
+        } catch (err) { }
+
+        // Build.TAGS - release-keys
+        try {
+            var Build = Java.use('android.os.Build');
+            var tags = Build.TAGS.value;
+            if (tags && tags.indexOf('test-keys') !== -1) {
+                Build.TAGS.value = 'release-keys';
+                console.log('[+] ROOT: Changed Build.TAGS to release-keys');
+            }
+        } catch (err) { }
+
+        console.log('[*] Piracy/License/Root bypass hooks installed');
+
+
+        // =====================================================
+        // 4. SCREENSHOT & RECORDING ENABLEMENT
+        // =====================================================
+
+        try {
+            var Window = Java.use('android.view.Window');
+            Window.setFlags.implementation = function(flags, mask) {
+                var cleanFlags = flags & ~0x2000;
+                var cleanMask = mask & ~0x2000;
+                if (flags !== cleanFlags) {
+                    console.log('[+] SCREEN: Stripped FLAG_SECURE from setFlags');
+                }
+                this.setFlags(cleanFlags, cleanMask);
+            };
+
+            Window.addFlags.implementation = function(flags) {
+                var cleanFlags = flags & ~0x2000;
+                if (flags !== cleanFlags) {
+                    console.log('[+] SCREEN: Stripped FLAG_SECURE from addFlags');
+                }
+                this.addFlags(cleanFlags);
+            };
+        } catch (err) {
+            console.log('[-] Window FLAG_SECURE hook: ' + err);
+        }
+
+        // SurfaceView.setSecure
+        try {
+            var SurfaceView = Java.use('android.view.SurfaceView');
+            SurfaceView.setSecure.implementation = function(isSecure) {
+                console.log('[+] SCREEN: Bypassing SurfaceView.setSecure(' + isSecure + ')');
+                this.setSecure(false);
+            };
+        } catch (err) { }
+
+        console.log('[*] Screenshot/Recording bypass hooks installed');
+
+
+        // =====================================================
+        // 5. NETWORK TRAFFIC MONITORING
+        // =====================================================
+
+        var netLogTag = "HSPatch-Net";
+        var Log = Java.use('android.util.Log');
+
+        // URL.openConnection() monitoring
+        try {
+            var URL = Java.use('java.net.URL');
+            URL.openConnection.overload().implementation = function() {
+                var url = this.toString();
+                Log.i(netLogTag, 'OPEN ' + url);
+                return this.openConnection();
+            };
+        } catch (err) { }
+
+        // OkHttp3 - intercept newCall to log requests
+        try {
+            var OkHttpClient = Java.use('okhttp3.OkHttpClient');
+            OkHttpClient.newCall.implementation = function(request) {
+                var url = request.url().toString();
+                var method = request.method();
+                Log.i(netLogTag, 'REQ ' + method + ' ' + url);
+                return this.newCall(request);
+            };
+        } catch (err) { }
+
+        // HttpURLConnection monitoring
+        try {
+            var HttpURLConnection = Java.use('java.net.HttpURLConnection');
+            HttpURLConnection.connect.implementation = function() {
+                var url = this.getURL().toString();
+                Log.i(netLogTag, 'CONN ' + url);
+                this.connect();
+            };
+        } catch (err) { }
+
+        // WebView URL monitoring
+        try {
+            var WebView = Java.use('android.webkit.WebView');
+            WebView.loadUrl.overload('java.lang.String').implementation = function(url) {
+                Log.i(netLogTag, 'WEBVIEW ' + url);
+                this.loadUrl(url);
+            };
+        } catch (err) { }
+
+        // Socket connect monitoring
+        try {
+            var Socket = Java.use('java.net.Socket');
+            Socket.connect.overload('java.net.SocketAddress', 'int').implementation = function(addr, timeout) {
+                Log.i(netLogTag, 'SOCKET ' + addr.toString());
+                this.connect(addr, timeout);
+            };
+        } catch (err) { }
+
+        console.log('[*] Network monitoring hooks installed');
+        console.log('======================================================');
+        console.log('[#] HSPatch: All bypass modules active                [#]');
+        console.log('======================================================');
+    });
+}, 0);

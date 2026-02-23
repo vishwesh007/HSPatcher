@@ -1,0 +1,40 @@
+# === HSPatcher .gitignore ===
+
+# Build output
+build/
+
+# Test/debug artifacts
+test_inspect/
+
+# Test APKs
+test_*.apk
+
+# Obsolete smali subset (replaced by patches/)
+extra_smali/
+
+# Generated Frida gadgets zip (17+ MB, rebuilt by build.ps1)
+assets/frida_gadgets.zip
+
+# APK signature metadata
+*.idsig
+
+# IDE / Editor
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Java build artifacts
+*.class
+*.jar.bak
+
+# Android debug keystore (personal)
+*.keystore
+*.jks
