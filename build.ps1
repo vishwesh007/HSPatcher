@@ -139,6 +139,18 @@ if (Test-Path $assetsDir) {
     & jar -uf $unsignedApk "assets/extra.zip" 2>&1
     Write-Host "  Added assets/extra.zip" -ForegroundColor Green
 
+    # Add SignatureKiller native libs
+    $sigkillDir = Join-Path $PROJECT "assets\sigkill"
+    if (Test-Path $sigkillDir) {
+        $sigkillFiles = Get-ChildItem $sigkillDir -Filter "*.so"
+        if ($sigkillFiles.Count -gt 0) {
+            foreach ($sf in $sigkillFiles) {
+                & jar -uf $unsignedApk "assets/sigkill/$($sf.Name)" 2>&1
+            }
+            Write-Host "  Added $($sigkillFiles.Count) SignatureKiller .so files" -ForegroundColor Green
+        }
+    }
+
     # Create Frida gadgets zip from local gadget files
     $gadgetArm64 = Join-Path (Split-Path $PROJECT) "decompiled\lib\arm64-v8a\libgadget.so"
     $gadgetArm   = Join-Path (Split-Path $PROJECT) "decompiled\lib\armeabi-v7a\libgadget.so"

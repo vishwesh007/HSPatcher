@@ -475,11 +475,37 @@ public class MainActivity extends Activity {
                     log("ℹ️ No Frida gadgets bundled (optional)");
                 }
 
+                // Extract SignatureKiller native libs (optional)
+                File sigkillDir = null;
+                try {
+                    sigkillDir = new File(workDir, "sigkill");
+                    sigkillDir.mkdirs();
+                    String[] sigkillFiles = {"arm64-v8a_libSignatureKiller.so",
+                                             "armeabi-v7a_libSignatureKiller.so"};
+                    int extracted = 0;
+                    for (String name : sigkillFiles) {
+                        try {
+                            File dest = new File(sigkillDir, name);
+                            extractAsset("sigkill/" + name, dest);
+                            extracted++;
+                        } catch (Exception ignored) {}
+                    }
+                    if (extracted > 0) {
+                        log("🔒 Extracted SignatureKiller libs (" + extracted + " ABIs)");
+                    } else {
+                        sigkillDir = null;
+                        log("ℹ️ No SignatureKiller libs bundled (optional)");
+                    }
+                } catch (Exception ex) {
+                    sigkillDir = null;
+                }
+
                 // Create the patch engine and run
                 PatchEngine engine = new PatchEngine(
                     apkToProcess,
                     extraZip,
                     fridaZip,
+                    sigkillDir,
                     workDir,
                     new PatchEngine.Callback() {
                         @Override
@@ -648,7 +674,13 @@ public class MainActivity extends Activity {
                 "What would you like to do?")
             .setPositiveButton("Uninstall & Install", (d, w) -> {
                 pendingInstallAfterUninstall = true;
-                log("🗑️ Requesting uninstall of " + targetPackageName + "...");
+                // Try ADB shell uninstall first (works without user interaction if we have shell)
+                log("🗑️ Attempting adb shell uninstall of " + targetPackageName + "...");
+                if (tryAdbUninstall(targetPackageName)) {
+                    return; // adb uninstall succeeded, will auto-install
+                }
+                // Fallback: standard UI uninstall
+                log("↪ Falling back to standard uninstall UI...");
                 try {
                     // Preferred: ACTION_UNINSTALL_PACKAGE with result callback
                     Intent uninstall = new Intent(Intent.ACTION_UNINSTALL_PACKAGE);
@@ -658,9 +690,9 @@ public class MainActivity extends Activity {
                 } catch (Exception e) {
                     // Fallback: ACTION_DELETE (older devices)
                     log("↪ Fallback to ACTION_DELETE...");
-                    Intent uninstall = new Intent(Intent.ACTION_DELETE);
-                    uninstall.setData(Uri.parse("package:" + targetPackageName));
-                    startActivityForResult(uninstall, UNINSTALL_REQUEST);
+                    Intent uninstall2 = new Intent(Intent.ACTION_DELETE);
+                    uninstall2.setData(Uri.parse("package:" + targetPackageName));
+                    startActivityForResult(uninstall2, UNINSTALL_REQUEST);
                 }
             })
             .setNeutralButton("Try Anyway", (d, w) -> {
@@ -761,6 +793,38 @@ public class MainActivity extends Activity {
             Toast.makeText(this,
                 "Install manually: " + patchedApk.getAbsolutePath(),
                 Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * Try to uninstall via 'pm uninstall' shell command.
+     * Works when running via adb or with shell permissions.
+     * Returns true if uninstall succeeded.
+     */
+    private boolean tryAdbUninstall(String packageName) {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{
+                "pm", "uninstall", packageName
+            });
+            int exitCode = p.waitFor();
+            InputStream is = p.getInputStream();
+            byte[] buf = new byte[1024];
+            int len = is.read(buf);
+            String output = len > 0 ? new String(buf, 0, len).trim() : "";
+            is.close();
+
+            if (exitCode == 0 && output.contains("Success")) {
+                log("✅ Uninstalled via pm command: " + packageName);
+                pendingInstallAfterUninstall = false;
+                mainHandler.postDelayed(this::doInstall, 500);
+                return true;
+            } else {
+                log("   pm uninstall returned: " + output + " (exit=" + exitCode + ")");
+                return false;
+            }
+        } catch (Exception e) {
+            log("   pm uninstall not available: " + e.getMessage());
+            return false;
         }
     }
 

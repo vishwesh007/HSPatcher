@@ -1,10 +1,13 @@
 package in.startv.hspatcher;
 
+import android.util.Base64;
 import android.util.Log;
 import java.io.*;
 import java.security.*;
 import java.security.cert.*;
 import java.util.*;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.zip.*;
 import javax.security.auth.x500.X500Principal;
 
@@ -44,13 +47,15 @@ public class PatchEngine {
     private final File inputApk;
     private final File extraZip;
     private final File fridaZip;  // optional: Frida gadget pack (may be null)
+    private final File sigkillDir; // optional: SignatureKiller native libs directory
     private final File workDir;
     private final Callback cb;
 
-    public PatchEngine(File inputApk, File extraZip, File fridaZip, File workDir, Callback cb) {
+    public PatchEngine(File inputApk, File extraZip, File fridaZip, File sigkillDir, File workDir, Callback cb) {
         this.inputApk = inputApk;
         this.extraZip = extraZip;
         this.fridaZip = fridaZip;
+        this.sigkillDir = sigkillDir;
         this.workDir = workDir;
         this.cb = cb;
     }
@@ -76,22 +81,18 @@ public class PatchEngine {
             log("🛡️ DexGuard class encryption detected!");
             log("   Protection library: lib" + info.dexguardLibName + ".so");
             log("   Encrypted code: assets/" + info.dexguardLibName + "/");
-            log("");
-            log("   This app uses DexGuard's most advanced protection:");
-            log("   • ALL application code is encrypted inside the native library");
-            log("   • The .smali classes are just empty native stubs");
-            log("   • Re-signing the APK triggers integrity verification → SIGSEGV");
-            log("   • The integrity check and code decryption are inseparable");
-            log("");
-            log("   ⚠️ This app CANNOT be patched through APK modification.");
-            log("");
-            log("   Alternatives:");
-            log("   • Frida server (root): frida -U -f " + info.packageName + " -l script.js");
-            log("   • LSPosed/Xposed module for framework-level hooks");
-            log("   • Find a debug or unprotected build of the app");
-            progress(100, "DexGuard protected — cannot patch");
-            throw new Exception("DexGuard class encryption: " + info.packageName +
-                " cannot be patched. All code encrypted in lib" + info.dexguardLibName + ".so");
+            log("   → ApkSignatureKillerEx will bypass signature/integrity checks");
+            log("   → Original APK embedded for native open() hook redirection");
+        }
+
+        // ======== Extract original signing certificate ========
+        progress(10, "Extracting signature...");
+        info.originalSignatureBase64 = extractOriginalSignature(inputApk);
+        if (info.originalSignatureBase64 != null) {
+            log("   🔑 Original signing certificate extracted (" +
+                info.originalSignatureBase64.length() + " chars base64)");
+        } else {
+            log("   ⚠️ Could not extract original signature (unsigned APK?)");
         }
 
         // ======== Step 2: Build injector DEX ========
@@ -144,6 +145,7 @@ public class PatchEngine {
         boolean nativeProtected; // DexGuard/DexProtector — skip DEX patching
         boolean dexguardEncrypted; // DexGuard class encryption — abort patching
         String dexguardLibName;    // DexGuard native library base name
+        String originalSignatureBase64; // Base64 of original signing cert (for signature killer)
     }
 
     private ApkInfo analyzeApk(File apk, File ws) throws Exception {
@@ -649,7 +651,7 @@ public class PatchEngine {
         zf.close();
         log("   Extracted " + extracted + " smali from HSPatch module pack");
 
-        generateHSPatchInit(tmpDir);
+        generateHSPatchInit(tmpDir, info);
         extracted++;
         generateBootProvider(tmpDir);
         extracted++;
@@ -678,7 +680,7 @@ public class PatchEngine {
         return ok;
     }
 
-    private void generateHSPatchInit(File smaliRoot) throws IOException {
+    private void generateHSPatchInit(File smaliRoot, ApkInfo info) throws IOException {
         File dir = new File(smaliRoot, "smali/in/startv/hotstar");
         if (!dir.exists()) dir.mkdirs();
         File f = new File(dir, "HSPatchInit.smali");
@@ -722,6 +724,36 @@ public class PatchEngine {
         sb.append("    const-string v0, \"HSPatch\"\n");
         sb.append("    const-string v1, \"HSPatchInit.init() ENTERED\"\n");
         sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n\n");
+
+        // === SignatureKiller: spoof original signing certificate ===
+        // MUST run before any other module to hook open() and PM before integrity checks
+        if (info.originalSignatureBase64 != null) {
+            sb.append("    # === SignatureKiller: hook signature + file open ===\n");
+            sb.append("    :try_sigkill\n");
+            sb.append("    const-string v0, \"").append(info.packageName).append("\"\n");
+            sb.append("    const-string v1, \"").append(info.originalSignatureBase64).append("\"\n");
+            sb.append("    invoke-static {v0, v1}, Lbin/mt/signature/KillerApplication;->init(Ljava/lang/String;Ljava/lang/String;)V\n");
+            sb.append("    :try_sigkill_end\n");
+            sb.append("    .catch Ljava/lang/Throwable; {:try_sigkill .. :try_sigkill_end} :catch_sigkill\n");
+            sb.append("    const-string v0, \"HSPatch\"\n");
+            sb.append("    const-string v1, \"  \\u2705 SignatureKiller OK\"\n");
+            sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n");
+            sb.append("    goto :after_sigkill\n");
+            sb.append("    :catch_sigkill\n");
+            sb.append("    move-exception v0\n");
+            sb.append("    invoke-virtual {v0}, Ljava/lang/Throwable;->toString()Ljava/lang/String;\n");
+            sb.append("    move-result-object v0\n");
+            sb.append("    new-instance v2, Ljava/lang/StringBuilder;\n");
+            sb.append("    invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V\n");
+            sb.append("    const-string v1, \"  \\u274c SignatureKiller FAIL: \"\n");
+            sb.append("    invoke-virtual {v2, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n");
+            sb.append("    invoke-virtual {v2, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n");
+            sb.append("    invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;\n");
+            sb.append("    move-result-object v0\n");
+            sb.append("    const-string v1, \"HSPatch\"\n");
+            sb.append("    invoke-static {v1, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I\n");
+            sb.append("    :after_sigkill\n\n");
+        }
 
         // Load Frida gadget (optional — silently skipped if not embedded)
         sb.append("    # === Load Frida Gadget (if embedded) ===\n");
@@ -1193,6 +1225,11 @@ public class PatchEngine {
             embedFridaGadget(zos, nativeAbis);
         }
 
+        // Embed SignatureKiller: native libs + origin.apk (original APK for open() hook)
+        if (sigkillDir != null && sigkillDir.exists()) {
+            embedSignatureKiller(zos, nativeAbis, original);
+        }
+
         zos.close();
         origZip.close();
         log("   Copied " + copied + " original entries");
@@ -1313,6 +1350,97 @@ public class PatchEngine {
         zos.putNextEntry(e);
         zos.write(data);
         zos.closeEntry();
+    }
+
+    // ======================== SIGNATURE EXTRACTION ========================
+
+    /**
+     * Extract the original APK signing certificate as base64-encoded DER.
+     * This is used by SignatureKiller to spoof the original signature at runtime.
+     */
+    private String extractOriginalSignature(File apk) {
+        try {
+            // Read the cert from META-INF/*.RSA/DSA/EC using JarFile verification
+            JarFile jar = new JarFile(apk, true);
+            JarEntry entry = jar.getJarEntry("AndroidManifest.xml");
+            if (entry == null) entry = jar.getJarEntry("classes.dex");
+            if (entry == null) {
+                jar.close();
+                return null;
+            }
+            // Must read entry fully to trigger JAR signature verification
+            InputStream is = jar.getInputStream(entry);
+            byte[] buf = new byte[8192];
+            while (is.read(buf) > 0) {}
+            is.close();
+
+            java.security.cert.Certificate[] certs = entry.getCertificates();
+            jar.close();
+            if (certs == null || certs.length == 0) {
+                log("   ⚠️ APK has no signing certificates");
+                return null;
+            }
+            byte[] certDer = certs[0].getEncoded();
+            return Base64.encodeToString(certDer, Base64.NO_WRAP);
+        } catch (Exception e) {
+            log("   ⚠️ Signature extraction failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    // ======================== SIGNATURE KILLER EMBEDDING ========================
+
+    /**
+     * Embed SignatureKiller native libraries and the original APK into the patched APK.
+     * - lib/<abi>/libSignatureKiller.so — PLT hook library (xhook)
+     * - assets/SignatureKiller/origin.apk — copy of original APK (for open() redirect)
+     */
+    private void embedSignatureKiller(ZipOutputStream zos, Set<String> nativeAbis,
+                                       File originalApk) {
+        try {
+            // Map ABI names to .so file names in sigkillDir
+            // Files are named: arm64-v8a_libSignatureKiller.so, armeabi-v7a_libSignatureKiller.so
+            Set<String> targetAbis;
+            if (nativeAbis.isEmpty()) {
+                targetAbis = new LinkedHashSet<>();
+                targetAbis.add("arm64-v8a");
+            } else {
+                targetAbis = nativeAbis;
+            }
+
+            int soAdded = 0;
+            for (String abi : targetAbis) {
+                File soFile = new File(sigkillDir, abi + "_libSignatureKiller.so");
+                if (!soFile.exists()) {
+                    log("   ⚠️ No SignatureKiller .so for ABI: " + abi);
+                    continue;
+                }
+                byte[] soData = readAllBytes(new FileInputStream(soFile));
+                addZipEntry(zos, new ByteArrayInputStream(soData),
+                           "lib/" + abi + "/libSignatureKiller.so");
+                log("   🔒 SignatureKiller .so added for " + abi +
+                    " (" + (soData.length / 1024) + " KB)");
+                soAdded++;
+            }
+
+            // Embed original APK as assets/SignatureKiller/origin.apk
+            // This is read by killOpen() at runtime — native open() calls are
+            // redirected to this copy so integrity checks see the original APK.
+            byte[] originData = readAllBytes(new FileInputStream(originalApk));
+            ZipEntry originEntry = new ZipEntry("assets/SignatureKiller/origin.apk");
+            originEntry.setMethod(ZipEntry.DEFLATED); // compress to save space
+            zos.putNextEntry(originEntry);
+            zos.write(originData);
+            zos.closeEntry();
+            log("   📦 Original APK embedded as origin.apk (" +
+                (originData.length / 1024 / 1024) + " MB)");
+
+            if (soAdded > 0) {
+                log("   ✅ SignatureKiller embedded for " + soAdded + " ABI(s)");
+            }
+        } catch (Exception e) {
+            log("   ⚠️ SignatureKiller embedding failed: " + e.getMessage());
+        }
     }
 
     // ======================== STEP 5: SIGN APK (v1+v2+v3 via Google apksig) ========================
