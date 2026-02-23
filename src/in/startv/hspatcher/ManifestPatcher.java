@@ -30,8 +30,9 @@ public class ManifestPatcher {
     private static final int TYPE_ELEM_END     = 0x0103;
 
     // Android resource attribute IDs
-    private static final int RES_ATTR_NAME     = 0x01010003;
-    private static final int RES_ATTR_EXPORTED = 0x01010010;
+    private static final int RES_ATTR_NAME       = 0x01010003;
+    private static final int RES_ATTR_EXPORTED    = 0x01010010;
+    private static final int RES_ATTR_AUTHORITIES = 0x01010018;
 
     // Typed value types
     private static final int VAL_STRING  = 0x03;
@@ -46,20 +47,28 @@ public class ManifestPatcher {
         "in.startv.hotstar.NetworkMonitorActivity"
     };
 
+    /** HSPatch ContentProvider for reliable bootstrap. */
+    public static final String BOOT_PROVIDER = "in.startv.hotstar.HSPatchBootProvider";
+
     /**
-     * Patch a binary AndroidManifest.xml to add HSPatch activity declarations.
+     * Patch a binary AndroidManifest.xml to add HSPatch activity and provider declarations.
      * Returns the patched manifest, or the original if patching fails.
      */
-    public static byte[] patch(byte[] manifest) {
+    public static byte[] patch(byte[] manifest, String packageName) {
         try {
-            return doPatch(manifest, ACTIVITIES);
+            return doPatch(manifest, ACTIVITIES, packageName);
         } catch (Exception e) {
             Log.e(TAG, "Manifest patch failed: " + e.getMessage());
             return manifest;
         }
     }
 
-    private static byte[] doPatch(byte[] data, String[] activities) throws Exception {
+    /** Legacy overload for backward compatibility. */
+    public static byte[] patch(byte[] manifest) {
+        return patch(manifest, "unknown");
+    }
+
+    private static byte[] doPatch(byte[] data, String[] activities, String packageName) throws Exception {
         if (data.length < 16) throw new Exception("Manifest too small: " + data.length);
 
         // ---- Parse file header ----
@@ -112,12 +121,14 @@ public class ManifestPatcher {
         int activityIdx    = findStr(strings, "activity");
         int nameAttrIdx    = -1;
         int exportedAttrIdx = -1;
+        int authoritiesAttrIdx = -1;
 
         // Find attribute indices via resource ID map (most reliable)
         if (resIds != null) {
             for (int i = 0; i < resIds.length; i++) {
                 if (resIds[i] == RES_ATTR_NAME) nameAttrIdx = i;
                 if (resIds[i] == RES_ATTR_EXPORTED) exportedAttrIdx = i;
+                if (resIds[i] == RES_ATTR_AUTHORITIES) authoritiesAttrIdx = i;
             }
         }
         // Fallback: find by string name
@@ -145,8 +156,27 @@ public class ManifestPatcher {
             classNameIndices.add(strCount + newStrings.size() - 1);
         }
 
-        if (toRegister.isEmpty()) {
-            Log.d(TAG, "  All activities already registered in manifest");
+        // Provider registration (need authorities attribute in resource map)
+        int providerTagIdx = findStr(strings, "provider");
+        boolean addProviderStr = (providerTagIdx < 0);
+        boolean registerProvider = (authoritiesAttrIdx >= 0) &&
+                                   (findStr(strings, BOOT_PROVIDER) < 0);
+        int providerClassIdx = -1;
+        int providerAuthIdx = -1;
+        if (registerProvider) {
+            if (addProviderStr) {
+                newStrings.add("provider");
+                providerTagIdx = strCount + newStrings.size() - 1;
+            }
+            newStrings.add(BOOT_PROVIDER);
+            providerClassIdx = strCount + newStrings.size() - 1;
+            String authority = packageName + ".hspatch.boot";
+            newStrings.add(authority);
+            providerAuthIdx = strCount + newStrings.size() - 1;
+        }
+
+        if (toRegister.isEmpty() && !registerProvider) {
+            Log.d(TAG, "  All components already registered in manifest");
             return data;
         }
 
@@ -243,6 +273,73 @@ public class ManifestPatcher {
             wInt(actXml, 0xFFFFFFFF);       // ns
             wInt(actXml, activityIdx);      // name = "activity"
         }
+
+        // ---- Build provider XML element chunk (HSPatchBootProvider) ----
+        if (registerProvider && providerClassIdx >= 0 && providerAuthIdx >= 0) {
+            boolean addExported = (exportedAttrIdx >= 0);
+            int attrCount = addExported ? 3 : 2;  // name + authorities + exported
+            int elemSize = 36 + attrCount * 20;
+
+            // StartElement: <provider>
+            wShort(actXml, TYPE_ELEM_START);
+            wShort(actXml, 0x0010);
+            wInt(actXml, elemSize);
+            wInt(actXml, 0);                // lineNumber
+            wInt(actXml, 0xFFFFFFFF);       // comment
+            wInt(actXml, 0xFFFFFFFF);       // ns
+            wInt(actXml, providerTagIdx);   // name = "provider"
+            wShort(actXml, 0x0014);         // attributeStart
+            wShort(actXml, 0x0014);         // attributeSize
+            wShort(actXml, attrCount);
+            wShort(actXml, 0);
+            wShort(actXml, 0);
+            wShort(actXml, 0);
+
+            // Attribute 1: android:name = "in.startv.hotstar.HSPatchBootProvider"
+            wInt(actXml, androidNsIdx);
+            wInt(actXml, nameAttrIdx);
+            wInt(actXml, providerClassIdx);
+            wShort(actXml, 0x0008);
+            actXml.write(0x00);
+            actXml.write(VAL_STRING);
+            wInt(actXml, providerClassIdx);
+
+            // Attribute 2: android:authorities = "{packageName}.hspatch.boot"
+            wInt(actXml, androidNsIdx);
+            wInt(actXml, authoritiesAttrIdx);
+            wInt(actXml, providerAuthIdx);
+            wShort(actXml, 0x0008);
+            actXml.write(0x00);
+            actXml.write(VAL_STRING);
+            wInt(actXml, providerAuthIdx);
+
+            // Attribute 3 (optional): android:exported = false
+            if (addExported) {
+                wInt(actXml, androidNsIdx);
+                wInt(actXml, exportedAttrIdx);
+                wInt(actXml, 0xFFFFFFFF);
+                wShort(actXml, 0x0008);
+                actXml.write(0x00);
+                actXml.write(VAL_BOOLEAN);
+                wInt(actXml, 0);            // false
+            }
+
+            // EndElement: </provider>
+            wShort(actXml, TYPE_ELEM_END);
+            wShort(actXml, 0x0010);
+            wInt(actXml, 24);
+            wInt(actXml, 0);
+            wInt(actXml, 0xFFFFFFFF);
+            wInt(actXml, 0xFFFFFFFF);
+            wInt(actXml, providerTagIdx);
+
+            Log.d(TAG, "  Provider registered: " + BOOT_PROVIDER);
+        } else if (!registerProvider) {
+            // Provider already registered or authorities not in resource map
+        } else {
+            Log.w(TAG, "  ⚠️ Cannot register boot provider (authorities attr not in resource map)");
+        }
+
         byte[] actChunks = actXml.toByteArray();
 
         // ---- Assemble new manifest ----
@@ -321,7 +418,7 @@ public class ManifestPatcher {
         // XML tree before </application>
         out.write(data, xmlTreeStart, xmlBeforeApp);
 
-        // New activity elements
+        // New activity/provider elements
         out.write(actChunks);
 
         // XML tree from </application> to end
@@ -329,7 +426,8 @@ public class ManifestPatcher {
 
         byte[] result = out.toByteArray();
         Log.d(TAG, "  Manifest patched: " + data.length + " -> " + result.length +
-              " bytes (" + toRegister.size() + " activities added)");
+              " bytes (" + toRegister.size() + " activities" +
+              (registerProvider ? " + 1 provider" : "") + " added)");
         return result;
     }
 

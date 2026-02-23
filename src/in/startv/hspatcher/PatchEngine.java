@@ -70,6 +70,30 @@ public class PatchEngine {
             " (" + (info.isApplication ? "Application" : "Activity") + ")");
         log("   In: " + info.hookDexName);
 
+        // ======== DexGuard class encryption check ========
+        if (info.dexguardEncrypted) {
+            log("");
+            log("🛡️ DexGuard class encryption detected!");
+            log("   Protection library: lib" + info.dexguardLibName + ".so");
+            log("   Encrypted code: assets/" + info.dexguardLibName + "/");
+            log("");
+            log("   This app uses DexGuard's most advanced protection:");
+            log("   • ALL application code is encrypted inside the native library");
+            log("   • The .smali classes are just empty native stubs");
+            log("   • Re-signing the APK triggers integrity verification → SIGSEGV");
+            log("   • The integrity check and code decryption are inseparable");
+            log("");
+            log("   ⚠️ This app CANNOT be patched through APK modification.");
+            log("");
+            log("   Alternatives:");
+            log("   • Frida server (root): frida -U -f " + info.packageName + " -l script.js");
+            log("   • LSPosed/Xposed module for framework-level hooks");
+            log("   • Find a debug or unprotected build of the app");
+            progress(100, "DexGuard protected — cannot patch");
+            throw new Exception("DexGuard class encryption: " + info.packageName +
+                " cannot be patched. All code encrypted in lib" + info.dexguardLibName + ".so");
+        }
+
         // ======== Step 2: Build injector DEX ========
         progress(15, "Building injector DEX...");
         log("\n📦 Step 2: Building injector DEX...");
@@ -82,14 +106,18 @@ public class PatchEngine {
         progress(30, "Patching hook DEX...");
         log("\n⚡ Step 3: Patching " + info.hookDexName + "...");
         File patchedDex = patchHookDex(inputApk, info, ws);
-        log("   ✅ Patched (" + (patchedDex.length() / 1024) + " KB)");
+        if (patchedDex != null) {
+            log("   ✅ Patched (" + (patchedDex.length() / 1024) + " KB)");
+        } else {
+            log("   ℹ️ DEX unchanged — ContentProvider bootstrap mode");
+        }
 
         // ======== Step 4: Build patched APK ========
         progress(65, "Building APK...");
         log("\n📦 Step 4: Building patched APK...");
         File unsignedApk = new File(ws, "unsigned.apk");
         buildPatchedApk(inputApk, unsignedApk, info.hookDexName, patchedDex,
-                         injDexName, injDex);
+                         injDexName, injDex, info.packageName);
         log("   Unsigned: " + (unsignedApk.length() / 1024) + " KB");
 
         // ======== Step 5: Sign APK ========
@@ -113,6 +141,9 @@ public class PatchEngine {
         String hookSmaliType;
         String hookDexName;
         boolean isApplication;
+        boolean nativeProtected; // DexGuard/DexProtector — skip DEX patching
+        boolean dexguardEncrypted; // DexGuard class encryption — abort patching
+        String dexguardLibName;    // DexGuard native library base name
     }
 
     private ApkInfo analyzeApk(File apk, File ws) throws Exception {
@@ -129,6 +160,37 @@ public class PatchEngine {
             }
             Collections.sort(dexNames);
             info.dexCount = dexNames.size();
+
+            // Detect DexGuard class encryption early:
+            // Pattern: lib/<abi>/lib<NAME>.so exists AND assets/<NAME>/*.odex exists
+            // This means all code is encrypted in the native library — not patchable
+            Set<String> soBaseNames = new HashSet<>();
+            Set<String> assetOdexDirs = new HashSet<>();
+            Enumeration<? extends ZipEntry> dgScan = zip.entries();
+            while (dgScan.hasMoreElements()) {
+                ZipEntry e = dgScan.nextElement();
+                String n = e.getName();
+                if (n.startsWith("lib/") && n.endsWith(".so")) {
+                    int lastSlash = n.lastIndexOf('/');
+                    if (lastSlash > 4) { // skip "lib/"
+                        String soFile = n.substring(lastSlash + 1);
+                        if (soFile.startsWith("lib") && soFile.length() > 6) {
+                            soBaseNames.add(soFile.substring(3, soFile.length() - 3));
+                        }
+                    }
+                }
+                if (n.startsWith("assets/") && n.endsWith(".odex")) {
+                    String[] parts = n.split("/");
+                    if (parts.length >= 3) assetOdexDirs.add(parts[1]);
+                }
+            }
+            for (String name : soBaseNames) {
+                if (assetOdexDirs.contains(name) && name.length() >= 6) {
+                    info.dexguardEncrypted = true;
+                    info.dexguardLibName = name;
+                    break;
+                }
+            }
 
             // Parse binary manifest
             ZipEntry mfEntry = zip.getEntry("AndroidManifest.xml");
@@ -232,6 +294,21 @@ public class PatchEngine {
                 if (dot > 0) {
                     info.packageName = info.hookClassName.substring(0, dot);
                     log("   Package inferred from hook class: " + info.packageName);
+                }
+            }
+
+            // Validate: if extracted package looks like a library class (e.g. google.android.*),
+            // prefer the hook class's package prefix instead
+            if (info.hookClassName != null && info.hookClassName.contains(".") &&
+                !"unknown".equals(info.packageName)) {
+                String hookPkg = info.hookClassName.substring(0, info.hookClassName.lastIndexOf('.'));
+                if (!hookPkg.startsWith(info.packageName) &&
+                    !info.packageName.startsWith(hookPkg.split("\\.")[0] + ".")) {
+                    // Package name doesn't share a root with hook class — likely a false match
+                    // from library code in the manifest. Use hook class package instead.
+                    log("   Package override: " + info.packageName + " → " + hookPkg +
+                        " (hook class mismatch)");
+                    info.packageName = hookPkg;
                 }
             }
         } finally {
@@ -574,6 +651,8 @@ public class PatchEngine {
 
         generateHSPatchInit(tmpDir);
         extracted++;
+        generateBootProvider(tmpDir);
+        extracted++;
 
         DexBuilder db = new DexBuilder(Opcodes.forApi(35));
         List<File> smaliFiles = new ArrayList<>();
@@ -630,6 +709,15 @@ public class PatchEngine {
         sb.append("    .locals 3\n");
         sb.append("    .param p0, \"ctx\"\n\n");
 
+        // Idempotency guard — use System property (survives Frida gadget classloader reloads)
+        sb.append("    const-string v0, \"hspatch.initialized\"\n");
+        sb.append("    invoke-static {v0}, Ljava/lang/System;->getProperty(Ljava/lang/String;)Ljava/lang/String;\n");
+        sb.append("    move-result-object v0\n");
+        sb.append("    if-nez v0, :already_init\n");
+        sb.append("    const-string v0, \"hspatch.initialized\"\n");
+        sb.append("    const-string v1, \"1\"\n");
+        sb.append("    invoke-static {v0, v1}, Ljava/lang/System;->setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;\n\n");
+
         // Log entry
         sb.append("    const-string v0, \"HSPatch\"\n");
         sb.append("    const-string v1, \"HSPatchInit.init() ENTERED\"\n");
@@ -685,10 +773,80 @@ public class PatchEngine {
         sb.append("    const-string v0, \"HSPatch\"\n");
         sb.append("    const-string v1, \"HSPatchInit.init() COMPLETE\"\n");
         sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n\n");
+        sb.append("    return-void\n\n");
+        sb.append("    :already_init\n");
+        sb.append("    const-string v0, \"HSPatch\"\n");
+        sb.append("    const-string v1, \"HSPatchInit.init() already initialized, skipping\"\n");
+        sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n");
         sb.append("    return-void\n.end method\n");
 
         writeFileStr(f, sb.toString());
         log("   Generated HSPatchInit.smali (10 modules)");
+    }
+
+    /**
+     * Generate HSPatchBootProvider — a ContentProvider that bootstraps HSPatch
+     * initialization. ContentProviders are created before Application.onCreate(),
+     * making this the most reliable hook point, especially for DexGuard/DexProtector
+     * protected apps where Application methods may be native.
+     */
+    private void generateBootProvider(File smaliRoot) throws IOException {
+        File dir = new File(smaliRoot, "smali/in/startv/hotstar");
+        if (!dir.exists()) dir.mkdirs();
+        File f = new File(dir, "HSPatchBootProvider.smali");
+        if (f.exists()) return;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(".class public Lin/startv/hotstar/HSPatchBootProvider;\n");
+        sb.append(".super Landroid/content/ContentProvider;\n\n");
+        sb.append("# Auto-generated ContentProvider bootstrap for HSPatch\n");
+        sb.append("# Runs before Application.onCreate() — most reliable hook point\n\n");
+
+        // Constructor
+        sb.append(".method public constructor <init>()V\n");
+        sb.append("    .locals 0\n");
+        sb.append("    invoke-direct {p0}, Landroid/content/ContentProvider;-><init>()V\n");
+        sb.append("    return-void\n");
+        sb.append(".end method\n\n");
+
+        // onCreate — the bootstrap entry point
+        sb.append(".method public onCreate()Z\n");
+        sb.append("    .locals 2\n\n");
+        sb.append("    const-string v0, \"HSPatch\"\n");
+        sb.append("    const-string v1, \"HSPatchBootProvider.onCreate() — bootstrap entry\"\n");
+        sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n\n");
+        sb.append("    :try_boot\n");
+        sb.append("    invoke-virtual {p0}, Lin/startv/hotstar/HSPatchBootProvider;->getContext()Landroid/content/Context;\n");
+        sb.append("    move-result-object v0\n");
+        sb.append("    invoke-static {v0}, Lin/startv/hotstar/HSPatchInit;->init(Landroid/content/Context;)V\n");
+        sb.append("    :try_boot_end\n");
+        sb.append("    .catch Ljava/lang/Throwable; {:try_boot .. :try_boot_end} :catch_boot\n");
+        sb.append("    goto :after_boot\n");
+        sb.append("    :catch_boot\n");
+        sb.append("    move-exception v0\n");
+        sb.append("    invoke-virtual {v0}, Ljava/lang/Throwable;->toString()Ljava/lang/String;\n");
+        sb.append("    move-result-object v0\n");
+        sb.append("    const-string v1, \"HSPatch\"\n");
+        sb.append("    invoke-static {v1, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I\n");
+        sb.append("    :after_boot\n");
+        sb.append("    const/4 v0, 0x1\n");
+        sb.append("    return v0\n");
+        sb.append(".end method\n\n");
+
+        // Required ContentProvider stubs
+        String[][] stubs = {
+            {"query", ".method public query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;\n    .locals 1\n    const/4 v0, 0x0\n    return-object v0\n.end method"},
+            {"getType", ".method public getType(Landroid/net/Uri;)Ljava/lang/String;\n    .locals 1\n    const/4 v0, 0x0\n    return-object v0\n.end method"},
+            {"insert", ".method public insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;\n    .locals 1\n    const/4 v0, 0x0\n    return-object v0\n.end method"},
+            {"delete", ".method public delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I\n    .locals 1\n    const/4 v0, 0x0\n    return v0\n.end method"},
+            {"update", ".method public update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I\n    .locals 1\n    const/4 v0, 0x0\n    return v0\n.end method"}
+        };
+        for (String[] stub : stubs) {
+            sb.append(stub[1]).append("\n\n");
+        }
+
+        writeFileStr(f, sb.toString());
+        log("   Generated HSPatchBootProvider.smali (ContentProvider bootstrap)");
     }
 
     // ======================== STEP 3: PATCH HOOK DEX ========================
@@ -748,6 +906,21 @@ public class PatchEngine {
         }
         log("   Found: " + targetSmali.getName());
 
+        // Check for native runtime protection (DexGuard/DexProtector)
+        // If Application.onCreate() is native, modifying the DEX breaks JNI registration
+        // and triggers integrity checks. Use ContentProvider bootstrap instead.
+        if (info.isApplication) {
+            String smaliContent = readFileStr(targetSmali);
+            boolean nativeOnCreate = smaliContent.contains(".method public native onCreate()V") ||
+                                     smaliContent.contains(".method public final native onCreate()V");
+            if (nativeOnCreate) {
+                log("   \u26a0\ufe0f Native protection detected (DexGuard/DexProtector)");
+                log("   \u2139\ufe0f Skipping DEX modification to preserve integrity checks");
+                log("   \u2139\ufe0f ContentProvider bootstrap will handle HSPatch initialization");
+                return null;  // Signal to caller: use original DEX unmodified
+            }
+        }
+
         injectHook(targetSmali, info.isApplication);
 
         log("   Reassembling DEX...");
@@ -783,32 +956,51 @@ public class PatchEngine {
         String content = readFileStr(smaliFile);
         if (content.contains("HSPatchInit")) { log("   Already hooked"); return; }
 
-        log("   injectHook: searching for onCreate...");
+        log("   injectHook: searching for hook point...");
         String sig = findOnCreate(content, isApp);
+
+        // === Handle native method protection (DexGuard/DexProtector) ===
+        // Note: native onCreate() apps are now handled in patchHookDex() by
+        // returning null (skip DEX modification entirely, use ContentProvider).
+        // This code only runs for non-native-protected apps.
+        boolean usingAttachBase = false;
         if (sig == null && isApp) {
-            // Application class doesn't have onCreate — try attachBaseContext
+
+            // Try attachBaseContext as alternative (fires before onCreate)
             sig = findAttachBaseContext(content);
             if (sig != null) {
-                log("   No onCreate, using attachBaseContext instead");
+                log("   Using attachBaseContext as hook point");
+                usingAttachBase = true;
+            }
+
+            if (sig == null) {
+                boolean nativeABC = content.contains("native attachBaseContext(Landroid/content/Context;)V");
+                if (nativeABC) {
+                    log("   \u26a0\ufe0f attachBaseContext is also native");
+                    log("   \u2139\ufe0f HSPatchBootProvider will handle initialization");
+                    return;
+                }
+                // onCreate not found and not native (handled earlier) — add it
+                log("   Adding onCreate method to Application class...");
+                String superClass = extractSuperClass(content);
+                if (superClass == null) superClass = "Landroid/app/Application;";
+                String newMethod =
+                    "\n.method public onCreate()V\n" +
+                    "    .locals 2\n\n" +
+                    "    invoke-super {p0}, " + superClass + "->onCreate()V\n\n" +
+                    "    return-void\n" +
+                    ".end method\n";
+                content = content + newMethod;
+                writeFileStr(smaliFile, content);
+                sig = ".method public onCreate()V";
             }
         }
-        if (sig == null && isApp) {
-            // Neither exists — add an onCreate method
-            log("   Adding onCreate method to Application class...");
-            String superClass = extractSuperClass(content);
-            if (superClass == null) superClass = "Landroid/app/Application;";
-            String newMethod =
-                "\n.method public onCreate()V\n" +
-                "    .locals 2\n\n" +
-                "    invoke-super {p0}, " + superClass + "->onCreate()V\n\n" +
-                "    return-void\n" +
-                ".end method\n";
-            content = content + newMethod;
-            writeFileStr(smaliFile, content);
-            sig = ".method public onCreate()V";
-        }
         if (sig == null && !isApp) {
-            // Activity without onCreate — add one
+            boolean nativeOnCreate = content.contains("native onCreate(Landroid/os/Bundle;)V");
+            if (nativeOnCreate) {
+                log("   \u26a0\ufe0f Activity onCreate is native — using ContentProvider bootstrap");
+                return;
+            }
             log("   Adding onCreate method to Activity class...");
             String superClass = extractSuperClass(content);
             if (superClass == null) superClass = "Landroidx/appcompat/app/AppCompatActivity;";
@@ -823,7 +1015,7 @@ public class PatchEngine {
             writeFileStr(smaliFile, content);
             sig = ".method public onCreate(Landroid/os/Bundle;)V";
         }
-        if (sig == null) throw new IOException("onCreate not found in " + smaliFile.getName());
+        if (sig == null) throw new IOException("Cannot find hook point in " + smaliFile.getName());
         log("   injectHook: found signature: " + sig);
 
         int mStart = content.indexOf(sig);
@@ -843,7 +1035,9 @@ public class PatchEngine {
         // Allocate 2 EXTRA registers beyond what the original method uses.
         // Use those dedicated registers for hook code — never touch original v0,v1.
         // This prevents VerifyError from register type conflicts.
-        int paramCount = isApp ? 1 : 2;
+        // paramCount: onCreate()V on App=1(p0), attachBaseContext(Context)V=2(p0,p1),
+        //             onCreate(Bundle)V on Activity=2(p0,p1)
+        int paramCount = (isApp && !usingAttachBase) ? 1 : 2;
         int origLocals;
         if (useRegs) {
             origLocals = curN - paramCount;
@@ -922,7 +1116,8 @@ public class PatchEngine {
 
     private void buildPatchedApk(File original, File output,
                                   String hookDexName, File hookDex,
-                                  String injDexName, File injDex) throws Exception {
+                                  String injDexName, File injDex,
+                                  String packageName) throws Exception {
         ZipFile origZip = new ZipFile(original);
         ZipOutputStream zos = new ZipOutputStream(
             new BufferedOutputStream(new FileOutputStream(output)));
@@ -945,21 +1140,32 @@ public class PatchEngine {
         while (entries.hasMoreElements()) {
             ZipEntry entry = entries.nextElement();
             String name = entry.getName();
-            if (name.startsWith("META-INF/")) continue;
-            if (name.equals(hookDexName)) continue;
+            // Strip ONLY JAR-signature files from META-INF/
+            // Preserve services/, kotlin version files, gradle metadata, etc.
+            if (name.startsWith("META-INF/")) {
+                String fn = name.substring("META-INF/".length());
+                // Remove: MANIFEST.MF, *.SF, *.RSA, *.DSA, *.EC, SIG-*
+                if (fn.equals("MANIFEST.MF") ||
+                    fn.endsWith(".SF") || fn.endsWith(".RSA") ||
+                    fn.endsWith(".DSA") || fn.endsWith(".EC") ||
+                    fn.startsWith("SIG-")) {
+                    continue;
+                }
+            }
+            // Skip hook DEX only if we have a patched replacement
+            if (hookDex != null && name.equals(hookDexName)) continue;
 
-            // Intercept manifest for activity registration
+            // Intercept manifest for activity + provider registration
             if (name.equals("AndroidManifest.xml")) {
                 byte[] mfBytes = readAllBytes(origZip.getInputStream(entry));
-                byte[] patched = ManifestPatcher.patch(mfBytes);
+                byte[] patched = ManifestPatcher.patch(mfBytes, packageName);
                 ZipEntry ne = new ZipEntry("AndroidManifest.xml");
                 ne.setMethod(ZipEntry.DEFLATED);
                 zos.putNextEntry(ne);
                 zos.write(patched);
                 zos.closeEntry();
                 if (patched.length != mfBytes.length) {
-                    log("   📋 Manifest patched: registered " +
-                        ManifestPatcher.ACTIVITIES.length + " HSPatch activities");
+                    log("   📋 Manifest patched: registered HSPatch components");
                 }
                 copied++;
                 continue;
@@ -972,8 +1178,12 @@ public class PatchEngine {
             copied++;
         }
 
-        addToZip(zos, hookDexName, hookDex);
-        log("   Replaced: " + hookDexName + " (" + (hookDex.length() / 1024) + " KB)");
+        if (hookDex != null) {
+            addToZip(zos, hookDexName, hookDex);
+            log("   Replaced: " + hookDexName + " (" + (hookDex.length() / 1024) + " KB)");
+        } else {
+            log("   Original " + hookDexName + " preserved (native protection)");
+        }
 
         addToZip(zos, injDexName, injDex);
         log("   Added: " + injDexName + " (" + (injDex.length() / 1024) + " KB)");
@@ -1003,11 +1213,26 @@ public class PatchEngine {
 
     private void addToZip(ZipOutputStream zos, String name, File file) throws Exception {
         ZipEntry e = new ZipEntry(name);
-        e.setMethod(ZipEntry.DEFLATED);
-        zos.putNextEntry(e);
-        FileInputStream fis = new FileInputStream(file);
-        copyStream(fis, zos, false);
-        fis.close();
+
+        if (name.endsWith(".dex") || name.endsWith(".so")) {
+            // DEX and native libs MUST be stored uncompressed on Android 12+
+            // (INSTALL_FAILED_INVALID_APK: dex not uncompressed and aligned)
+            byte[] data = readAllBytes(new FileInputStream(file));
+            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+            crc.update(data);
+            e.setMethod(ZipEntry.STORED);
+            e.setSize(data.length);
+            e.setCompressedSize(data.length);
+            e.setCrc(crc.getValue());
+            zos.putNextEntry(e);
+            zos.write(data);
+        } else {
+            e.setMethod(ZipEntry.DEFLATED);
+            zos.putNextEntry(e);
+            FileInputStream fis = new FileInputStream(file);
+            copyStream(fis, zos, false);
+            fis.close();
+        }
         zos.closeEntry();
     }
 
@@ -1071,10 +1296,22 @@ public class PatchEngine {
     }
 
     private void addZipEntry(ZipOutputStream zos, InputStream is, String name) throws Exception {
+        byte[] data = readAllBytes(is);
         ZipEntry e = new ZipEntry(name);
-        e.setMethod(ZipEntry.DEFLATED);
+
+        if (name.endsWith(".so") || name.endsWith(".dex")) {
+            // Native libs and DEX must be stored uncompressed on Android 12+
+            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+            crc.update(data);
+            e.setMethod(ZipEntry.STORED);
+            e.setSize(data.length);
+            e.setCompressedSize(data.length);
+            e.setCrc(crc.getValue());
+        } else {
+            e.setMethod(ZipEntry.DEFLATED);
+        }
         zos.putNextEntry(e);
-        copyStream(is, zos, false);
+        zos.write(data);
         zos.closeEntry();
     }
 

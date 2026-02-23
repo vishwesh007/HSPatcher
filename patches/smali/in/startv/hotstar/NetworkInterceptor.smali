@@ -46,6 +46,22 @@
     const-string v1, "=== NetworkInterceptor init ==="
     invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
 
+    # [0] Initialize HttpDumper for full request/response header dumping
+    :try_dumper
+    invoke-static {p0}, Lin/startv/hotstar/HttpDumper;->init(Landroid/content/Context;)V
+    :try_dumper_end
+    .catch Ljava/lang/Throwable; {:try_dumper .. :try_dumper_end} :catch_dumper
+    const-string v0, "HSPatch-Net"
+    const-string v1, "  [0] HttpDumper: OK"
+    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+    goto :after_dumper
+    :catch_dumper
+    move-exception v0
+    const-string v0, "HSPatch-Net"
+    const-string v1, "  [0] HttpDumper: skipped"
+    invoke-static {v0, v1}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I
+    :after_dumper
+
     # 1) Hook HttpURLConnection via URLStreamHandlerFactory
     :try_urlconn
     invoke-static {}, Lin/startv/hotstar/NetworkInterceptor;->hookUrlConnection()V

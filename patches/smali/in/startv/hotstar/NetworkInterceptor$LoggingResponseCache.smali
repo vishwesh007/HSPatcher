@@ -63,6 +63,16 @@
     const-string v2, "URLConn"
     invoke-static {p2, v1, v2}, Lin/startv/hotstar/NetworkInterceptor;->logEvent(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 
+    # Dump full request with headers to http_dump.txt
+    :try_dump_req
+    invoke-static {p2, v1, p3}, Lin/startv/hotstar/HttpDumper;->dumpRequest(Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;)V
+    :try_dump_req_end
+    .catch Ljava/lang/Throwable; {:try_dump_req .. :try_dump_req_end} :catch_dump_req
+    goto :after_dump_req
+    :catch_dump_req
+    move-exception v2
+    :after_dump_req
+
     # Also extract and log request headers if present
     if-eqz p3, :skip_headers
     invoke-interface {p3}, Ljava/util/Map;->size()I
@@ -114,6 +124,16 @@
     # Log the response
     invoke-virtual {p1}, Ljava/net/URI;->toString()Ljava/lang/String;
     move-result-object v0
+
+    # Dump full response with headers to http_dump.txt
+    :try_dump_resp
+    invoke-static {v0, p2}, Lin/startv/hotstar/HttpDumper;->dumpResponse(Ljava/lang/String;Ljava/net/URLConnection;)V
+    :try_dump_resp_end
+    .catch Ljava/lang/Throwable; {:try_dump_resp .. :try_dump_resp_end} :catch_dump_resp
+    goto :after_dump_resp
+    :catch_dump_resp
+    move-exception v1
+    :after_dump_resp
 
     # Try to get the response code
     instance-of v1, p2, Ljava/net/HttpURLConnection;

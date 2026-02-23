@@ -193,6 +193,25 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        // Fallback: detect uninstall completion when onActivityResult doesn't fire
+        if (pendingInstallAfterUninstall && targetPackageName != null) {
+            mainHandler.postDelayed(() -> {
+                if (!pendingInstallAfterUninstall) return; // already handled by onActivityResult
+                try {
+                    getPackageManager().getPackageInfo(targetPackageName, 0);
+                    // Still installed — do nothing, wait for user action
+                } catch (PackageManager.NameNotFoundException e) {
+                    pendingInstallAfterUninstall = false;
+                    log("✅ Previous version uninstalled (detected via onResume)");
+                    doInstall();
+                }
+            }, 500);
+        }
+    }
+
+    @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PICK_APK && resultCode == RESULT_OK && data != null) {
@@ -219,16 +238,22 @@ public class MainActivity extends Activity {
         } else if (requestCode == UNINSTALL_REQUEST) {
             if (pendingInstallAfterUninstall) {
                 pendingInstallAfterUninstall = false;
+                boolean stillInstalled = false;
                 if (targetPackageName != null) {
                     try {
                         getPackageManager().getPackageInfo(targetPackageName, 0);
-                        log("⚠️ App still installed — user may have cancelled uninstall");
-                        log("↪ Attempting install anyway (may fail)...");
+                        stillInstalled = true;
                     } catch (PackageManager.NameNotFoundException e) {
-                        log("✅ Previous version uninstalled successfully");
+                        stillInstalled = false;
                     }
                 }
-                doInstall();
+                if (!stillInstalled) {
+                    log("✅ Previous version uninstalled — installing patched APK...");
+                    doInstall();
+                } else {
+                    log("⚠️ App is still installed — uninstall was cancelled or failed");
+                    log("💡 Tip: Uninstall the existing app manually, then tap Install");
+                }
             }
         } else if (requestCode == INSTALL_REQUEST) {
             if (resultCode == RESULT_OK) {
@@ -624,9 +649,19 @@ public class MainActivity extends Activity {
             .setPositiveButton("Uninstall & Install", (d, w) -> {
                 pendingInstallAfterUninstall = true;
                 log("🗑️ Requesting uninstall of " + targetPackageName + "...");
-                Intent uninstall = new Intent(Intent.ACTION_DELETE);
-                uninstall.setData(Uri.parse("package:" + targetPackageName));
-                startActivityForResult(uninstall, UNINSTALL_REQUEST);
+                try {
+                    // Preferred: ACTION_UNINSTALL_PACKAGE with result callback
+                    Intent uninstall = new Intent(Intent.ACTION_UNINSTALL_PACKAGE);
+                    uninstall.setData(Uri.parse("package:" + targetPackageName));
+                    uninstall.putExtra(Intent.EXTRA_RETURN_RESULT, true);
+                    startActivityForResult(uninstall, UNINSTALL_REQUEST);
+                } catch (Exception e) {
+                    // Fallback: ACTION_DELETE (older devices)
+                    log("↪ Fallback to ACTION_DELETE...");
+                    Intent uninstall = new Intent(Intent.ACTION_DELETE);
+                    uninstall.setData(Uri.parse("package:" + targetPackageName));
+                    startActivityForResult(uninstall, UNINSTALL_REQUEST);
+                }
             })
             .setNeutralButton("Try Anyway", (d, w) -> {
                 log("↪ Attempting install despite signature mismatch...");
