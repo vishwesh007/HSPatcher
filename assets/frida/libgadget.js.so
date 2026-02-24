@@ -1,10 +1,10 @@
 /*
- * HSPatch Universal Frida Script v2.0
+ * HSPatch Universal Frida Script v3.0
  * - SSL Certificate Pinning Bypass
  * - Signature Verification Bypass (runtime layer)
  * - Piracy / License / Integrity Checks Removal
  * - Screenshot / Recording FLAG_SECURE Bypass
- * - Network Traffic Monitoring & Logging
+ * - Network Traffic Monitoring, Blocking & Modification
  */
 
 setTimeout(function() {
@@ -13,7 +13,7 @@ setTimeout(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v2.0               [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.0               [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -239,62 +239,275 @@ setTimeout(function() {
 
 
         // =====================================================
-        // 5. NETWORK TRAFFIC MONITORING
+        // 5. NETWORK TRAFFIC BLOCKING, MODIFICATION & MONITORING
         // =====================================================
 
         var netLogTag = "HSPatch-Net";
         var Log = Java.use('android.util.Log');
 
-        // URL.openConnection() monitoring
+        // --- Load blocking rules from blocking_hotstar.txt ---
+        // Rules format: each line is "pattern:replacement"
+        // If replacement is empty or "BLOCK", the request is fully blocked.
+        // Otherwise, pattern is replaced with replacement in the URL.
+        var blockRules = [];
+        var blockPatterns = [];   // patterns with no replacement → full block
+        var rewriteRules = [];   // patterns with replacement → URL rewrite
+
+        function loadBlockingRules() {
+            try {
+                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctx === null) return;
+
+                // Try external files dir first, then fallback paths
+                var paths = [];
+                try {
+                    var extDir = ctx.getExternalFilesDir(null);
+                    if (extDir !== null) {
+                        paths.push(extDir.getAbsolutePath() + '/blocking_hotstar.txt');
+                    }
+                } catch(e) {}
+                try {
+                    var dataDir = ctx.getApplicationInfo().dataDir.value;
+                    paths.push(dataDir + '/files/blocking_hotstar.txt');
+                } catch(e) {}
+                paths.push('/storage/emulated/0/Download/hspatch_logs/blocking_hotstar.txt');
+
+                var File = Java.use('java.io.File');
+                var BufferedReader = Java.use('java.io.BufferedReader');
+                var FileReader = Java.use('java.io.FileReader');
+
+                for (var pi = 0; pi < paths.length; pi++) {
+                    var f = File.$new(paths[pi]);
+                    if (f.exists()) {
+                        Log.i(netLogTag, '[RULES] Loading blocking rules from: ' + paths[pi]);
+                        var reader = BufferedReader.$new(FileReader.$new(paths[pi]));
+                        var line;
+                        while ((line = reader.readLine()) !== null) {
+                            var lineStr = line.toString().trim();
+                            if (lineStr.length === 0 || lineStr.charAt(0) === '#') continue;
+
+                            var sepIdx = lineStr.indexOf(':');
+                            if (sepIdx > 0) {
+                                var pattern = lineStr.substring(0, sepIdx).trim();
+                                var replacement = lineStr.substring(sepIdx + 1).trim();
+                                if (replacement.length === 0 || replacement === 'BLOCK') {
+                                    blockPatterns.push(pattern);
+                                    Log.i(netLogTag, '[RULES]   BLOCK: ' + pattern);
+                                } else {
+                                    rewriteRules.push({ from: pattern, to: replacement });
+                                    Log.i(netLogTag, '[RULES]   REWRITE: ' + pattern + ' -> ' + replacement);
+                                }
+                            } else {
+                                // No colon = treat entire line as a block pattern
+                                blockPatterns.push(lineStr);
+                                Log.i(netLogTag, '[RULES]   BLOCK: ' + lineStr);
+                            }
+                        }
+                        reader.close();
+                        Log.i(netLogTag, '[RULES] Loaded ' + blockPatterns.length + ' block rules + '
+                            + rewriteRules.length + ' rewrite rules');
+                        break; // found and loaded
+                    }
+                }
+                if (blockPatterns.length === 0 && rewriteRules.length === 0) {
+                    Log.i(netLogTag, '[RULES] No blocking rules file found (will only monitor)');
+                }
+            } catch (err) {
+                Log.w(netLogTag, '[RULES] Failed to load rules: ' + err);
+            }
+        }
+
+        // Reload rules periodically (every 60s) so user edits take effect
+        function scheduleRuleReload() {
+            setTimeout(function() {
+                Java.perform(function() {
+                    var oldBlock = blockPatterns.length;
+                    var oldRewrite = rewriteRules.length;
+                    blockPatterns = [];
+                    rewriteRules = [];
+                    loadBlockingRules();
+                    if (blockPatterns.length !== oldBlock || rewriteRules.length !== oldRewrite) {
+                        Log.i(netLogTag, '[RULES] Rules reloaded: ' + blockPatterns.length + ' block, '
+                            + rewriteRules.length + ' rewrite');
+                    }
+                });
+                scheduleRuleReload();
+            }, 60000);
+        }
+
+        loadBlockingRules();
+        scheduleRuleReload();
+
+        // Check if a URL should be blocked (returns true if blocked)
+        function shouldBlock(url) {
+            for (var i = 0; i < blockPatterns.length; i++) {
+                if (url.indexOf(blockPatterns[i]) !== -1) {
+                    return blockPatterns[i];
+                }
+            }
+            return null;
+        }
+
+        // Apply rewrite rules to URL, returns modified URL string
+        function applyRewrites(url) {
+            var modified = url;
+            for (var i = 0; i < rewriteRules.length; i++) {
+                if (modified.indexOf(rewriteRules[i].from) !== -1) {
+                    var before = modified;
+                    modified = modified.split(rewriteRules[i].from).join(rewriteRules[i].to);
+                    Log.i(netLogTag, '[REWRITE] ' + rewriteRules[i].from + ' -> ' + rewriteRules[i].to + ' in ' + before);
+                }
+            }
+            return modified;
+        }
+
+        // Log blocked request
+        function logBlocked(source, method, url, pattern) {
+            Log.i(netLogTag, '[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
+            // Also log to file via NetworkLogger if available
+            try {
+                var NL = Java.use('in.startv.hotstar.NetworkLogger');
+                NL.log('[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
+            } catch(e) {}
+
+            // Also log to blocked_urls.txt
+            try {
+                var HSConfig = Java.use('in.startv.hotstar.HSPatchConfig');
+                var blockedPath = HSConfig.getFilePath('blocked_urls.txt');
+                var fw = Java.use('java.io.FileWriter').$new(blockedPath, true);
+                var ts = Java.use('java.text.SimpleDateFormat').$new('HH:mm:ss')
+                    .format(Java.use('java.util.Date').$new());
+                fw.write(ts + ' [' + source + '] ' + method + ' ' + url + '\n');
+                fw.flush();
+                fw.close();
+            } catch(e2) {}
+        }
+
+        // URL.openConnection() — block or rewrite before connection opens
         try {
             var URL = Java.use('java.net.URL');
             URL.openConnection.overload().implementation = function() {
                 var url = this.toString();
+
+                // Check block rules
+                var blockMatch = shouldBlock(url);
+                if (blockMatch !== null) {
+                    logBlocked('URL', 'OPEN', url, blockMatch);
+                    // Return connection to localhost to effectively null-route
+                    var nullUrl = Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked');
+                    return nullUrl.openConnection();
+                }
+
+                // Apply rewrite rules
+                var rewritten = applyRewrites(url);
+                if (rewritten !== url) {
+                    Log.i(netLogTag, '[URL.open] REWRITTEN: ' + url + ' -> ' + rewritten);
+                    var newUrl = Java.use('java.net.URL').$new(rewritten);
+                    return newUrl.openConnection();
+                }
+
                 Log.i(netLogTag, 'OPEN ' + url);
                 return this.openConnection();
             };
         } catch (err) { }
 
-        // OkHttp3 - intercept newCall to log requests
+        // OkHttp3 — intercept newCall, block or rewrite request URL
         try {
             var OkHttpClient = Java.use('okhttp3.OkHttpClient');
             OkHttpClient.newCall.implementation = function(request) {
                 var url = request.url().toString();
                 var method = request.method();
+
+                // Check block rules
+                var blockMatch = shouldBlock(url);
+                if (blockMatch !== null) {
+                    logBlocked('OkHttp3', method, url, blockMatch);
+                    // Build a new request to localhost to null-route
+                    var Builder = Java.use('okhttp3.Request$Builder');
+                    var HttpUrl = Java.use('okhttp3.HttpUrl');
+                    var blockedUrl = HttpUrl.parse('http://127.0.0.1:1/blocked');
+                    var blockedReq = request.newBuilder().url(blockedUrl).build();
+                    return this.newCall(blockedReq);
+                }
+
+                // Apply rewrite rules
+                var rewritten = applyRewrites(url);
+                if (rewritten !== url) {
+                    Log.i(netLogTag, '[OkHttp3] REWRITTEN: ' + method + ' ' + url + ' -> ' + rewritten);
+                    var HttpUrl2 = Java.use('okhttp3.HttpUrl');
+                    var newHttpUrl = HttpUrl2.parse(rewritten);
+                    if (newHttpUrl !== null) {
+                        var newReq = request.newBuilder().url(newHttpUrl).build();
+                        return this.newCall(newReq);
+                    }
+                }
+
                 Log.i(netLogTag, 'REQ ' + method + ' ' + url);
                 return this.newCall(request);
             };
         } catch (err) { }
 
-        // HttpURLConnection monitoring
+        // HttpURLConnection — block before connect
         try {
             var HttpURLConnection = Java.use('java.net.HttpURLConnection');
             HttpURLConnection.connect.implementation = function() {
                 var url = this.getURL().toString();
+
+                var blockMatch = shouldBlock(url);
+                if (blockMatch !== null) {
+                    logBlocked('HttpConn', 'CONN', url, blockMatch);
+                    // Throw IOException to prevent the connection
+                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
                 Log.i(netLogTag, 'CONN ' + url);
                 this.connect();
             };
         } catch (err) { }
 
-        // WebView URL monitoring
+        // WebView URL — block before loading
         try {
             var WebView = Java.use('android.webkit.WebView');
             WebView.loadUrl.overload('java.lang.String').implementation = function(url) {
+                var blockMatch = shouldBlock(url);
+                if (blockMatch !== null) {
+                    logBlocked('WebView', 'LOAD', url, blockMatch);
+                    // Load blank page instead
+                    this.loadUrl('about:blank');
+                    return;
+                }
+
+                var rewritten = applyRewrites(url);
+                if (rewritten !== url) {
+                    Log.i(netLogTag, '[WebView] REWRITTEN: ' + url + ' -> ' + rewritten);
+                    this.loadUrl(rewritten);
+                    return;
+                }
+
                 Log.i(netLogTag, 'WEBVIEW ' + url);
                 this.loadUrl(url);
             };
         } catch (err) { }
 
-        // Socket connect monitoring
+        // Socket connect — block by host pattern
         try {
             var Socket = Java.use('java.net.Socket');
             Socket.connect.overload('java.net.SocketAddress', 'int').implementation = function(addr, timeout) {
-                Log.i(netLogTag, 'SOCKET ' + addr.toString());
+                var addrStr = addr.toString();
+
+                var blockMatch = shouldBlock(addrStr);
+                if (blockMatch !== null) {
+                    logBlocked('Socket', 'CONNECT', addrStr, blockMatch);
+                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
+                Log.i(netLogTag, 'SOCKET ' + addrStr);
                 this.connect(addr, timeout);
             };
         } catch (err) { }
 
-        console.log('[*] Network monitoring hooks installed');
+        console.log('[*] Network blocking + monitoring hooks installed');
+        console.log('[*] Block rules: ' + blockPatterns.length + ', Rewrite rules: ' + rewriteRules.length);
         console.log('======================================================');
         console.log('[#] HSPatch: All bypass modules active                [#]');
         console.log('======================================================');

@@ -568,12 +568,12 @@
     invoke-virtual {v2, v4}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
     invoke-virtual {v1, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
-    # PATH BAR 14sp
+    # PATH BAR 16sp
     new-instance v2, Landroid/widget/TextView;
     invoke-direct {v2, v12}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
     iget-object v0, v12, Lin/startv/hotstar/LogViewerActivity;->filePath:Ljava/lang/String;
     invoke-virtual {v2, v0}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
-    const/high16 v0, 0x41600000
+    const/high16 v0, 0x41800000
     const/4 v3, 0x0
     invoke-virtual {v2, v3, v0}, Landroid/widget/TextView;->setTextSize(IF)V
     const v0, -0x1e96
@@ -627,7 +627,7 @@
     const/4 v6, -0x2
     invoke-direct {v0, v4, v6}, Landroid/widget/FrameLayout$LayoutParams;-><init>(II)V
     invoke-virtual {v3, v0}, Landroid/widget/TextView;->setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V
-    const/high16 v0, 0x41700000
+    const/high16 v0, 0x41c00000
     const/4 v4, 0x0
     invoke-virtual {v3, v4, v0}, Landroid/widget/TextView;->setTextSize(IF)V
     const v0, -0x362e27
@@ -670,7 +670,7 @@
     iput-object v2, v12, Lin/startv/hotstar/LogViewerActivity;->statusText:Landroid/widget/TextView;
     const-string v0, "Loading..."
     invoke-virtual {v2, v0}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
-    const/high16 v0, 0x41700000
+    const/high16 v0, 0x41800000
     const/4 v3, 0x0
     invoke-virtual {v2, v3, v0}, Landroid/widget/TextView;->setTextSize(IF)V
     const v0, -0x6d6d6e

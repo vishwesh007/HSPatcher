@@ -1,5 +1,60 @@
 # HSPatcher Changelog
 
+## v3.7 — 2026-02-24: Frida-Level Request Blocking + UI Improvements
+
+### Summary
+Blocking rules from `blocking_hotstar.txt` are now enforced directly in the Frida
+gadget hooks — requests are intercepted and blocked/rewritten **before they leave
+the phone**, at the URL.openConnection, OkHttp3.newCall, HttpURLConnection.connect,
+WebView.loadUrl, and Socket.connect levels. LogViewerActivity font size increased
+significantly for better readability.
+
+---
+
+### New Features
+
+#### Frida-Level Request Blocking & Rewriting
+The Frida script (Section 5) now reads `blocking_hotstar.txt` at startup and applies
+rules directly in the network hooks. Previously, blocking rules were only applied in
+`UrlHook.smali` (smali layer) and the Frida hooks only logged traffic passively.
+
+**How it works:**
+1. On script load, reads `blocking_hotstar.txt` from the app's external files directory
+2. Rules format: `pattern:replacement` (rewrite) or `pattern:BLOCK` / `pattern` (block)
+3. Lines starting with `#` are treated as comments
+4. Rules are re-read every 60 seconds so edits take effect without app restart
+5. Blocked requests are logged to both logcat (`HSPatch-Net`) and `blocked_urls.txt`
+
+**Hook points with blocking:**
+| Hook | Block Method | Rewrite Support |
+|------|-------------|-----------------|
+| `URL.openConnection()` | Redirect to 127.0.0.1:1 | ✅ Creates new URL |
+| `OkHttp3.newCall()` | Redirect to 127.0.0.1:1 | ✅ Rebuilds Request |
+| `HttpURLConnection.connect()` | Throws IOException | ❌ (already connected) |
+| `WebView.loadUrl()` | Loads about:blank | ✅ Loads rewritten URL |
+| `Socket.connect()` | Throws IOException | ❌ (raw socket) |
+
+**Logcat output examples:**
+```
+I HSPatch-Net: [RULES] Loading blocking rules from: /storage/.../files/blocking_hotstar.txt
+I HSPatch-Net: [RULES]   BLOCK: googleads
+I HSPatch-Net: [RULES]   REWRITE: bifrost -> bisfrost
+I HSPatch-Net: [BLOCKED] [OkHttp3] GET https://pagead2.googlesyndication.com/... (matched: googleads)
+I HSPatch-Net: [REWRITE] bifrost -> bisfrost in https://bifrost.hotstar.com/...
+```
+
+#### LogViewerActivity Font Size Increase
+- Main log content text: **15sp → 24sp** (60% larger, much more readable)
+- Path bar text: **14sp → 16sp**
+- Status bar text: **15sp → 16sp**
+
+---
+
+### Frida Script Version
+- Bumped from v2.0 to v3.0
+
+---
+
 ## v3.1 — 2026-02-23: Network Interceptor + Critical Fixes
 
 ### Summary
