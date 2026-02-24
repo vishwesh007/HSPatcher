@@ -1,5 +1,14 @@
 # HSPatcher Changelog
 
+## v3.9 — 2026-02-25: Request Log Rules + Auto-Patch Fix
+
+### Summary
+- **Request logs reflect rules**: URLs logged by `HSPatch-Net` / `request_logs.txt` are now passed through `UrlHook.decodeAndPatch()` before logging, so rewrites and `[BLOCKED]` markers are visible everywhere.
+- **Blocking rules compatibility**: `blocking_hotstar.txt` now supports both `BLOCK:<pattern>` and `<pattern>:BLOCK` formats, and falls back to `/storage/emulated/0/Download/hspatch_logs/blocking_hotstar.txt` if the app-external copy isn’t present.
+- **Reliable `auto_patch`**: launching with `--ez auto_patch true` now starts patching only after the APK finishes loading (fixes the “previously selected APK got patched” issue for large files).
+
+---
+
 ## v3.8 — 2026-02-24: Profiles Import Fix + Better Export Names + Uninstall Button
 
 ### Summary

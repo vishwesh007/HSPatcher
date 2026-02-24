@@ -62,7 +62,7 @@
 
     :no_bifrost
 
-    # Step 5: Read blocking file for custom replacements
+    # Step 5: Read blocking file for custom replacements / blocks
     :try_start_block
     const-string v1, "blocking_hotstar.txt"
     invoke-static {v1}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
@@ -76,7 +76,17 @@
 
     move-result v2
 
+    # Fallback to public Download folder if config path isn't present
+    if-nez v2, :has_blocking
+
+    const-string v1, "/storage/emulated/0/Download/hspatch_logs/blocking_hotstar.txt"
+    new-instance v2, Ljava/io/File;
+    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v2}, Ljava/io/File;->exists()Z
+    move-result v2
     if-eqz v2, :no_blocking
+
+    :has_blocking
 
     new-instance v2, Ljava/io/BufferedReader;
 
@@ -92,6 +102,33 @@
     move-result-object v1
 
     if-eqz v1, :end_loop_block
+
+    # Support block rule format: "BLOCK:<pattern>"
+    const-string v3, "BLOCK:"
+    invoke-virtual {v1, v3}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
+    move-result v3
+    if-eqz v3, :not_block_prefix
+
+    const/4 v3, 0x6
+    invoke-virtual {v1, v3}, Ljava/lang/String;->substring(I)Ljava/lang/String;
+    move-result-object v3
+    invoke-virtual {v3}, Ljava/lang/String;->trim()Ljava/lang/String;
+    move-result-object v3
+
+    invoke-virtual {v0, v3}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result v4
+    if-eqz v4, :loop_block
+
+    new-instance v5, Ljava/lang/StringBuilder;
+    invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v1, "[BLOCKED] "
+    invoke-virtual {v5, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v5, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v0
+    goto :end_loop_block
+
+    :not_block_prefix
 
     const-string v3, ":"
 
@@ -113,8 +150,27 @@
 
     aget-object v4, v1, v4
 
-    invoke-virtual {v0, v3, v4}, Ljava/lang/String;->replace(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;
+    # If replacement is BLOCK and pattern matches, mark as blocked
+    const-string v5, "BLOCK"
+    invoke-virtual {v4, v5}, Ljava/lang/String;->equalsIgnoreCase(Ljava/lang/String;)Z
+    move-result v5
+    if-eqz v5, :do_replace
 
+    invoke-virtual {v0, v3}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result v5
+    if-eqz v5, :skip_line
+
+    new-instance v5, Ljava/lang/StringBuilder;
+    invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v1, "[BLOCKED] "
+    invoke-virtual {v5, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v5, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v0
+    goto :end_loop_block
+
+    :do_replace
+    invoke-virtual {v0, v3, v4}, Ljava/lang/String;->replace(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;
     move-result-object v0
 
     :skip_line

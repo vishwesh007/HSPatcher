@@ -49,6 +49,7 @@ public class MainActivity extends Activity {
     private String originalFileName = "";   // original filename before copy
     private boolean pendingInstallAfterUninstall = false;
     private String targetPackageName = null;
+    private boolean autoPatchAfterLoad = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -80,14 +81,11 @@ public class MainActivity extends Activity {
         // Auto-load APK if passed via intent (for testing: adb shell am start -n ... --es apk_path /sdcard/...)
         String intentPath = getIntent().getStringExtra("apk_path");
         if (intentPath != null && !intentPath.isEmpty()) {
+            autoPatchAfterLoad = getIntent().getBooleanExtra("auto_patch", false);
             File f = new File(intentPath);
             if (f.exists()) {
                 log("📂 Auto-loading APK from intent: " + intentPath);
                 autoLoadApk(f);
-                // Auto-patch if requested
-                if (getIntent().getBooleanExtra("auto_patch", false)) {
-                    mainHandler.postDelayed(() -> onPatchClick(), 2000);
-                }
             }
         }
     }
@@ -157,6 +155,12 @@ public class MainActivity extends Activity {
                     apkSize.setText(fSize);
                     btnPatch.setEnabled(true);
                     btnInstall.setVisibility(View.GONE);
+
+                    // If launched with --ez auto_patch true, patch only after load completes
+                    if (autoPatchAfterLoad) {
+                        autoPatchAfterLoad = false;
+                        mainHandler.postDelayed(this::onPatchClick, 250);
+                    }
                 });
                 if (isBundle) {
                     log("✅ Split APK bundle loaded: " + fName + " (" + fSize + ")");
@@ -432,7 +436,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.8 — Starting one-click patch");
+        log("⚡ HSPatcher v3.9 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {

@@ -312,10 +312,26 @@
 # Static helper — log a network event to both logcat and file
 # ========================================================================
 .method public static logEvent(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
-    .locals 3
+    .locals 6
     .param p0, "method"    # GET, POST, etc.
     .param p1, "url"       # full URL
     .param p2, "source"    # "URLConn", "OkHttp3", "ProxySelector", etc.
+
+    # Apply UrlHook rules to URL before logging (so logs reflect rewrites/blocks)
+    move-object v2, p1
+    if-eqz p1, :after_patch
+
+    :try_patch
+    const-string v1, "UTF-8"
+    invoke-static {p1, v1}, Lin/startv/hotstar/UrlHook;->decodeAndPatch(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v2
+    :try_patch_end
+    .catch Ljava/lang/Throwable; {:try_patch .. :try_patch_end} :catch_patch
+    goto :after_patch
+    :catch_patch
+    move-exception v1
+    move-object v2, p1
+    :after_patch
 
     # Build log line: "[source] METHOD url"
     new-instance v0, Ljava/lang/StringBuilder;
@@ -328,7 +344,7 @@
     invoke-virtual {v0, p0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     const-string v1, " "
     invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v0, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v0, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v0
 
