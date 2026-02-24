@@ -961,22 +961,7 @@ public class PatchEngine {
         }
         log("   Found: " + targetSmali.getName());
 
-        // Check for native runtime protection (DexGuard/DexProtector)
-        // If Application.onCreate() is native, modifying the DEX breaks JNI registration
-        // and triggers integrity checks. Use ContentProvider bootstrap instead.
-        if (info.isApplication) {
-            String smaliContent = readFileStr(targetSmali);
-            boolean nativeOnCreate = smaliContent.contains(".method public native onCreate()V") ||
-                                     smaliContent.contains(".method public final native onCreate()V");
-            if (nativeOnCreate) {
-                log("   \u26a0\ufe0f Native protection detected (DexGuard/DexProtector)");
-                log("   \u2139\ufe0f Skipping DEX modification to preserve integrity checks");
-                log("   \u2139\ufe0f ContentProvider bootstrap will handle HSPatch initialization");
-                return null;  // Signal to caller: use original DEX unmodified
-            }
-        }
-
-        injectHook(targetSmali, info.isApplication);
+        injectHook(targetSmali, info.isApplication, info.dexguardEncrypted);
 
         // Apply smali-level patches (License hack + DexExtractor)
         int smpCount = applySmaliPatches(smaliDir, info);
@@ -1012,7 +997,7 @@ public class PatchEngine {
         return outDex;
     }
 
-    private void injectHook(File smaliFile, boolean isApp) throws IOException {
+    private void injectHook(File smaliFile, boolean isApp, boolean dexguardEncrypted) throws IOException {
         log("   injectHook: reading " + smaliFile.getName() + " (" + (smaliFile.length()/1024) + " KB)...");
         String content = readFileStr(smaliFile);
         if (content.contains("HSPatchInit")) { log("   Already hooked"); return; }
@@ -1020,61 +1005,132 @@ public class PatchEngine {
         log("   injectHook: searching for hook point...");
         String sig = findOnCreate(content, isApp);
 
-        // === Handle native method protection (DexGuard/DexProtector) ===
-        // Note: native onCreate() apps are now handled in patchHookDex() by
-        // returning null (skip DEX modification entirely, use ContentProvider).
-        // This code only runs for non-native-protected apps.
+        // === Extract the smali type for this class (needed for native wrapping) ===
+        String thisType = null;
+        int classIdx = content.indexOf(".class ");
+        if (classIdx >= 0) {
+            int classEnd = content.indexOf('\n', classIdx);
+            String classLine = content.substring(classIdx, classEnd).trim();
+            thisType = classLine.substring(classLine.lastIndexOf(' ') + 1);
+        }
+
         boolean usingAttachBase = false;
         if (sig == null && isApp) {
-
-            // Try attachBaseContext as alternative (fires before onCreate)
-            sig = findAttachBaseContext(content);
-            if (sig != null) {
-                log("   Using attachBaseContext as hook point");
-                usingAttachBase = true;
+            // === Handle native onCreate() ===
+            String nativeSig = findNativeMethod(content, "onCreate()V");
+            if (nativeSig != null && dexguardEncrypted) {
+                // DexGuard registers native methods by name via JNI RegisterNatives.
+                // Renaming the native method breaks registration → NoSuchMethodError.
+                // Skip wrapping and fall through to attachBaseContext hook instead.
+                log("   ⚠️ native onCreate() detected + DexGuard — skipping wrap (RegisterNatives)");
+                log("   → Will use attachBaseContext as hook point instead");
+            } else if (nativeSig != null) {
+                log("   \u26a0\ufe0f native onCreate() detected — wrapping instead of skipping");
+                content = wrapNativeMethod(content, nativeSig, "onCreate", "()V", thisType, true);
+                writeFileStr(smaliFile, content);
+                sig = ".method public onCreate()V";
+                log("   ✅ Native onCreate() renamed → _hsp_orig_onCreate(), Java wrapper created");
             }
 
             if (sig == null) {
-                boolean nativeABC = content.contains("native attachBaseContext(Landroid/content/Context;)V");
-                if (nativeABC) {
-                    log("   \u26a0\ufe0f attachBaseContext is also native");
-                    log("   \u2139\ufe0f HSPatchBootProvider will handle initialization");
-                    return;
+                // Try attachBaseContext as alternative (fires before onCreate)
+                sig = findAttachBaseContext(content);
+                if (sig != null) {
+                    log("   Using attachBaseContext as hook point");
+                    usingAttachBase = true;
                 }
-                // onCreate not found and not native (handled earlier) — add it
-                log("   Adding onCreate method to Application class...");
+            }
+
+            if (sig == null) {
+                // Handle native attachBaseContext — rename + wrap
+                String nativeABC = findNativeMethod(content, "attachBaseContext(Landroid/content/Context;)V");
+                if (nativeABC != null && dexguardEncrypted) {
+                    // DexGuard: don't rename native attachBaseContext either
+                    log("   ⚠️ native attachBaseContext() + DexGuard — skipping wrap");
+                    log("   → Will add fresh attachBaseContext as hook point");
+                } else if (nativeABC != null) {
+                    log("   \u26a0\ufe0f native attachBaseContext() detected — wrapping");
+                    content = wrapNativeMethod(content, nativeABC,
+                        "attachBaseContext", "(Landroid/content/Context;)V", thisType, false);
+                    writeFileStr(smaliFile, content);
+                    sig = findAttachBaseContext(content);
+                    usingAttachBase = true;
+                    log("   ✅ Native attachBaseContext() wrapped");
+                }
+            }
+
+            if (sig == null) {
+                // No usable hook point — add a fresh method
                 String superClass = extractSuperClass(content);
                 if (superClass == null) superClass = "Landroid/app/Application;";
+
+                if (dexguardEncrypted) {
+                    // DexGuard: native onCreate exists, can't touch it.
+                    // Add a fresh attachBaseContext (fires BEFORE native onCreate).
+                    log("   Adding attachBaseContext for DexGuard hook...");
+                    String newMethod =
+                        "\n.method protected attachBaseContext(Landroid/content/Context;)V\n" +
+                        "    .locals 2\n" +
+                        "    .param p1, \"base\"\n\n" +
+                        "    invoke-super {p0, p1}, " + superClass + "->attachBaseContext(Landroid/content/Context;)V\n\n" +
+                        "    return-void\n" +
+                        ".end method\n";
+                    content = content + newMethod;
+                    writeFileStr(smaliFile, content);
+                    sig = ".method protected attachBaseContext(Landroid/content/Context;)V";
+                    usingAttachBase = true;
+                    log("   ✅ Fresh attachBaseContext added (DexGuard-safe hook point)");
+                } else {
+                    // Normal app: add a fresh onCreate
+                    log("   Adding onCreate method to Application class...");
+                    String newMethod =
+                        "\n.method public onCreate()V\n" +
+                        "    .locals 2\n\n" +
+                        "    invoke-super {p0}, " + superClass + "->onCreate()V\n\n" +
+                        "    return-void\n" +
+                        ".end method\n";
+                    content = content + newMethod;
+                    writeFileStr(smaliFile, content);
+                    sig = ".method public onCreate()V";
+                }
+            }
+        }
+        if (sig == null && !isApp) {
+            // Handle native Activity.onCreate(Bundle)
+            String nativeSig = findNativeMethod(content, "onCreate(Landroid/os/Bundle;)V");
+            if (nativeSig != null && dexguardEncrypted) {
+                // DexGuard: don't rename, add fresh onCreate that calls super
+                log("   ⚠️ native Activity.onCreate() + DexGuard — adding fresh wrapper");
+                String superClass = extractSuperClass(content);
+                if (superClass == null) superClass = "Landroidx/appcompat/app/AppCompatActivity;";
+                // Remove the native declaration and add a Java version
+                // Actually: we can't remove it (DexGuard needs it). Add a separate hook method.
+                // Use a ContentProvider-style approach: skip this, hook via provider bootstrap.
+                log("   → DexGuard Activity — will use ContentProvider bootstrap");
+            } else if (nativeSig != null) {
+                log("   \u26a0\ufe0f native Activity.onCreate() detected — wrapping");
+                content = wrapNativeMethod(content, nativeSig,
+                    "onCreate", "(Landroid/os/Bundle;)V", thisType, false);
+                writeFileStr(smaliFile, content);
+                sig = ".method public onCreate(Landroid/os/Bundle;)V";
+                log("   ✅ Native Activity.onCreate() wrapped");
+            }
+
+            if (sig == null) {
+                log("   Adding onCreate method to Activity class...");
+                String superClass = extractSuperClass(content);
+                if (superClass == null) superClass = "Landroidx/appcompat/app/AppCompatActivity;";
                 String newMethod =
-                    "\n.method public onCreate()V\n" +
-                    "    .locals 2\n\n" +
-                    "    invoke-super {p0}, " + superClass + "->onCreate()V\n\n" +
+                    "\n.method public onCreate(Landroid/os/Bundle;)V\n" +
+                    "    .locals 2\n" +
+                    "    .param p1, \"savedInstanceState\"\n\n" +
+                    "    invoke-super {p0, p1}, " + superClass + "->onCreate(Landroid/os/Bundle;)V\n\n" +
                     "    return-void\n" +
                     ".end method\n";
                 content = content + newMethod;
                 writeFileStr(smaliFile, content);
-                sig = ".method public onCreate()V";
+                sig = ".method public onCreate(Landroid/os/Bundle;)V";
             }
-        }
-        if (sig == null && !isApp) {
-            boolean nativeOnCreate = content.contains("native onCreate(Landroid/os/Bundle;)V");
-            if (nativeOnCreate) {
-                log("   \u26a0\ufe0f Activity onCreate is native — using ContentProvider bootstrap");
-                return;
-            }
-            log("   Adding onCreate method to Activity class...");
-            String superClass = extractSuperClass(content);
-            if (superClass == null) superClass = "Landroidx/appcompat/app/AppCompatActivity;";
-            String newMethod =
-                "\n.method public onCreate(Landroid/os/Bundle;)V\n" +
-                "    .locals 2\n" +
-                "    .param p1, \"savedInstanceState\"\n\n" +
-                "    invoke-super {p0, p1}, " + superClass + "->onCreate(Landroid/os/Bundle;)V\n\n" +
-                "    return-void\n" +
-                ".end method\n";
-            content = content + newMethod;
-            writeFileStr(smaliFile, content);
-            sig = ".method public onCreate(Landroid/os/Bundle;)V";
         }
         if (sig == null) throw new IOException("Cannot find hook point in " + smaliFile.getName());
         log("   injectHook: found signature: " + sig);
@@ -1171,6 +1227,94 @@ public class PatchEngine {
         int end = content.indexOf('\n', idx);
         if (end < 0) end = content.length();
         return content.substring(idx + 7, end).trim();
+    }
+
+    /**
+     * Find a native method declaration matching the given suffix (e.g. "onCreate()V").
+     * Handles various access modifiers: public, protected, public final, etc.
+     * Returns the full ".method ... native <suffix>" line, or null if not found.
+     */
+    private String findNativeMethod(String content, String methodSuffix) {
+        // Build candidate patterns with different access modifiers
+        String[] prefixes = {
+            ".method public native ",
+            ".method public final native ",
+            ".method protected native ",
+            ".method protected final native ",
+            ".method private native ",
+            ".method public static native ",
+            ".method public abstract native ",
+        };
+        for (String prefix : prefixes) {
+            String candidate = prefix + methodSuffix;
+            if (content.contains(candidate)) return candidate;
+        }
+        // Fallback: scan line-by-line for any native method with this suffix
+        for (String line : content.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith(".method ") && trimmed.contains(" native ") &&
+                trimmed.endsWith(methodSuffix)) {
+                return trimmed;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Wrap a native method: rename original to _hsp_orig_<name>, create a Java
+     * wrapper method with the original name that calls HSPatchInit.init(p0) first,
+     * then delegates to the renamed native method.
+     *
+     * @param content      full smali file content
+     * @param nativeSig    the exact ".method ... native <name>(...)" line found
+     * @param methodName   e.g. "onCreate", "attachBaseContext"
+     * @param descriptor   e.g. "()V", "(Landroid/content/Context;)V", "(Landroid/os/Bundle;)V"
+     * @param thisType     e.g. "Lcom/rsa/securidapp/RsaApplication;"
+     * @param isNoArgVoid  true for "()V" methods (no params beyond p0)
+     * @return modified content with renamed native + new wrapper method
+     */
+    private String wrapNativeMethod(String content, String nativeSig,
+                                     String methodName, String descriptor,
+                                     String thisType, boolean isNoArgVoid) {
+        // Step 1: Rename the native method — insert _hsp_orig_ prefix
+        String renamedSig = nativeSig.replace(
+            " " + methodName + "(", " _hsp_orig_" + methodName + "(");
+        content = content.replace(nativeSig, renamedSig);
+
+        // Step 2: Determine access modifier for the wrapper (strip 'native' keyword)
+        // e.g. ".method public final native onCreate()V" → ".method public final onCreate()V"
+        String wrapperSig = nativeSig.replace(" native ", " ");
+
+        // Step 3: Build super call to renamed native
+        // thisType like "Lcom/example/App;" → invoke on this type
+        String nativeInvoke;
+        if (isNoArgVoid) {
+            // No params: just p0
+            nativeInvoke =
+                "    invoke-virtual {p0}, " + thisType + "->_hsp_orig_" + methodName + descriptor;
+        } else {
+            // One param: p0, p1 (covers Context, Bundle, etc.)
+            nativeInvoke =
+                "    invoke-virtual {p0, p1}, " + thisType + "->_hsp_orig_" + methodName + descriptor;
+        }
+
+        // Step 4: Build the wrapper method body
+        // NOTE: We do NOT add HSPatchInit.init() here — the regular injectHook()
+        // code will inject the hook into this wrapper method (finds the sig, adds hook).
+        // This prevents double-init calls.
+        int localsCount = isNoArgVoid ? 0 : 0;
+        StringBuilder wrapper = new StringBuilder();
+        wrapper.append("\n").append(wrapperSig).append("\n");
+        wrapper.append("    .locals ").append(localsCount).append("\n\n");
+        // Delegate to the original renamed native method
+        wrapper.append(nativeInvoke).append("\n\n");
+        wrapper.append("    return-void\n");
+        wrapper.append(".end method\n");
+
+        // Insert the wrapper method at the end of the file
+        content = content + wrapper.toString();
+
+        return content;
     }
 
     // ======================== STEP 4: BUILD PATCHED APK ========================

@@ -38,3 +38,18 @@ desktop.ini
 # Android debug keystore (personal)
 *.keystore
 *.jks
+
+# Temp decoding/auth artifacts
+temp_auth.apk
+temp_decoded/
+
+# SignatureKiller build artifacts (large native libs)
+sigkill_build/
+sigkill_src/
+
+# UI dumps (debug inspection)
+ui_dump*.txt
+ui_dump*.xml
+
+# Screenshots
+screen.png

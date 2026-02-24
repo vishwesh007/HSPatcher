@@ -785,7 +785,7 @@
     const/4 v3, 0x0
     invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setOrientation(I)V
     const/16 v3, 0x10
-    invoke-virtual {v2, v3}, Landroid/view/View;->setGravity(I)V
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setGravity(I)V
     const/16 v3, 0x8
     const/16 v4, 0xc
     invoke-virtual {v2, v3, v4, v3, v4}, Landroid/view/View;->setPadding(IIII)V

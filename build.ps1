@@ -1,4 +1,4 @@
-# HSPatcher Build Script v2
+﻿# HSPatcher Build Script v2
 # Builds the HSPatcher Android APK from source using Android SDK command-line tools.
 # Usage: .\build.ps1 [-Install] [-Clean]
 
@@ -84,7 +84,9 @@ Get-ChildItem (Join-Path $PROJECT "src") -Recurse -Filter "*.java" | ForEach-Obj
 Get-ChildItem $GEN -Recurse -Filter "*.java" | ForEach-Object { $javaSources += $_.FullName }
 
 $classpath = "$ANDROID_JAR;$APKTOOL_JAR;$ARSCLIB_JAR;$APKSIG_JAR"
-& javac -source 8 -target 8 -Xlint:-options -classpath $classpath -d $OBJ @javaSources 2>&1
+$ErrorActionPreference = "Continue"
+& javac -source 8 -target 8 -Xlint:-options -Xlint:-deprecation -classpath $classpath -d $OBJ @javaSources 2>&1 | Out-Null
+$ErrorActionPreference = "Stop"
 if ($LASTEXITCODE -ne 0) { throw "javac compilation failed" }
 $classCount = (Get-ChildItem $OBJ -Recurse -Filter "*.class").Count
 Write-Host "  Compiled $classCount classes" -ForegroundColor Green
@@ -182,7 +184,7 @@ if (Test-Path $assetsDir) {
         Write-Host "  Added assets/frida_gadgets.zip ($fridaSizeMB MB)" -ForegroundColor Green
         Remove-Item -Recurse -Force $fridaTmp
     } else {
-        Write-Host "  Frida gadget files not found — skipping (optional)" -ForegroundColor Yellow
+        Write-Host "  Frida gadget files not found - skipping (optional)" -ForegroundColor Yellow
     }
 
     Pop-Location
@@ -202,8 +204,7 @@ if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
 
 # ======================== DONE ========================
 $finalSize = [math]::Round((Get-Item $signedApk).Length / 1024)
-$sizeStr = "$finalSize"
-Write-Host "`n=== BUILD SUCCESSFUL: HSPatcher.apk ($sizeStr K) ===" -ForegroundColor Green
+Write-Host ("`n=== BUILD SUCCESSFUL: HSPatcher.apk " + $finalSize + "K ===") -ForegroundColor Green
 
 if ($Install) {
     Write-Host "`nInstalling..."
