@@ -35,7 +35,7 @@ public class MainActivity extends Activity {
     private static final int INSTALL_PERM = 1006;
     private static final int UNINSTALL_REQUEST = 1007;
 
-    private Button btnSelect, btnPatch, btnInstall, btnExtract;
+    private Button btnSelect, btnPatch, btnInstall, btnExtract, btnUninstall;
     private TextView logOutput, apkName, apkSize, progressText;
     private ScrollView logScroll;
     private ProgressBar progressBar;
@@ -60,6 +60,7 @@ public class MainActivity extends Activity {
         btnPatch = findViewById(R.id.btn_patch);
         btnInstall = findViewById(R.id.btn_install);
         btnExtract = findViewById(R.id.btn_extract);
+        btnUninstall = findViewById(R.id.btn_uninstall);
         logOutput = findViewById(R.id.log_output);
         apkName = findViewById(R.id.apk_name);
         apkSize = findViewById(R.id.apk_size);
@@ -72,6 +73,7 @@ public class MainActivity extends Activity {
         btnPatch.setOnClickListener(v -> onPatchClick());
         btnInstall.setOnClickListener(v -> onInstallClick());
         btnExtract.setOnClickListener(v -> onExtractClick());
+        btnUninstall.setOnClickListener(v -> onUninstallClick());
 
         requestStoragePermission();
 
@@ -236,23 +238,30 @@ public class MainActivity extends Activity {
                     Toast.LENGTH_LONG).show();
             }
         } else if (requestCode == UNINSTALL_REQUEST) {
-            if (pendingInstallAfterUninstall) {
-                pendingInstallAfterUninstall = false;
-                boolean stillInstalled = false;
-                if (targetPackageName != null) {
-                    try {
-                        getPackageManager().getPackageInfo(targetPackageName, 0);
-                        stillInstalled = true;
-                    } catch (PackageManager.NameNotFoundException e) {
-                        stillInstalled = false;
-                    }
+            boolean stillInstalled = true;
+            if (targetPackageName != null) {
+                try {
+                    getPackageManager().getPackageInfo(targetPackageName, 0);
+                    stillInstalled = true;
+                } catch (PackageManager.NameNotFoundException e) {
+                    stillInstalled = false;
                 }
-                if (!stillInstalled) {
-                    log("✅ Previous version uninstalled — installing patched APK...");
+            }
+
+            if (!stillInstalled) {
+                log("✅ Uninstalled: " + targetPackageName);
+                if (pendingInstallAfterUninstall) {
+                    pendingInstallAfterUninstall = false;
+                    log("↪ Installing patched APK...");
                     doInstall();
-                } else {
+                }
+            } else {
+                if (pendingInstallAfterUninstall) {
+                    pendingInstallAfterUninstall = false;
                     log("⚠️ App is still installed — uninstall was cancelled or failed");
                     log("💡 Tip: Uninstall the existing app manually, then tap Install");
+                } else {
+                    log("⚠️ Uninstall cancelled or failed");
                 }
             }
         } else if (requestCode == INSTALL_REQUEST) {
@@ -423,7 +432,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.7 — Starting one-click patch");
+        log("⚡ HSPatcher v3.8 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {
@@ -524,10 +533,38 @@ public class MainActivity extends Activity {
                 copyFile(result, installApk);
                 patchedApk = installApk;
 
+                // Capture target app metadata (package + label) from the patched APK
+                String appLabelForName = null;
+                try {
+                    android.content.pm.PackageManager pm = getPackageManager();
+                    android.content.pm.PackageInfo info = pm.getPackageArchiveInfo(
+                        patchedApk.getAbsolutePath(), 0);
+                    if (info != null) {
+                        targetPackageName = info.packageName;
+                        if (info.applicationInfo != null) {
+                            info.applicationInfo.sourceDir = patchedApk.getAbsolutePath();
+                            info.applicationInfo.publicSourceDir = patchedApk.getAbsolutePath();
+                            CharSequence labelCs = pm.getApplicationLabel(info.applicationInfo);
+                            if (labelCs != null) appLabelForName = labelCs.toString();
+                        }
+                    }
+                } catch (Throwable t) {
+                    // ignore — filename will fall back
+                }
+
                 // Also copy to Downloads for manual access / sharing
                 File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                 String timestamp = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
-                File outputFile = new File(downloads, "HSPatched_" + timestamp + ".apk");
+                String appPart = appLabelForName;
+                if (appPart == null || appPart.trim().isEmpty()) {
+                    appPart = (targetPackageName != null && !targetPackageName.isEmpty())
+                        ? targetPackageName
+                        : (originalFileName != null && !originalFileName.isEmpty()
+                            ? originalFileName.replaceAll("\\.[a-zA-Z0-9]+$", "")
+                            : "UnknownApp");
+                }
+                appPart = sanitizeFileName(appPart);
+                File outputFile = new File(downloads, "HSPatched_" + appPart + "_" + timestamp + ".apk");
                 try {
                     copyFile(result, outputFile);
                     log("📁 Also saved to: " + outputFile.getAbsolutePath());
@@ -543,6 +580,7 @@ public class MainActivity extends Activity {
 
                 mainHandler.post(() -> {
                     btnInstall.setVisibility(View.VISIBLE);
+                    btnUninstall.setVisibility(View.VISIBLE);
                     isPatching = false;
                     btnSelect.setEnabled(true);
                     btnPatch.setEnabled(true);
@@ -673,27 +711,7 @@ public class MainActivity extends Activity {
                 "This will remove all app data.\n\n" +
                 "What would you like to do?")
             .setPositiveButton("Uninstall & Install", (d, w) -> {
-                pendingInstallAfterUninstall = true;
-                // Try ADB shell uninstall first (works without user interaction if we have shell)
-                log("🗑️ Attempting adb shell uninstall of " + targetPackageName + "...");
-                if (tryAdbUninstall(targetPackageName)) {
-                    return; // adb uninstall succeeded, will auto-install
-                }
-                // Fallback: standard UI uninstall
-                log("↪ Falling back to standard uninstall UI...");
-                try {
-                    // Preferred: ACTION_UNINSTALL_PACKAGE with result callback
-                    Intent uninstall = new Intent(Intent.ACTION_UNINSTALL_PACKAGE);
-                    uninstall.setData(Uri.parse("package:" + targetPackageName));
-                    uninstall.putExtra(Intent.EXTRA_RETURN_RESULT, true);
-                    startActivityForResult(uninstall, UNINSTALL_REQUEST);
-                } catch (Exception e) {
-                    // Fallback: ACTION_DELETE (older devices)
-                    log("↪ Fallback to ACTION_DELETE...");
-                    Intent uninstall2 = new Intent(Intent.ACTION_DELETE);
-                    uninstall2.setData(Uri.parse("package:" + targetPackageName));
-                    startActivityForResult(uninstall2, UNINSTALL_REQUEST);
-                }
+                startUninstallFlow(targetPackageName, true);
             })
             .setNeutralButton("Try Anyway", (d, w) -> {
                 log("↪ Attempting install despite signature mismatch...");
@@ -801,7 +819,7 @@ public class MainActivity extends Activity {
      * Works when running via adb or with shell permissions.
      * Returns true if uninstall succeeded.
      */
-    private boolean tryAdbUninstall(String packageName) {
+    private boolean tryPmUninstall(String packageName) {
         try {
             Process p = Runtime.getRuntime().exec(new String[]{
                 "pm", "uninstall", packageName
@@ -815,8 +833,6 @@ public class MainActivity extends Activity {
 
             if (exitCode == 0 && output.contains("Success")) {
                 log("✅ Uninstalled via pm command: " + packageName);
-                pendingInstallAfterUninstall = false;
-                mainHandler.postDelayed(this::doInstall, 500);
                 return true;
             } else {
                 log("   pm uninstall returned: " + output + " (exit=" + exitCode + ")");
@@ -826,6 +842,62 @@ public class MainActivity extends Activity {
             log("   pm uninstall not available: " + e.getMessage());
             return false;
         }
+    }
+
+    private void onUninstallClick() {
+        if (targetPackageName == null || targetPackageName.trim().isEmpty()) {
+            Toast.makeText(this, "No target package detected yet", Toast.LENGTH_SHORT).show();
+            log("⚠️ No target package detected yet — patch an APK first.");
+            return;
+        }
+
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("Uninstall")
+            .setMessage("Uninstall \"" + targetPackageName + "\"?\n\nThis will remove all app data.")
+            .setPositiveButton("Uninstall", (d, w) -> startUninstallFlow(targetPackageName, false))
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void startUninstallFlow(String packageName, boolean installAfter) {
+        if (packageName == null || packageName.trim().isEmpty()) {
+            log("⚠️ No package name to uninstall");
+            return;
+        }
+
+        pendingInstallAfterUninstall = installAfter;
+        log("🗑️ Attempting pm uninstall of " + packageName + "...");
+        if (tryPmUninstall(packageName)) {
+            if (installAfter) {
+                mainHandler.postDelayed(this::doInstall, 500);
+            }
+            return;
+        }
+
+        log("↪ Falling back to standard uninstall UI...");
+        try {
+            Intent uninstall = new Intent(Intent.ACTION_UNINSTALL_PACKAGE);
+            uninstall.setData(Uri.parse("package:" + packageName));
+            uninstall.putExtra(Intent.EXTRA_RETURN_RESULT, true);
+            startActivityForResult(uninstall, UNINSTALL_REQUEST);
+        } catch (Exception e) {
+            log("↪ Fallback to ACTION_DELETE...");
+            Intent uninstall2 = new Intent(Intent.ACTION_DELETE);
+            uninstall2.setData(Uri.parse("package:" + packageName));
+            startActivityForResult(uninstall2, UNINSTALL_REQUEST);
+        }
+    }
+
+    private String sanitizeFileName(String input) {
+        if (input == null) return "UnknownApp";
+        String s = input.trim();
+        if (s.isEmpty()) return "UnknownApp";
+        // Replace characters that break common filesystems
+        s = s.replaceAll("[\\\\/:*?\"<>|]+", "_");
+        s = s.replaceAll("\\s+", "_");
+        // Keep it reasonably short
+        if (s.length() > 40) s = s.substring(0, 40);
+        return s;
     }
 
     private String sigHash(byte[] data) {

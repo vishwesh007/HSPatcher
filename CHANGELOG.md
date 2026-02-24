@@ -1,5 +1,14 @@
 # HSPatcher Changelog
 
+## v3.8 — 2026-02-24: Profiles Import Fix + Better Export Names + Uninstall Button
+
+### Summary
+- **Import all profiles** now prefers the correct app’s export (app-specific filename) with legacy fallback.
+- **Exported patched APK filename** now includes the target application name/package (instead of only a timestamp).
+- Added an explicit **Uninstall target app** trigger inside HSPatcher.
+
+---
+
 ## v3.7 — 2026-02-24: Frida-Level Request Blocking + UI Improvements
 
 ### Summary

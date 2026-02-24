@@ -173,4 +173,17 @@
         android:layout_marginTop="8dp"
         android:layout_marginBottom="8dp" />
 
+    <Button
+        android:id="@+id/btn_uninstall"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:text="UNINSTALL TARGET APP"
+        android:textColor="#FFFFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:background="#FFB00020"
+        android:visibility="gone"
+        android:layout_marginTop="0dp"
+        android:layout_marginBottom="8dp" />
+
 </LinearLayout>

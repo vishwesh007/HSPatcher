@@ -717,7 +717,7 @@
 
 # ===== Export all profiles as tar.gz =====
 .method public static exportAllProfiles(Landroid/content/Context;)Ljava/lang/String;
-    .locals 6
+    .locals 8
 
     :try_start
     # Get ext dir
@@ -746,10 +746,23 @@
     invoke-virtual {v1}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v1
 
-    # Output path
+    # Build export file name: hspatch_profiles_export_<package>.tar.gz
+    invoke-virtual {p0}, Landroid/content/Context;->getPackageName()Ljava/lang/String;
+    move-result-object v6
+
+    new-instance v7, Ljava/lang/StringBuilder;
+    invoke-direct {v7}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v3, "hspatch_profiles_export_"
+    invoke-virtual {v7, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v3, ".tar.gz"
+    invoke-virtual {v7, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v6
+
+    # Output path (ext)
     new-instance v2, Ljava/io/File;
-    const-string v3, "hspatch_profiles_export.tar.gz"
-    invoke-direct {v2, v0, v3}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+    invoke-direct {v2, v0, v6}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
 
     invoke-virtual {v2}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v3
@@ -787,22 +800,35 @@
     const-string v1, "cp "
     invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v0, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v1, " /storage/emulated/0/Download/hspatch_profiles_export.tar.gz"
+    const-string v1, " /storage/emulated/0/Download/"
     invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v0, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v0
     invoke-static {v0}, Lin/startv/hotstar/ProfileManager;->shellExec(Ljava/lang/String;)V
 
     # Check if Downloads copy exists
     new-instance v0, Ljava/io/File;
-    const-string v1, "/storage/emulated/0/Download/hspatch_profiles_export.tar.gz"
+    new-instance v1, Ljava/lang/StringBuilder;
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v4, "/storage/emulated/0/Download/"
+    invoke-virtual {v1, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v1
     invoke-direct {v0, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
     invoke-virtual {v0}, Ljava/io/File;->exists()Z
     move-result v4
     if-eqz v4, :keep_ext_path
 
     # Use Downloads path instead
-    const-string v3, "/storage/emulated/0/Download/hspatch_profiles_export.tar.gz"
+    new-instance v1, Ljava/lang/StringBuilder;
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v4, "/storage/emulated/0/Download/"
+    invoke-virtual {v1, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v3
     move-object v2, v0
 
     :keep_ext_path
@@ -842,7 +868,7 @@
 
 # ===== Import all profiles from tar.gz =====
 .method public static importAllProfiles(Landroid/content/Context;)Ljava/lang/String;
-    .locals 7
+    .locals 9
 
     :try_start_imp
     # Get external files dir
@@ -854,7 +880,28 @@
     return-object v0
 
     :ext_ok_imp
-    # Check Downloads folder first
+    # Prefer app-specific export first: hspatch_profiles_export_<package>.tar.gz
+    invoke-virtual {p0}, Landroid/content/Context;->getPackageName()Ljava/lang/String;
+    move-result-object v6
+
+    new-instance v7, Ljava/lang/StringBuilder;
+    invoke-direct {v7}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v2, "/storage/emulated/0/Download/hspatch_profiles_export_"
+    invoke-virtual {v7, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v2, ".tar.gz"
+    invoke-virtual {v7, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v2
+
+    new-instance v1, Ljava/io/File;
+    invoke-direct {v1, v2}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+
+    invoke-virtual {v1}, Ljava/io/File;->exists()Z
+    move-result v3
+    if-nez v3, :found_import_file
+
+    # Legacy name in Downloads: hspatch_profiles_export.tar.gz
     new-instance v1, Ljava/io/File;
     const-string v2, "/storage/emulated/0/Download/hspatch_profiles_export.tar.gz"
     invoke-direct {v1, v2}, Ljava/io/File;-><init>(Ljava/lang/String;)V
@@ -863,7 +910,25 @@
     move-result v2
     if-nez v2, :found_import_file
 
-    # Check ext files dir
+    # Check ext files dir (app-specific)
+    new-instance v7, Ljava/lang/StringBuilder;
+    invoke-direct {v7}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v2, "hspatch_profiles_export_"
+    invoke-virtual {v7, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v2, ".tar.gz"
+    invoke-virtual {v7, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v2
+
+    new-instance v1, Ljava/io/File;
+    invoke-direct {v1, v0, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+
+    invoke-virtual {v1}, Ljava/io/File;->exists()Z
+    move-result v2
+    if-nez v2, :found_import_file
+
+    # Check ext files dir (legacy)
     new-instance v1, Ljava/io/File;
     const-string v2, "hspatch_profiles_export.tar.gz"
     invoke-direct {v1, v0, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
@@ -875,10 +940,15 @@
     # Not found
     new-instance v2, Ljava/lang/StringBuilder;
     invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v3, "No export file found.\n\nPlace hspatch_profiles_export.tar.gz in:\n\u2022 /storage/emulated/0/Download/\n\u2022 "
+    const-string v3, "No export file found.\n\nPlace one of these in:\n\u2022 /storage/emulated/0/Download/\n\u2022 "
     invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v0}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v3
+    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v3, "\n\nExpected filenames:\n\u2022 hspatch_profiles_export_"
+    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v2, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v3, ".tar.gz\n\u2022 hspatch_profiles_export.tar.gz"
     invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v2
