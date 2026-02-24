@@ -715,7 +715,88 @@
     return-void
 .end method
 
-# ===== Export all profiles as tar.gz =====
+# ===== Recursive helper: add directory contents to ZipOutputStream =====
+# p0 = ZipOutputStream, p1 = base dir (File), p2 = current dir (File), p3 = prefix (String)
+.method private static zipDir(Ljava/util/zip/ZipOutputStream;Ljava/io/File;Ljava/io/File;Ljava/lang/String;)V
+    .locals 7
+
+    invoke-virtual {p2}, Ljava/io/File;->listFiles()[Ljava/io/File;
+    move-result-object v0
+    if-eqz v0, :done
+
+    array-length v1, v0
+    const/4 v2, 0x0
+
+    :loop
+    if-ge v2, v1, :done
+    aget-object v3, v0, v2
+
+    # Build entry name: prefix + name
+    new-instance v4, Ljava/lang/StringBuilder;
+    invoke-direct {v4}, Ljava/lang/StringBuilder;-><init>()V
+    invoke-virtual {v4, p3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v3}, Ljava/io/File;->getName()Ljava/lang/String;
+    move-result-object v5
+    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    invoke-virtual {v3}, Ljava/io/File;->isDirectory()Z
+    move-result v5
+    if-eqz v5, :is_file
+
+    # Directory: recurse
+    const-string v5, "/"
+    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v4
+
+    invoke-static {p0, p1, v3, v4}, Lin/startv/hotstar/ProfileManager;->zipDir(Ljava/util/zip/ZipOutputStream;Ljava/io/File;Ljava/io/File;Ljava/lang/String;)V
+    goto :next
+
+    :is_file
+    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v4
+
+    # Create zip entry
+    :try_start_zip
+    new-instance v5, Ljava/util/zip/ZipEntry;
+    invoke-direct {v5, v4}, Ljava/util/zip/ZipEntry;-><init>(Ljava/lang/String;)V
+    invoke-virtual {p0, v5}, Ljava/util/zip/ZipOutputStream;->putNextEntry(Ljava/util/zip/ZipEntry;)V
+
+    # Read file and write to zip
+    new-instance v5, Ljava/io/FileInputStream;
+    invoke-direct {v5, v3}, Ljava/io/FileInputStream;-><init>(Ljava/io/File;)V
+
+    const/16 v6, 0x4000
+    new-array v6, v6, [B
+
+    :read_loop
+    invoke-virtual {v5, v6}, Ljava/io/InputStream;->read([B)I
+    move-result v4
+    const/4 v3, -0x1
+    if-eq v4, v3, :read_done
+
+    const/4 v3, 0x0
+    invoke-virtual {p0, v6, v3, v4}, Ljava/util/zip/ZipOutputStream;->write([BII)V
+    goto :read_loop
+
+    :read_done
+    invoke-virtual {v5}, Ljava/io/InputStream;->close()V
+    invoke-virtual {p0}, Ljava/util/zip/ZipOutputStream;->closeEntry()V
+    :try_end_zip
+    .catchall {:try_start_zip .. :try_end_zip} :catch_zip
+    goto :next
+    :catch_zip
+    move-exception v3
+
+    :next
+    add-int/lit8 v2, v2, 0x1
+    goto :loop
+
+    :done
+    return-void
+.end method
+
+# ===== Export all profiles as zip =====
 .method public static exportAllProfiles(Landroid/content/Context;)Ljava/lang/String;
     .locals 8
 
@@ -743,10 +824,7 @@
     return-object v0
 
     :dir_exists
-    invoke-virtual {v1}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
-    move-result-object v1
-
-    # Build export file name: hspatch_profiles_export_<package>.tar.gz
+    # Build export file name: hspatch_profiles_export_<package>.zip
     invoke-virtual {p0}, Landroid/content/Context;->getPackageName()Ljava/lang/String;
     move-result-object v6
 
@@ -755,7 +833,7 @@
     const-string v3, "hspatch_profiles_export_"
     invoke-virtual {v7, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v7, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v3, ".tar.gz"
+    const-string v3, ".zip"
     invoke-virtual {v7, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v7}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v6
@@ -767,69 +845,60 @@
     invoke-virtual {v2}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v3
 
-    # Build tar command
-    new-instance v4, Ljava/lang/StringBuilder;
-    invoke-direct {v4}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v5, "tar czf "
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v5, " -C "
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v0}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
-    move-result-object v0
-    invoke-virtual {v4, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v5, " hspatch_profiles"
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-    move-result-object v0
+    # Create ZipOutputStream
+    new-instance v4, Ljava/io/FileOutputStream;
+    invoke-direct {v4, v2}, Ljava/io/FileOutputStream;-><init>(Ljava/io/File;)V
 
-    invoke-static {v0}, Lin/startv/hotstar/ProfileManager;->shellExec(Ljava/lang/String;)V
+    new-instance v5, Ljava/util/zip/ZipOutputStream;
+    invoke-direct {v5, v4}, Ljava/util/zip/ZipOutputStream;-><init>(Ljava/io/OutputStream;)V
+
+    # Zip the profiles dir recursively with "hspatch_profiles/" prefix
+    const-string v7, "hspatch_profiles/"
+    invoke-static {v5, v1, v1, v7}, Lin/startv/hotstar/ProfileManager;->zipDir(Ljava/util/zip/ZipOutputStream;Ljava/io/File;Ljava/io/File;Ljava/lang/String;)V
+
+    invoke-virtual {v5}, Ljava/util/zip/ZipOutputStream;->close()V
 
     # Check if file created
     invoke-virtual {v2}, Ljava/io/File;->exists()Z
-    move-result v0
-    if-nez v0, :export_ok
+    move-result v4
+    if-nez v4, :export_ok
 
-    const-string v0, "Export failed - tar not available"
+    const-string v0, "Export failed - could not create zip"
     return-object v0
 
     :export_ok
     # Try to copy to Downloads folder
-    new-instance v0, Ljava/lang/StringBuilder;
-    invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v1, "cp "
-    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v0, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v1, " /storage/emulated/0/Download/"
-    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v0, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-    move-result-object v0
-    invoke-static {v0}, Lin/startv/hotstar/ProfileManager;->shellExec(Ljava/lang/String;)V
+    new-instance v4, Ljava/lang/StringBuilder;
+    invoke-direct {v4}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v5, "cp \""
+    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v5, "\" \"/storage/emulated/0/Download/"
+    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v4, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v5, "\""
+    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v4
+    invoke-static {v4}, Lin/startv/hotstar/ProfileManager;->shellExec(Ljava/lang/String;)V
 
     # Check if Downloads copy exists
-    new-instance v0, Ljava/io/File;
-    new-instance v1, Ljava/lang/StringBuilder;
-    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v4, "/storage/emulated/0/Download/"
-    invoke-virtual {v1, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v1, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-    move-result-object v1
-    invoke-direct {v0, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-    invoke-virtual {v0}, Ljava/io/File;->exists()Z
-    move-result v4
-    if-eqz v4, :keep_ext_path
+    new-instance v4, Ljava/io/File;
+    new-instance v5, Ljava/lang/StringBuilder;
+    invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v7, "/storage/emulated/0/Download/"
+    invoke-virtual {v5, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v5
+    invoke-direct {v4, v5}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v4}, Ljava/io/File;->exists()Z
+    move-result v7
+    if-eqz v7, :keep_ext_path
 
-    # Use Downloads path instead
-    new-instance v1, Ljava/lang/StringBuilder;
-    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v4, "/storage/emulated/0/Download/"
-    invoke-virtual {v1, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v1, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-    move-result-object v3
-    move-object v2, v0
+    # Use Downloads path
+    move-object v3, v5
+    move-object v2, v4
 
     :keep_ext_path
     # Get size
@@ -863,12 +932,19 @@
     move-exception v0
     invoke-virtual {v0}, Ljava/lang/Exception;->getMessage()Ljava/lang/String;
     move-result-object v0
+    new-instance v1, Ljava/lang/StringBuilder;
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v2, "Export error: "
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v0
     return-object v0
 .end method
 
-# ===== Import all profiles from tar.gz =====
+# ===== Import all profiles from zip (or legacy tar.gz) =====
 .method public static importAllProfiles(Landroid/content/Context;)Ljava/lang/String;
-    .locals 9
+    .locals 10
 
     :try_start_imp
     # Get external files dir
@@ -880,10 +956,54 @@
     return-object v0
 
     :ext_ok_imp
-    # Prefer app-specific export first: hspatch_profiles_export_<package>.tar.gz
     invoke-virtual {p0}, Landroid/content/Context;->getPackageName()Ljava/lang/String;
     move-result-object v6
 
+    # === Search order: .zip first (new reliable format), then .tar.gz (legacy) ===
+
+    # 1. Downloads/<pkg>.zip
+    new-instance v7, Ljava/lang/StringBuilder;
+    invoke-direct {v7}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v2, "/storage/emulated/0/Download/hspatch_profiles_export_"
+    invoke-virtual {v7, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v2, ".zip"
+    invoke-virtual {v7, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v2
+
+    new-instance v1, Ljava/io/File;
+    invoke-direct {v1, v2}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v1}, Ljava/io/File;->exists()Z
+    move-result v3
+    if-nez v3, :found_zip_file
+
+    # 2. ExtDir/<pkg>.zip
+    new-instance v7, Ljava/lang/StringBuilder;
+    invoke-direct {v7}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v2, "hspatch_profiles_export_"
+    invoke-virtual {v7, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v2, ".zip"
+    invoke-virtual {v7, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v7}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v2
+
+    new-instance v1, Ljava/io/File;
+    invoke-direct {v1, v0, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+    invoke-virtual {v1}, Ljava/io/File;->exists()Z
+    move-result v3
+    if-nez v3, :found_zip_file
+
+    # 3. Downloads/hspatch_profiles_export.zip
+    new-instance v1, Ljava/io/File;
+    const-string v2, "/storage/emulated/0/Download/hspatch_profiles_export.zip"
+    invoke-direct {v1, v2}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v1}, Ljava/io/File;->exists()Z
+    move-result v3
+    if-nez v3, :found_zip_file
+
+    # 4. Downloads/<pkg>.tar.gz (legacy)
     new-instance v7, Ljava/lang/StringBuilder;
     invoke-direct {v7}, Ljava/lang/StringBuilder;-><init>()V
     const-string v2, "/storage/emulated/0/Download/hspatch_profiles_export_"
@@ -896,21 +1016,19 @@
 
     new-instance v1, Ljava/io/File;
     invoke-direct {v1, v2}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-
     invoke-virtual {v1}, Ljava/io/File;->exists()Z
     move-result v3
-    if-nez v3, :found_import_file
+    if-nez v3, :found_tar_file
 
-    # Legacy name in Downloads: hspatch_profiles_export.tar.gz
+    # 5. Downloads/hspatch_profiles_export.tar.gz (legacy)
     new-instance v1, Ljava/io/File;
     const-string v2, "/storage/emulated/0/Download/hspatch_profiles_export.tar.gz"
     invoke-direct {v1, v2}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-
     invoke-virtual {v1}, Ljava/io/File;->exists()Z
     move-result v2
-    if-nez v2, :found_import_file
+    if-nez v2, :found_tar_file
 
-    # Check ext files dir (app-specific)
+    # 6. ExtDir/<pkg>.tar.gz
     new-instance v7, Ljava/lang/StringBuilder;
     invoke-direct {v7}, Ljava/lang/StringBuilder;-><init>()V
     const-string v2, "hspatch_profiles_export_"
@@ -923,58 +1041,164 @@
 
     new-instance v1, Ljava/io/File;
     invoke-direct {v1, v0, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
-
     invoke-virtual {v1}, Ljava/io/File;->exists()Z
     move-result v2
-    if-nez v2, :found_import_file
+    if-nez v2, :found_tar_file
 
-    # Check ext files dir (legacy)
+    # 7. ExtDir/hspatch_profiles_export.tar.gz (legacy)
     new-instance v1, Ljava/io/File;
     const-string v2, "hspatch_profiles_export.tar.gz"
     invoke-direct {v1, v0, v2}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
-
     invoke-virtual {v1}, Ljava/io/File;->exists()Z
     move-result v2
-    if-nez v2, :found_import_file
+    if-nez v2, :found_tar_file
 
     # Not found
     new-instance v2, Ljava/lang/StringBuilder;
     invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v3, "No export file found.\n\nPlace one of these in:\n\u2022 /storage/emulated/0/Download/\n\u2022 "
+    const-string v3, "No export file found.\n\nPlace one of these in Downloads:\n\u2022 hspatch_profiles_export_"
+    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v2, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v3, ".zip\n\u2022 hspatch_profiles_export_"
+    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v2, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v3, ".tar.gz\n\u2022 hspatch_profiles_export.zip\n\nOr in:\n\u2022 "
     invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v0}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v3
-    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v3, "\n\nExpected filenames:\n\u2022 hspatch_profiles_export_"
-    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v2, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v3, ".tar.gz\n\u2022 hspatch_profiles_export.tar.gz"
     invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v2
     return-object v2
 
-    :found_import_file
-    # Extract tar.gz to ext dir
+    # ====== ZIP IMPORT (Java-based, works on all devices) ======
+    :found_zip_file
     invoke-virtual {v1}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v2
 
+    # Open ZipInputStream
+    new-instance v3, Ljava/io/FileInputStream;
+    invoke-direct {v3, v1}, Ljava/io/FileInputStream;-><init>(Ljava/io/File;)V
+
+    new-instance v4, Ljava/util/zip/ZipInputStream;
+    invoke-direct {v4, v3}, Ljava/util/zip/ZipInputStream;-><init>(Ljava/io/InputStream;)V
+
+    const/4 v8, 0x0
+
+    :zip_entry_loop
+    invoke-virtual {v4}, Ljava/util/zip/ZipInputStream;->getNextEntry()Ljava/util/zip/ZipEntry;
+    move-result-object v5
+    if-eqz v5, :zip_done
+
+    invoke-virtual {v5}, Ljava/util/zip/ZipEntry;->getName()Ljava/lang/String;
+    move-result-object v5
+
+    # Build output file: extDir / entryName
+    new-instance v9, Ljava/io/File;
+    invoke-direct {v9, v0, v5}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+
+    # Check if directory entry (name ends with /)
+    invoke-virtual {v5}, Ljava/lang/String;->length()I
+    move-result v7
+    add-int/lit8 v7, v7, -0x1
+    invoke-virtual {v5, v7}, Ljava/lang/String;->charAt(I)C
+    move-result v7
+    const/16 v3, 0x2f
+    if-ne v7, v3, :zip_is_file
+
+    # Directory entry
+    invoke-virtual {v9}, Ljava/io/File;->mkdirs()Z
+    goto :zip_close_entry
+
+    :zip_is_file
+    # Ensure parent dir
+    invoke-virtual {v9}, Ljava/io/File;->getParentFile()Ljava/io/File;
+    move-result-object v3
+    if-eqz v3, :zip_write
+    invoke-virtual {v3}, Ljava/io/File;->mkdirs()Z
+
+    :zip_write
+    # Write file contents
+    new-instance v3, Ljava/io/FileOutputStream;
+    invoke-direct {v3, v9}, Ljava/io/FileOutputStream;-><init>(Ljava/io/File;)V
+
+    const/16 v5, 0x4000
+    new-array v5, v5, [B
+
+    :zip_read_loop
+    invoke-virtual {v4, v5}, Ljava/util/zip/ZipInputStream;->read([B)I
+    move-result v7
+    const/4 v9, -0x1
+    if-eq v7, v9, :zip_read_done
+    const/4 v9, 0x0
+    invoke-virtual {v3, v5, v9, v7}, Ljava/io/FileOutputStream;->write([BII)V
+    goto :zip_read_loop
+
+    :zip_read_done
+    invoke-virtual {v3}, Ljava/io/FileOutputStream;->close()V
+    add-int/lit8 v8, v8, 0x1
+
+    :zip_close_entry
+    invoke-virtual {v4}, Ljava/util/zip/ZipInputStream;->closeEntry()V
+    goto :zip_entry_loop
+
+    :zip_done
+    invoke-virtual {v4}, Ljava/util/zip/ZipInputStream;->close()V
+    goto :verify_import
+
+    # ====== TAR.GZ IMPORT (legacy shell-based) ======
+    :found_tar_file
+    invoke-virtual {v1}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v2
+
+    # Try: tar xzf "<file>" -C "<dir>"
     new-instance v3, Ljava/lang/StringBuilder;
     invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v4, "tar xzf "
+    const-string v4, "tar xzf \""
     invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v3, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v4, " -C "
+    const-string v4, "\" -C \""
     invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v0}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v4
     invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v4, "\""
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v3}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v3
 
-    invoke-static {v3}, Lin/startv/hotstar/ProfileManager;->shellExec(Ljava/lang/String;)V
+    invoke-static {v3}, Lin/startv/hotstar/ProfileManager;->shellExecOutput(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v8
 
-    # Verify profiles dir
+    # Check if profiles dir was created
+    new-instance v3, Ljava/io/File;
+    const-string v4, "hspatch_profiles"
+    invoke-direct {v3, v0, v4}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+    invoke-virtual {v3}, Ljava/io/File;->exists()Z
+    move-result v4
+    if-nez v4, :verify_import
+
+    # Fallback: gzip -dc | tar xf
+    new-instance v3, Ljava/lang/StringBuilder;
+    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v4, "gzip -dc \""
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v3, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v4, "\" | tar xf - -C \""
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v0}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v4
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v4, "\""
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v3}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v3
+
+    invoke-static {v3}, Lin/startv/hotstar/ProfileManager;->shellExecOutput(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v8
+
+    # ====== VERIFY IMPORT RESULT ======
+    :verify_import
     new-instance v3, Ljava/io/File;
     const-string v4, "hspatch_profiles"
     invoke-direct {v3, v0, v4}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
@@ -999,14 +1223,14 @@
     :build_result
     new-instance v4, Ljava/lang/StringBuilder;
     invoke-direct {v4}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v6, "\u2705 Imported successfully!\n\nProfiles found: "
-    invoke-virtual {v4, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v7, "\u2705 Imported successfully!\n\nProfiles found: "
+    invoke-virtual {v4, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
-    const-string v6, "\nSource: "
-    invoke-virtual {v4, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v7, "\nSource: "
+    invoke-virtual {v4, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v4, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v6, "\nProfiles dir: "
-    invoke-virtual {v4, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v7, "\nProfiles dir: "
+    invoke-virtual {v4, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v3}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v3
     invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
@@ -1015,7 +1239,15 @@
     return-object v3
 
     :import_failed
-    const-string v3, "\u274c Import may have failed.\nProfiles directory not found after extraction."
+    new-instance v3, Ljava/lang/StringBuilder;
+    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v4, "\u274c Import failed.\nExtraction did not produce expected directory.\nSource: "
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v4
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v3}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v3
     return-object v3
 
     :try_end_imp
@@ -1026,7 +1258,7 @@
     move-result-object v0
     new-instance v1, Ljava/lang/StringBuilder;
     invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v2, "Error: "
+    const-string v2, "Import error: "
     invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;

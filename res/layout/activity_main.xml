@@ -30,6 +30,15 @@
             android:textSize="14sp"
             android:textColor="#99FFFFFF"
             android:paddingTop="4dp" />
+
+        <TextView
+            android:id="@+id/version_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="12sp"
+            android:textColor="#66FFFFFF"
+            android:paddingTop="2dp" />
     </LinearLayout>
 
     <!-- Selected APK info -->

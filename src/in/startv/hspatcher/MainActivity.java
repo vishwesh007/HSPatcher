@@ -36,7 +36,7 @@ public class MainActivity extends Activity {
     private static final int UNINSTALL_REQUEST = 1007;
 
     private Button btnSelect, btnPatch, btnInstall, btnExtract, btnUninstall;
-    private TextView logOutput, apkName, apkSize, progressText;
+    private TextView logOutput, apkName, apkSize, progressText, versionText;
     private ScrollView logScroll;
     private ProgressBar progressBar;
     private LinearLayout apkInfoPanel;
@@ -69,6 +69,16 @@ public class MainActivity extends Activity {
         logScroll = findViewById(R.id.log_scroll);
         progressBar = findViewById(R.id.progress_bar);
         apkInfoPanel = findViewById(R.id.apk_info_panel);
+        versionText = findViewById(R.id.version_text);
+
+        // Display app version
+        try {
+            String vName = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            if (vName == null || vName.isEmpty()) vName = "dev";
+            versionText.setText("v" + vName);
+        } catch (Exception e) {
+            versionText.setText("v3.10");
+        }
 
         btnSelect.setOnClickListener(v -> onSelectClick());
         btnPatch.setOnClickListener(v -> onPatchClick());
@@ -436,7 +446,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.9 — Starting one-click patch");
+        log("⚡ HSPatcher v3.10 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {

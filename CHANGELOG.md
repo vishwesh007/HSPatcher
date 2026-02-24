@@ -1,5 +1,15 @@
 # HSPatcher Changelog
 
+## v3.10 — 2026-02-25: Version Display + Zip Profiles + Uninstall Permission
+
+### Summary
+- **App version visible in UI**: HSPatcher now shows its version (e.g. "v3.10") below the subtitle on the main screen, read from `PackageInfo` at runtime.
+- **`REQUEST_DELETE_PACKAGES` permission**: Added to the manifest so the in-app uninstall button can launch the system uninstall dialog on all API levels.
+- **Zip-based profile export/import**: Profile export now produces a `.zip` file (Java `ZipOutputStream`) instead of `.tar.gz` (unreliable shell `tar`). Import reads `.zip` first (Java `ZipInputStream`), with `.tar.gz` legacy fallback using proper quoting and a `gzip -dc | tar xf` secondary fallback.
+- **Improved import error messages**: When no profile archive is found, the toast now lists every filename and location that was searched.
+
+---
+
 ## v3.9 — 2026-02-25: Request Log Rules + Auto-Patch Fix
 
 ### Summary
