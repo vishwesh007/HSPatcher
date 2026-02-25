@@ -245,7 +245,11 @@ setTimeout(function() {
         var netLogTag = "HSPatch-Net";
         var Log = Java.use('android.util.Log');
 
-        // --- Load blocking rules from blocking_hotstar.txt ---
+        // --- Load blocking rules from per-app file or legacy blocking_hotstar.txt ---
+        // Search order per location:
+        //   1. blocking_<packageName>.txt  (per-app dedicated)
+        //   2. blocking_rules.txt          (generic)
+        //   3. blocking_hotstar.txt        (legacy compatibility)
         // Rules format: each line is "pattern:replacement"
         // If replacement is empty or "BLOCK", the request is fully blocked.
         // Otherwise, pattern is replaced with replacement in the URL.
@@ -258,55 +262,70 @@ setTimeout(function() {
                 var ctx = Java.use('android.app.ActivityThread').currentApplication();
                 if (ctx === null) return;
 
-                // Try external files dir first, then fallback paths
-                var paths = [];
+                var pkgName = ctx.getPackageName();
+
+                // Build candidate file names (per-app first, then generic, then legacy)
+                var fileNames = [
+                    'blocking_' + pkgName + '.txt',
+                    'blocking_rules.txt',
+                    'blocking_hotstar.txt'
+                ];
+
+                // Build candidate directories
+                var dirs = [];
                 try {
                     var extDir = ctx.getExternalFilesDir(null);
                     if (extDir !== null) {
-                        paths.push(extDir.getAbsolutePath() + '/blocking_hotstar.txt');
+                        dirs.push(extDir.getAbsolutePath());
                     }
                 } catch(e) {}
                 try {
                     var dataDir = ctx.getApplicationInfo().dataDir.value;
-                    paths.push(dataDir + '/files/blocking_hotstar.txt');
+                    dirs.push(dataDir + '/files');
                 } catch(e) {}
-                paths.push('/storage/emulated/0/Download/hspatch_logs/blocking_hotstar.txt');
+                dirs.push('/storage/emulated/0/Download/hspatch_logs');
 
                 var File = Java.use('java.io.File');
                 var BufferedReader = Java.use('java.io.BufferedReader');
                 var FileReader = Java.use('java.io.FileReader');
 
-                for (var pi = 0; pi < paths.length; pi++) {
-                    var f = File.$new(paths[pi]);
-                    if (f.exists()) {
-                        Log.i(netLogTag, '[RULES] Loading blocking rules from: ' + paths[pi]);
-                        var reader = BufferedReader.$new(FileReader.$new(paths[pi]));
-                        var line;
-                        while ((line = reader.readLine()) !== null) {
-                            var lineStr = line.toString().trim();
-                            if (lineStr.length === 0 || lineStr.charAt(0) === '#') continue;
+                // Try each directory × each filename, stop on first found
+                // Try each filename × each directory — per-app file always prioritized
+                var found = false;
+                for (var fi = 0; fi < fileNames.length && !found; fi++) {
+                    for (var di = 0; di < dirs.length && !found; di++) {
+                        var fullPath = dirs[di] + '/' + fileNames[fi];
+                        var f = File.$new(fullPath);
+                        if (f.exists()) {
+                            Log.i(netLogTag, '[RULES] Loading blocking rules from: ' + fullPath);
+                            var reader = BufferedReader.$new(FileReader.$new(fullPath));
+                            var line;
+                            while ((line = reader.readLine()) !== null) {
+                                var lineStr = line.toString().trim();
+                                if (lineStr.length === 0 || lineStr.charAt(0) === '#') continue;
 
-                            var sepIdx = lineStr.indexOf(':');
-                            if (sepIdx > 0) {
-                                var pattern = lineStr.substring(0, sepIdx).trim();
-                                var replacement = lineStr.substring(sepIdx + 1).trim();
-                                if (replacement.length === 0 || replacement === 'BLOCK') {
-                                    blockPatterns.push(pattern);
-                                    Log.i(netLogTag, '[RULES]   BLOCK: ' + pattern);
+                                var sepIdx = lineStr.indexOf(':');
+                                if (sepIdx > 0) {
+                                    var pattern = lineStr.substring(0, sepIdx).trim();
+                                    var replacement = lineStr.substring(sepIdx + 1).trim();
+                                    if (replacement.length === 0 || replacement === 'BLOCK') {
+                                        blockPatterns.push(pattern);
+                                        Log.i(netLogTag, '[RULES]   BLOCK: ' + pattern);
+                                    } else {
+                                        rewriteRules.push({ from: pattern, to: replacement });
+                                        Log.i(netLogTag, '[RULES]   REWRITE: ' + pattern + ' -> ' + replacement);
+                                    }
                                 } else {
-                                    rewriteRules.push({ from: pattern, to: replacement });
-                                    Log.i(netLogTag, '[RULES]   REWRITE: ' + pattern + ' -> ' + replacement);
+                                    // No colon = treat entire line as a block pattern
+                                    blockPatterns.push(lineStr);
+                                    Log.i(netLogTag, '[RULES]   BLOCK: ' + lineStr);
                                 }
-                            } else {
-                                // No colon = treat entire line as a block pattern
-                                blockPatterns.push(lineStr);
-                                Log.i(netLogTag, '[RULES]   BLOCK: ' + lineStr);
                             }
+                            reader.close();
+                            Log.i(netLogTag, '[RULES] Loaded ' + blockPatterns.length + ' block rules + '
+                                + rewriteRules.length + ' rewrite rules from ' + fileNames[fi]);
+                            found = true;
                         }
-                        reader.close();
-                        Log.i(netLogTag, '[RULES] Loaded ' + blockPatterns.length + ' block rules + '
-                            + rewriteRules.length + ' rewrite rules');
-                        break; // found and loaded
                     }
                 }
                 if (blockPatterns.length === 0 && rewriteRules.length === 0) {
@@ -489,7 +508,7 @@ setTimeout(function() {
             };
         } catch (err) { }
 
-        // Socket connect — block by host pattern
+        // Socket connect — block by host pattern (both overloads)
         try {
             var Socket = Java.use('java.net.Socket');
             Socket.connect.overload('java.net.SocketAddress', 'int').implementation = function(addr, timeout) {
@@ -503,6 +522,110 @@ setTimeout(function() {
 
                 Log.i(netLogTag, 'SOCKET ' + addrStr);
                 this.connect(addr, timeout);
+            };
+        } catch (err) { }
+
+        try {
+            var Socket2 = Java.use('java.net.Socket');
+            Socket2.connect.overload('java.net.SocketAddress').implementation = function(addr) {
+                var addrStr = addr.toString();
+
+                var blockMatch = shouldBlock(addrStr);
+                if (blockMatch !== null) {
+                    logBlocked('Socket', 'CONNECT0', addrStr, blockMatch);
+                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
+                Log.i(netLogTag, 'SOCKET ' + addrStr);
+                this.connect(addr);
+            };
+        } catch (err) { }
+
+        // SocketChannel.open(SocketAddress) — NIO socket blocking
+        try {
+            var SocketChannel = Java.use('java.nio.channels.SocketChannel');
+            SocketChannel.open.overload('java.net.SocketAddress').implementation = function(addr) {
+                var addrStr = addr.toString();
+
+                var blockMatch = shouldBlock(addrStr);
+                if (blockMatch !== null) {
+                    logBlocked('SocketChannel', 'OPEN', addrStr, blockMatch);
+                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
+                Log.i(netLogTag, 'SOCKETCHANNEL ' + addrStr);
+                return this.open(addr);
+            };
+        } catch (err) { }
+
+        // SocketChannel.connect(SocketAddress) — NIO channel connect
+        try {
+            var SocketChannel2 = Java.use('java.nio.channels.SocketChannel');
+            SocketChannel2.connect.overload('java.net.SocketAddress').implementation = function(addr) {
+                var addrStr = addr.toString();
+
+                var blockMatch = shouldBlock(addrStr);
+                if (blockMatch !== null) {
+                    logBlocked('SocketChannel', 'CONNECT', addrStr, blockMatch);
+                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
+                Log.i(netLogTag, 'SOCKETCHANNEL.CONNECT ' + addrStr);
+                return this.connect(addr);
+            };
+        } catch (err) { }
+
+        // DatagramSocket.connect — UDP socket blocking
+        try {
+            var DatagramSocket = Java.use('java.net.DatagramSocket');
+            DatagramSocket.connect.overload('java.net.InetAddress', 'int').implementation = function(address, port) {
+                var addrStr = address.getHostAddress() + ':' + port;
+
+                var blockMatch = shouldBlock(addrStr);
+                if (blockMatch !== null) {
+                    logBlocked('DatagramSocket', 'CONNECT', addrStr, blockMatch);
+                    throw Java.use('java.net.SocketException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
+                Log.i(netLogTag, 'UDP.CONNECT ' + addrStr);
+                this.connect(address, port);
+            };
+        } catch (err) { }
+
+        // DatagramSocket.send — UDP packet blocking
+        try {
+            var DatagramSocket2 = Java.use('java.net.DatagramSocket');
+            DatagramSocket2.send.overload('java.net.DatagramPacket').implementation = function(packet) {
+                var addr = packet.getAddress();
+                if (addr !== null) {
+                    var addrStr = addr.getHostAddress() + ':' + packet.getPort();
+
+                    var blockMatch = shouldBlock(addrStr);
+                    if (blockMatch !== null) {
+                        logBlocked('DatagramSocket', 'SEND', addrStr, blockMatch);
+                        throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                    }
+
+                    Log.i(netLogTag, 'UDP.SEND ' + addrStr);
+                }
+                this.send(packet);
+            };
+        } catch (err) { }
+
+        // SSLSocketFactory.createSocket — SSL socket blocking
+        try {
+            var SSLSocketFactory = Java.use('javax.net.ssl.SSLSocketFactory');
+            SSLSocketFactory.createSocket.overload('java.lang.String', 'int').implementation = function(host, port) {
+                var addrStr = host + ':' + port;
+
+                var blockMatch = shouldBlock(addrStr);
+                if (blockMatch !== null) {
+                    logBlocked('SSLSocket', 'CREATE', addrStr, blockMatch);
+                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
+                Log.i(netLogTag, 'SSL.CREATE ' + addrStr);
+                return this.createSocket(host, port);
             };
         } catch (err) { }
 

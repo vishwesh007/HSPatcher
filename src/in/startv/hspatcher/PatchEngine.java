@@ -61,6 +61,42 @@ public class PatchEngine {
         this.cb = cb;
     }
 
+    /**
+     * Quick static check: is this APK already patched by HSPatcher?
+     * Checks for hspatch_marker.txt asset or Frida gadget config+script.
+     * Returns patch version string if patched, null if clean.
+     */
+    public static String isAlreadyPatched(File apk) {
+        try {
+            ZipFile z = new ZipFile(apk);
+            try {
+                ZipEntry marker = z.getEntry("assets/hspatch_marker.txt");
+                if (marker != null) {
+                    InputStream mis = z.getInputStream(marker);
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[256];
+                    int len;
+                    while ((len = mis.read(buf)) > 0) bos.write(buf, 0, len);
+                    mis.close();
+                    String ver = bos.toString("UTF-8").trim();
+                    return ver.isEmpty() ? "unknown" : ver;
+                }
+                // Fallback: check for Frida gadget artifacts
+                boolean hasConfig = false, hasScript = false;
+                Enumeration<? extends ZipEntry> entries = z.entries();
+                while (entries.hasMoreElements()) {
+                    String n = entries.nextElement().getName();
+                    if (n.endsWith("/libgadget.config.so")) hasConfig = true;
+                    if (n.endsWith("/libgadget.js.so")) hasScript = true;
+                    if (hasConfig && hasScript) return "pre-marker";
+                }
+            } finally {
+                z.close();
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     public File patch() throws Exception {
         File ws = new File(workDir, "pw");
         if (ws.exists()) deleteDir(ws);
@@ -75,6 +111,17 @@ public class PatchEngine {
         log("   Hook: " + info.hookClassName +
             " (" + (info.isApplication ? "Application" : "Activity") + ")");
         log("   In: " + info.hookDexName);
+
+        // ======== Already-patched detection ========
+        if (info.alreadyPatched) {
+            String verMsg = info.patchVersion != null ? " (v" + info.patchVersion + ")" : "";
+            log("");
+            log("⚠️  THIS APK IS ALREADY PATCHED" + verMsg);
+            log("   Detected HSPatch artifacts from a previous patching session.");
+            log("   Re-patching may cause crashes, duplicate hooks, or bloated APK size.");
+            log("");
+            throw new Exception("APK_ALREADY_PATCHED" + verMsg);
+        }
 
         // ======== DexGuard class encryption check ========
         if (info.dexguardEncrypted) {
@@ -158,6 +205,8 @@ public class PatchEngine {
         boolean dexguardEncrypted; // DexGuard class encryption — abort patching
         String dexguardLibName;    // DexGuard native library base name
         String originalSignatureBase64; // Base64 of original signing cert (for signature killer)
+        boolean alreadyPatched;    // APK was previously patched by HSPatcher
+        String patchVersion;       // Version of HSPatcher that patched it (if marker found)
     }
 
     private ApkInfo analyzeApk(File apk, File ws) throws Exception {
@@ -165,16 +214,38 @@ public class PatchEngine {
         ZipFile zip = new ZipFile(apk);
         try {
             List<String> dexNames = new ArrayList<>();
+            boolean hasGadgetConfig = false;
+            boolean hasGadgetScript = false;
+            boolean hasHSPatchMarker = false;
+            String markerVersion = null;
+
             Enumeration<? extends ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {
                 ZipEntry e = entries.nextElement();
-                if (e.getName().matches("classes\\d*\\.dex")) {
-                    dexNames.add(e.getName());
+                String eName = e.getName();
+                if (eName.matches("classes\\d*\\.dex")) {
+                    dexNames.add(eName);
+                }
+                // Detect HSPatch artifacts from prior patching
+                if (eName.endsWith("/libgadget.config.so")) hasGadgetConfig = true;
+                if (eName.endsWith("/libgadget.js.so")) hasGadgetScript = true;
+                if (eName.equals("assets/hspatch_marker.txt")) {
+                    hasHSPatchMarker = true;
+                    try {
+                        byte[] mb = readAllBytes(zip.getInputStream(e));
+                        markerVersion = new String(mb, "UTF-8").trim();
+                    } catch (Exception ignored) {}
                 }
             }
             Collections.sort(dexNames);
             info.dexNames = dexNames;
             info.dexCount = dexNames.size();
+
+            // Already-patched detection
+            if (hasHSPatchMarker || (hasGadgetConfig && hasGadgetScript)) {
+                info.alreadyPatched = true;
+                info.patchVersion = markerVersion;
+            }
 
             // Detect DexGuard class encryption early:
             // Pattern: lib/<abi>/lib<NAME>.so exists AND assets/<NAME>/*.odex exists
@@ -1413,6 +1484,20 @@ public class PatchEngine {
         // Embed SignatureKiller: native libs + origin.apk (original APK for open() hook)
         if (sigkillDir != null && sigkillDir.exists()) {
             embedSignatureKiller(zos, nativeAbis, original);
+        }
+
+        // Write HSPatch marker asset (for already-patched detection)
+        try {
+            String version = "3.11";
+            byte[] markerData = version.getBytes("UTF-8");
+            ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
+            markerEntry.setMethod(ZipEntry.DEFLATED);
+            zos.putNextEntry(markerEntry);
+            zos.write(markerData);
+            zos.closeEntry();
+            log("   📌 HSPatch marker written (v" + version + ")");
+        } catch (Exception e) {
+            log("   ⚠️ Marker write failed: " + e.getMessage());
         }
 
         zos.close();

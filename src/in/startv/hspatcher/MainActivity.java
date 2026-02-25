@@ -2,6 +2,7 @@ package in.startv.hspatcher;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.util.Log;
 import android.content.pm.PackageManager;
@@ -50,6 +51,7 @@ public class MainActivity extends Activity {
     private boolean pendingInstallAfterUninstall = false;
     private String targetPackageName = null;
     private boolean autoPatchAfterLoad = false;
+    private String selectedApkPatchedVersion = null; // non-null if APK is already patched
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -159,9 +161,14 @@ public class MainActivity extends Activity {
                 String fName = f.getName();
                 String fSize = sizeMB + " MB (" + total + " bytes)";
                 final boolean isBundle = isSplitBundle;
+
+                // Pre-check: is this APK already patched?
+                selectedApkPatchedVersion = isBundle ? null : PatchEngine.isAlreadyPatched(dest);
+
                 mainHandler.post(() -> {
                     apkInfoPanel.setVisibility(View.VISIBLE);
-                    apkName.setText(fName + (isBundle ? " [SPLIT BUNDLE]" : ""));
+                    apkName.setText(fName + (isBundle ? " [SPLIT BUNDLE]" : "")
+                        + (selectedApkPatchedVersion != null ? " \u26a0\ufe0f ALREADY PATCHED" : ""));
                     apkSize.setText(fSize);
                     btnPatch.setEnabled(true);
                     btnInstall.setVisibility(View.GONE);
@@ -177,6 +184,13 @@ public class MainActivity extends Activity {
                     log("📦 Will merge splits → single APK → then patch.");
                 } else {
                     log("✅ APK loaded: " + fName + " (" + fSize + ")");
+                }
+                if (selectedApkPatchedVersion != null) {
+                    log("");
+                    log("⚠️  WARNING: This APK appears to be ALREADY PATCHED (v" + selectedApkPatchedVersion + ")");
+                    log("   Re-patching can cause crashes, duplicate hooks, or bloated size.");
+                    log("   Use the ORIGINAL (unmodified) APK for best results.");
+                    log("");
                 }
                 log("Ready to patch. Press ⚡ PATCH to begin.");
             } catch (Exception e) {
@@ -349,17 +363,29 @@ public class MainActivity extends Activity {
                     selectedApk = dest;
                     isSplitBundle = false;
                     originalFileName = label + ".apk";
+
+                    // Pre-check: is this APK already patched?
+                    selectedApkPatchedVersion = PatchEngine.isAlreadyPatched(dest);
+
                     long total = dest.length();
                     long sizeMB = total / (1024 * 1024);
                     String fSize = sizeMB + " MB (" + total + " bytes)";
                     mainHandler.post(() -> {
                         apkInfoPanel.setVisibility(View.VISIBLE);
-                        apkName.setText(label);
+                        apkName.setText(label
+                            + (selectedApkPatchedVersion != null ? " ⚠️ ALREADY PATCHED" : ""));
                         apkSize.setText(fSize);
                         btnPatch.setEnabled(true);
                         btnInstall.setVisibility(View.GONE);
                     });
                     log("✅ APK loaded: " + label + " (" + fSize + ")");
+                }
+                if (selectedApkPatchedVersion != null) {
+                    log("");
+                    log("⚠️  WARNING: This APK appears to be ALREADY PATCHED (v" + selectedApkPatchedVersion + ")");
+                    log("   Re-patching can cause crashes, duplicate hooks, or bloated size.");
+                    log("   Use the ORIGINAL (unmodified) APK for best results.");
+                    log("");
                 }
                 log("Ready to patch. Press ⚡ PATCH to begin.");
             } catch (Exception e) {
@@ -412,9 +438,14 @@ public class MainActivity extends Activity {
                 final String fName = name;
                 final String fSize = sizeMB + " MB (" + total + " bytes)";
                 final boolean isBundle = isSplitBundle;
+
+                // Pre-check: is this APK already patched?
+                selectedApkPatchedVersion = isBundle ? null : PatchEngine.isAlreadyPatched(dest);
+
                 mainHandler.post(() -> {
                     apkInfoPanel.setVisibility(View.VISIBLE);
-                    apkName.setText(fName + (isBundle ? " [SPLIT BUNDLE]" : ""));
+                    apkName.setText(fName + (isBundle ? " [SPLIT BUNDLE]" : "")
+                        + (selectedApkPatchedVersion != null ? " ⚠️ ALREADY PATCHED" : ""));
                     apkSize.setText(fSize);
                     btnPatch.setEnabled(true);
                     btnInstall.setVisibility(View.GONE);
@@ -424,6 +455,13 @@ public class MainActivity extends Activity {
                     log("📦 Will merge splits → single APK → then patch.");
                 } else {
                     log("✅ APK loaded: " + fName + " (" + fSize + ")");
+                }
+                if (selectedApkPatchedVersion != null) {
+                    log("");
+                    log("⚠️  WARNING: This APK appears to be ALREADY PATCHED (v" + selectedApkPatchedVersion + ")");
+                    log("   Re-patching can cause crashes, duplicate hooks, or bloated size.");
+                    log("   Use the ORIGINAL (unmodified) APK for best results.");
+                    log("");
                 }
                 log("Ready to patch. Press ⚡ PATCH to begin.");
 
@@ -437,6 +475,29 @@ public class MainActivity extends Activity {
 
     private void onPatchClick() {
         if (isPatching || selectedApk == null) return;
+
+        // If already patched, show confirmation dialog first
+        if (selectedApkPatchedVersion != null) {
+            new AlertDialog.Builder(this)
+                .setTitle("\u26a0\ufe0f Already Patched")
+                .setMessage("This APK was previously patched by HSPatcher (v"
+                    + selectedApkPatchedVersion + ").\n\n"
+                    + "Re-patching may cause:\n"
+                    + "\u2022 App crashes from duplicate hooks\n"
+                    + "\u2022 Bloated APK size\n"
+                    + "\u2022 Broken functionality\n\n"
+                    + "Use the ORIGINAL unmodified APK for best results.\n\n"
+                    + "Proceed anyway?")
+                .setPositiveButton("Patch Anyway", (d, w) -> doPatch())
+                .setNegativeButton("Cancel", null)
+                .show();
+            return;
+        }
+        doPatch();
+    }
+
+    private void doPatch() {
+        if (isPatching) return;
         isPatching = true;
         btnPatch.setEnabled(false);
         btnSelect.setEnabled(false);
@@ -446,7 +507,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.10 — Starting one-click patch");
+        log("⚡ HSPatcher v3.11 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {
@@ -601,9 +662,17 @@ public class MainActivity extends Activity {
                 });
 
             } catch (Throwable e) {
-                log("❌ FATAL: " + e.getClass().getName() + ": " + e.getMessage());
-                for (StackTraceElement st : e.getStackTrace()) {
-                    log("   " + st.toString());
+                String msg = e.getMessage();
+                if (msg != null && msg.startsWith("APK_ALREADY_PATCHED")) {
+                    log("");
+                    log("\u26d4 ABORTED: This APK is already patched by HSPatcher.");
+                    log("   Please use the ORIGINAL (unmodified) APK file.");
+                    log("   If you extracted this from an installed app, it was already patched.");
+                } else {
+                    log("\u274c FATAL: " + e.getClass().getName() + ": " + msg);
+                    for (StackTraceElement st : e.getStackTrace()) {
+                        log("   " + st.toString());
+                    }
                 }
                 mainHandler.post(() -> {
                     isPatching = false;

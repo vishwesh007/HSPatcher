@@ -63,30 +63,12 @@
     :no_bifrost
 
     # Step 5: Read blocking file for custom replacements / blocks
+    # Uses per-app file search: blocking_<pkg>.txt > blocking_rules.txt > blocking_hotstar.txt
     :try_start_block
-    const-string v1, "blocking_hotstar.txt"
-    invoke-static {v1}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
+    invoke-static {}, Lin/startv/hotstar/HSPatchConfig;->getBlockingFilePath()Ljava/lang/String;
     move-result-object v1
 
-    new-instance v2, Ljava/io/File;
-
-    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-
-    invoke-virtual {v2}, Ljava/io/File;->exists()Z
-
-    move-result v2
-
-    # Fallback to public Download folder if config path isn't present
-    if-nez v2, :has_blocking
-
-    const-string v1, "/storage/emulated/0/Download/hspatch_logs/blocking_hotstar.txt"
-    new-instance v2, Ljava/io/File;
-    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-    invoke-virtual {v2}, Ljava/io/File;->exists()Z
-    move-result v2
-    if-eqz v2, :no_blocking
-
-    :has_blocking
+    if-eqz v1, :no_blocking
 
     new-instance v2, Ljava/io/BufferedReader;
 

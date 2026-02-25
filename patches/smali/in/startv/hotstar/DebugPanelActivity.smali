@@ -482,11 +482,15 @@
     invoke-direct {v2, p0}, Landroid/widget/EditText;-><init>(Landroid/content/Context;)V
     iput-object v2, p0, Lin/startv/hotstar/DebugPanelActivity;->rulesEdit:Landroid/widget/EditText;
 
-    const-string v3, "blocking_hotstar.txt"
-    invoke-static {v3}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
+    invoke-static {}, Lin/startv/hotstar/HSPatchConfig;->getBlockingFilePath()Ljava/lang/String;
     move-result-object v3
+    if-eqz v3, :no_rules_file
     invoke-virtual {p0, v3}, Lin/startv/hotstar/DebugPanelActivity;->readFile(Ljava/lang/String;)Ljava/lang/String;
     move-result-object v3
+    goto :rules_loaded
+    :no_rules_file
+    const-string v3, ""
+    :rules_loaded
     invoke-virtual {v2, v3}, Landroid/widget/EditText;->setText(Ljava/lang/CharSequence;)V
 
     const/high16 v3, 0x41400000

@@ -138,6 +138,124 @@
 
 
 # ================================================================
+# getBlockingFileName() - Returns per-app blocking filename
+# Format: blocking_<packageName>.txt, fallback: blocking_hotstar.txt
+# ================================================================
+.method public static getBlockingFileName()Ljava/lang/String;
+    .locals 3
+
+    :try_start_bn
+    invoke-static {}, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;
+    move-result-object v0
+    if-eqz v0, :fallback_bn
+
+    invoke-virtual {v0}, Landroid/app/Application;->getPackageName()Ljava/lang/String;
+    move-result-object v0
+
+    new-instance v1, Ljava/lang/StringBuilder;
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v2, "blocking_"
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v2, ".txt"
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v0
+    return-object v0
+
+    :try_end_bn
+    .catchall {:try_start_bn .. :try_end_bn} :catch_bn
+
+    :catch_bn
+    move-exception v0
+
+    :fallback_bn
+    const-string v0, "blocking_hotstar.txt"
+    return-object v0
+.end method
+
+
+# ================================================================
+# getBlockingFilePath() - Returns full path to first found blocking file
+# Search order: blocking_<pkg>.txt > blocking_rules.txt > blocking_hotstar.txt
+# Each checked in filesDir first, then Download/hspatch_logs
+# Returns null if no file found
+# ================================================================
+.method public static getBlockingFilePath()Ljava/lang/String;
+    .locals 3
+
+    # 1. Per-app file in filesDir
+    invoke-static {}, Lin/startv/hotstar/HSPatchConfig;->getBlockingFileName()Ljava/lang/String;
+    move-result-object v0
+
+    invoke-static {v0}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v1
+    new-instance v2, Ljava/io/File;
+    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v2}, Ljava/io/File;->exists()Z
+    move-result v2
+    if-nez v2, :return_path
+
+    # 2. Per-app file in Download
+    new-instance v1, Ljava/lang/StringBuilder;
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v2, "/storage/emulated/0/Download/hspatch_logs/"
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v1
+    new-instance v2, Ljava/io/File;
+    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v2}, Ljava/io/File;->exists()Z
+    move-result v2
+    if-nez v2, :return_path
+
+    # 3. Generic blocking_rules.txt in filesDir
+    const-string v0, "blocking_rules.txt"
+    invoke-static {v0}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v1
+    new-instance v2, Ljava/io/File;
+    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v2}, Ljava/io/File;->exists()Z
+    move-result v2
+    if-nez v2, :return_path
+
+    # 4. Generic blocking_rules.txt in Download
+    const-string v1, "/storage/emulated/0/Download/hspatch_logs/blocking_rules.txt"
+    new-instance v2, Ljava/io/File;
+    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v2}, Ljava/io/File;->exists()Z
+    move-result v2
+    if-nez v2, :return_path
+
+    # 5. Legacy blocking_hotstar.txt in filesDir
+    const-string v0, "blocking_hotstar.txt"
+    invoke-static {v0}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v1
+    new-instance v2, Ljava/io/File;
+    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v2}, Ljava/io/File;->exists()Z
+    move-result v2
+    if-nez v2, :return_path
+
+    # 6. Legacy blocking_hotstar.txt in Download
+    const-string v1, "/storage/emulated/0/Download/hspatch_logs/blocking_hotstar.txt"
+    new-instance v2, Ljava/io/File;
+    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v2}, Ljava/io/File;->exists()Z
+    move-result v2
+    if-nez v2, :return_path
+
+    # Nothing found
+    const/4 v0, 0x0
+    return-object v0
+
+    :return_path
+    return-object v1
+.end method
+
+
+# ================================================================
 # setAutoResetFingerprint(Context, boolean) - Persist toggle
 # ================================================================
 .method public static setAutoResetFingerprint(Landroid/content/Context;Z)V

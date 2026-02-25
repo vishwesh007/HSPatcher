@@ -40,8 +40,9 @@
     invoke-virtual {v1}, Ljava/lang/Object;->toString()Ljava/lang/String;
     move-result-object v1
 
-    # Write to file
-    const-string v2, "blocking_hotstar.txt"
+    # Write to per-app blocking file
+    invoke-static {}, Lin/startv/hotstar/HSPatchConfig;->getBlockingFileName()Ljava/lang/String;
+    move-result-object v2
     invoke-static {v2}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
     move-result-object v2
     invoke-virtual {v0, v2, v1}, Lin/startv/hotstar/DebugPanelActivity;->writeFile(Ljava/lang/String;Ljava/lang/String;)V
