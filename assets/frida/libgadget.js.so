@@ -370,14 +370,36 @@ setTimeout(function() {
         // Apply rewrite rules to URL, returns modified URL string
         function applyRewrites(url) {
             var modified = url;
+            var changed = false;
             for (var i = 0; i < rewriteRules.length; i++) {
                 if (modified.indexOf(rewriteRules[i].from) !== -1) {
-                    var before = modified;
                     modified = modified.split(rewriteRules[i].from).join(rewriteRules[i].to);
-                    Log.i(netLogTag, '[REWRITE] ' + rewriteRules[i].from + ' -> ' + rewriteRules[i].to + ' in ' + before);
+                    changed = true;
                 }
             }
-            return modified;
+            return { url: modified, changed: changed };
+        }
+
+        function ensureNetworkLoggerInitialized() {
+            try {
+                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctx === null) return;
+                var NL = Java.use('in.startv.hotstar.NetworkLogger');
+                NL.init(ctx);
+            } catch (e) { }
+        }
+
+        function safeNetworkLoggerLog(line) {
+            try {
+                ensureNetworkLoggerInitialized();
+                var NL = Java.use('in.startv.hotstar.NetworkLogger');
+                NL.log(line);
+            } catch (e) { }
+        }
+
+        function logRewritten(source, method, before, after) {
+            Log.i(netLogTag, '[REWRITE] [' + source + '] ' + method + ' ' + before + ' -> ' + after);
+            safeNetworkLoggerLog('[REWRITE] [' + source + '] ' + method + ' ' + before + ' -> ' + after);
         }
 
         // Log blocked request
@@ -385,6 +407,7 @@ setTimeout(function() {
             Log.i(netLogTag, '[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
             // Also log to file via NetworkLogger if available
             try {
+                ensureNetworkLoggerInitialized();
                 var NL = Java.use('in.startv.hotstar.NetworkLogger');
                 NL.log('[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
             } catch(e) {}
@@ -401,6 +424,54 @@ setTimeout(function() {
                 fw.close();
             } catch(e2) {}
         }
+
+        // ===== Hostname-level rewriting so rules apply to raw sockets / DNS / UDP too =====
+        function rewriteHostIfNeeded(source, method, host) {
+            if (host === null || host === undefined) return host;
+            var hostStr = host.toString();
+            if (hostStr.length === 0) return host;
+            // Avoid rewriting full URLs passed to DNS APIs by accident
+            if (hostStr.indexOf('://') !== -1 || hostStr.indexOf('/') !== -1) return host;
+
+            var rewritten = applyRewrites(hostStr);
+            if (rewritten.changed && rewritten.url !== hostStr) {
+                logRewritten(source, method, hostStr, rewritten.url);
+                return rewritten.url;
+            }
+            return host;
+        }
+
+        try {
+            var InetAddress = Java.use('java.net.InetAddress');
+            InetAddress.getByName.overload('java.lang.String').implementation = function(host) {
+                var newHost = rewriteHostIfNeeded('InetAddress', 'getByName', host);
+                return this.getByName(newHost);
+            };
+        } catch (err) { }
+
+        try {
+            var InetSocketAddress = Java.use('java.net.InetSocketAddress');
+            InetSocketAddress.$init.overload('java.lang.String', 'int').implementation = function(host, port) {
+                var newHost = rewriteHostIfNeeded('InetSocketAddress', 'init', host);
+                return this.$init(newHost, port);
+            };
+        } catch (err) { }
+
+        try {
+            var DatagramPacket = Java.use('java.net.DatagramPacket');
+            DatagramPacket.$init.overload('[B', 'int', 'java.lang.String', 'int').implementation = function(buf, length, host, port) {
+                var newHost = rewriteHostIfNeeded('DatagramPacket', 'init', host);
+                return this.$init(buf, length, newHost, port);
+            };
+        } catch (err) { }
+
+        try {
+            var SocketCtor = Java.use('java.net.Socket');
+            SocketCtor.$init.overload('java.lang.String', 'int').implementation = function(host, port) {
+                var newHost = rewriteHostIfNeeded('Socket', 'init', host);
+                return this.$init(newHost, port);
+            };
+        } catch (err) { }
 
         // URL.openConnection() — block or rewrite before connection opens
         try {
@@ -419,14 +490,36 @@ setTimeout(function() {
 
                 // Apply rewrite rules
                 var rewritten = applyRewrites(url);
-                if (rewritten !== url) {
-                    Log.i(netLogTag, '[URL.open] REWRITTEN: ' + url + ' -> ' + rewritten);
-                    var newUrl = Java.use('java.net.URL').$new(rewritten);
+                if (rewritten.changed && rewritten.url !== url) {
+                    logRewritten('URL', 'OPEN', url, rewritten.url);
+                    var newUrl = Java.use('java.net.URL').$new(rewritten.url);
                     return newUrl.openConnection();
                 }
 
                 Log.i(netLogTag, 'OPEN ' + url);
                 return this.openConnection();
+            };
+
+            // Also cover openConnection(Proxy)
+            URL.openConnection.overload('java.net.Proxy').implementation = function(proxy) {
+                var url = this.toString();
+
+                var blockMatch = shouldBlock(url);
+                if (blockMatch !== null) {
+                    logBlocked('URL', 'OPEN_PROXY', url, blockMatch);
+                    var nullUrl = Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked');
+                    return nullUrl.openConnection(proxy);
+                }
+
+                var rewritten = applyRewrites(url);
+                if (rewritten.changed && rewritten.url !== url) {
+                    logRewritten('URL', 'OPEN_PROXY', url, rewritten.url);
+                    var newUrl = Java.use('java.net.URL').$new(rewritten.url);
+                    return newUrl.openConnection(proxy);
+                }
+
+                Log.i(netLogTag, 'OPEN_PROXY ' + url);
+                return this.openConnection(proxy);
             };
         } catch (err) { }
 
@@ -451,10 +544,10 @@ setTimeout(function() {
 
                 // Apply rewrite rules
                 var rewritten = applyRewrites(url);
-                if (rewritten !== url) {
-                    Log.i(netLogTag, '[OkHttp3] REWRITTEN: ' + method + ' ' + url + ' -> ' + rewritten);
+                if (rewritten.changed && rewritten.url !== url) {
+                    logRewritten('OkHttp3', method, url, rewritten.url);
                     var HttpUrl2 = Java.use('okhttp3.HttpUrl');
-                    var newHttpUrl = HttpUrl2.parse(rewritten);
+                    var newHttpUrl = HttpUrl2.parse(rewritten.url);
                     if (newHttpUrl !== null) {
                         var newReq = request.newBuilder().url(newHttpUrl).build();
                         return this.newCall(newReq);
@@ -497,14 +590,54 @@ setTimeout(function() {
                 }
 
                 var rewritten = applyRewrites(url);
-                if (rewritten !== url) {
-                    Log.i(netLogTag, '[WebView] REWRITTEN: ' + url + ' -> ' + rewritten);
-                    this.loadUrl(rewritten);
+                if (rewritten.changed && rewritten.url !== url) {
+                    logRewritten('WebView', 'LOAD', url, rewritten.url);
+                    this.loadUrl(rewritten.url);
                     return;
                 }
 
                 Log.i(netLogTag, 'WEBVIEW ' + url);
                 this.loadUrl(url);
+            };
+
+            // loadUrl(String, Map) overload
+            WebView.loadUrl.overload('java.lang.String', 'java.util.Map').implementation = function(url, headers) {
+                var blockMatch = shouldBlock(url);
+                if (blockMatch !== null) {
+                    logBlocked('WebView', 'LOAD_HEADERS', url, blockMatch);
+                    this.loadUrl('about:blank');
+                    return;
+                }
+
+                var rewritten = applyRewrites(url);
+                if (rewritten.changed && rewritten.url !== url) {
+                    logRewritten('WebView', 'LOAD_HEADERS', url, rewritten.url);
+                    this.loadUrl(rewritten.url, headers);
+                    return;
+                }
+
+                Log.i(netLogTag, 'WEBVIEW ' + url);
+                this.loadUrl(url, headers);
+            };
+
+            // postUrl(String, byte[]) overload
+            WebView.postUrl.overload('java.lang.String', '[B').implementation = function(url, postData) {
+                var blockMatch = shouldBlock(url);
+                if (blockMatch !== null) {
+                    logBlocked('WebView', 'POST', url, blockMatch);
+                    this.loadUrl('about:blank');
+                    return;
+                }
+
+                var rewritten = applyRewrites(url);
+                if (rewritten.changed && rewritten.url !== url) {
+                    logRewritten('WebView', 'POST', url, rewritten.url);
+                    this.postUrl(rewritten.url, postData);
+                    return;
+                }
+
+                Log.i(netLogTag, 'WEBVIEW.POST ' + url);
+                this.postUrl(url, postData);
             };
         } catch (err) { }
 
@@ -519,6 +652,21 @@ setTimeout(function() {
                     logBlocked('Socket', 'CONNECT', addrStr, blockMatch);
                     throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
                 }
+
+                // Attempt rewrite for InetSocketAddress hostnames
+                try {
+                    var InetSocketAddress = Java.use('java.net.InetSocketAddress');
+                    var isa = Java.cast(addr, InetSocketAddress);
+                    var host = isa.getHostString ? isa.getHostString() : isa.getHostName();
+                    var port = isa.getPort();
+                    var newHost = rewriteHostIfNeeded('Socket', 'CONNECT', host);
+                    if (newHost !== host) {
+                        var newAddr = InetSocketAddress.$new(newHost, port);
+                        Log.i(netLogTag, 'SOCKET ' + newHost + ':' + port);
+                        this.connect(newAddr, timeout);
+                        return;
+                    }
+                } catch (e) { }
 
                 Log.i(netLogTag, 'SOCKET ' + addrStr);
                 this.connect(addr, timeout);
@@ -535,6 +683,20 @@ setTimeout(function() {
                     logBlocked('Socket', 'CONNECT0', addrStr, blockMatch);
                     throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
                 }
+
+                try {
+                    var InetSocketAddress = Java.use('java.net.InetSocketAddress');
+                    var isa = Java.cast(addr, InetSocketAddress);
+                    var host = isa.getHostString ? isa.getHostString() : isa.getHostName();
+                    var port = isa.getPort();
+                    var newHost = rewriteHostIfNeeded('Socket', 'CONNECT0', host);
+                    if (newHost !== host) {
+                        var newAddr = InetSocketAddress.$new(newHost, port);
+                        Log.i(netLogTag, 'SOCKET ' + newHost + ':' + port);
+                        this.connect(newAddr);
+                        return;
+                    }
+                } catch (e) { }
 
                 Log.i(netLogTag, 'SOCKET ' + addrStr);
                 this.connect(addr);
@@ -553,6 +715,19 @@ setTimeout(function() {
                     throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
                 }
 
+                try {
+                    var InetSocketAddress = Java.use('java.net.InetSocketAddress');
+                    var isa = Java.cast(addr, InetSocketAddress);
+                    var host = isa.getHostString ? isa.getHostString() : isa.getHostName();
+                    var port = isa.getPort();
+                    var newHost = rewriteHostIfNeeded('SocketChannel', 'OPEN', host);
+                    if (newHost !== host) {
+                        var newAddr = InetSocketAddress.$new(newHost, port);
+                        Log.i(netLogTag, 'SOCKETCHANNEL ' + newHost + ':' + port);
+                        return this.open(newAddr);
+                    }
+                } catch (e) { }
+
                 Log.i(netLogTag, 'SOCKETCHANNEL ' + addrStr);
                 return this.open(addr);
             };
@@ -569,6 +744,19 @@ setTimeout(function() {
                     logBlocked('SocketChannel', 'CONNECT', addrStr, blockMatch);
                     throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
                 }
+
+                try {
+                    var InetSocketAddress = Java.use('java.net.InetSocketAddress');
+                    var isa = Java.cast(addr, InetSocketAddress);
+                    var host = isa.getHostString ? isa.getHostString() : isa.getHostName();
+                    var port = isa.getPort();
+                    var newHost = rewriteHostIfNeeded('SocketChannel', 'CONNECT', host);
+                    if (newHost !== host) {
+                        var newAddr = InetSocketAddress.$new(newHost, port);
+                        Log.i(netLogTag, 'SOCKETCHANNEL.CONNECT ' + newHost + ':' + port);
+                        return this.connect(newAddr);
+                    }
+                } catch (e) { }
 
                 Log.i(netLogTag, 'SOCKETCHANNEL.CONNECT ' + addrStr);
                 return this.connect(addr);
@@ -624,8 +812,54 @@ setTimeout(function() {
                     throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
                 }
 
+                var newHost = rewriteHostIfNeeded('SSLSocket', 'CREATE', host);
+                if (newHost !== host) {
+                    Log.i(netLogTag, 'SSL.CREATE ' + newHost + ':' + port);
+                    return this.createSocket(newHost, port);
+                }
+
                 Log.i(netLogTag, 'SSL.CREATE ' + addrStr);
                 return this.createSocket(host, port);
+            };
+
+            // Common overload used when TLS is layered on an existing Socket
+            SSLSocketFactory.createSocket.overload('java.net.Socket', 'java.lang.String', 'int', 'boolean').implementation = function(sock, host, port, autoClose) {
+                var addrStr = host + ':' + port;
+
+                var blockMatch = shouldBlock(addrStr);
+                if (blockMatch !== null) {
+                    logBlocked('SSLSocket', 'CREATE_WRAP', addrStr, blockMatch);
+                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
+                var newHost = rewriteHostIfNeeded('SSLSocket', 'CREATE_WRAP', host);
+                if (newHost !== host) {
+                    Log.i(netLogTag, 'SSL.CREATE_WRAP ' + newHost + ':' + port);
+                    return this.createSocket(sock, newHost, port, autoClose);
+                }
+
+                Log.i(netLogTag, 'SSL.CREATE_WRAP ' + addrStr);
+                return this.createSocket(sock, host, port, autoClose);
+            };
+
+            // Bind-local variant with hostname
+            SSLSocketFactory.createSocket.overload('java.lang.String', 'int', 'java.net.InetAddress', 'int').implementation = function(host, port, localAddr, localPort) {
+                var addrStr = host + ':' + port;
+
+                var blockMatch = shouldBlock(addrStr);
+                if (blockMatch !== null) {
+                    logBlocked('SSLSocket', 'CREATE_LOCAL', addrStr, blockMatch);
+                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                }
+
+                var newHost = rewriteHostIfNeeded('SSLSocket', 'CREATE_LOCAL', host);
+                if (newHost !== host) {
+                    Log.i(netLogTag, 'SSL.CREATE_LOCAL ' + newHost + ':' + port);
+                    return this.createSocket(newHost, port, localAddr, localPort);
+                }
+
+                Log.i(netLogTag, 'SSL.CREATE_LOCAL ' + addrStr);
+                return this.createSocket(host, port, localAddr, localPort);
             };
         } catch (err) { }
 

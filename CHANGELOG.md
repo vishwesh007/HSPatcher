@@ -1,5 +1,13 @@
 # HSPatcher Changelog
 
+## v3.12 — 2026-02-25: Rewrites Everywhere + Consistent Logs
+
+### Summary
+- **Rewrite rules now apply to more connection types**: rewrites are enforced not just for URL/OkHttp/WebView, but also for DNS/InetSocketAddress/socket/UDP and common TLS socket creation paths.
+- **Rewrite logging matches what actually happens**: rewrites are logged after the final rewritten URL/host is computed, and are mirrored into the same file-based logger users rely on (`request_logs.txt`).
+
+---
+
 ## v3.10 — 2026-02-25: Version Display + Zip Profiles + Uninstall Permission
 
 ### Summary
