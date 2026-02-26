@@ -17,79 +17,169 @@ setTimeout(function() {
         console.log('======================================================');
 
         // =====================================================
-        // 1. SSL CERTIFICATE PINNING BYPASS
+        // 1. SSL CERTIFICATE PINNING BYPASS (Universal)
+        //    File-driven: push ssl_bypass_disabled.txt to disable
+        //    Ref: httptoolkit/frida-interception-and-unpinning
         // =====================================================
 
-        // TrustManagerImpl
+        var Log = Java.use('android.util.Log');
+        var sslBypassEnabled = true;
         try {
-            var array_list = Java.use('java.util.ArrayList');
-            var TrustManagerImpl = Java.use('com.android.org.conscrypt.TrustManagerImpl');
-            TrustManagerImpl.checkTrustedRecursive.implementation = function(a, b, c, d, e, f, g, h) {
-                console.log('[+] SSL: Bypassing TrustManagerImpl for: ' + b);
-                return array_list.$new();
-            };
-        } catch (err) {
-            console.log('[-] TrustManagerImpl not found');
-        }
-
-        // OpenSSLSocketImpl
-        try {
-            var OpenSSLSocketImpl = Java.use('com.android.org.conscrypt.OpenSSLSocketImpl');
-            OpenSSLSocketImpl.verifyCertificateChain.implementation = function(g, i) {
-                console.log('[+] SSL: Bypassing OpenSSLSocketImpl');
-            };
-        } catch (err) {
-            console.log('[-] OpenSSLSocketImpl not found');
-        }
-
-        // OkHttp3 CertificatePinner
-        try {
-            var CertPinner = Java.use('okhttp3.CertificatePinner');
-            CertPinner.check.overload('java.lang.String', 'java.util.List').implementation = function(hostname, peerCerts) {
-                console.log('[+] SSL: Bypassing OkHttp3 CertificatePinner for: ' + hostname);
-            };
-        } catch (err) { }
-
-        try {
-            var CertPinner2 = Java.use('okhttp3.CertificatePinner');
-            CertPinner2['check$okhttp'].implementation = function(hostname, fn) {
-                console.log('[+] SSL: Bypassing OkHttp3 CertificatePinner$okhttp for: ' + hostname);
-            };
-        } catch (err) { }
-
-        // TrustManagerFactory
-        try {
-            var TrustManagerFactory = Java.use('javax.net.ssl.TrustManagerFactory');
-            TrustManagerFactory.getTrustManagers.implementation = function() {
-                var EmptyTrustManager = Java.registerClass({
-                    name: 'com.hspatch.TrustAllManager',
-                    implements: [Java.use('javax.net.ssl.X509TrustManager')],
-                    methods: {
-                        checkClientTrusted: function(chain, authType) {},
-                        checkServerTrusted: function(chain, authType) {},
-                        getAcceptedIssuers: function() { return []; }
+            var _ctx0 = Java.use('android.app.ActivityThread').currentApplication();
+            if (_ctx0 !== null) {
+                var _F0 = Java.use('java.io.File');
+                var _sd = [];
+                try { _sd.push(_ctx0.getFilesDir().getAbsolutePath()); } catch(e) {}
+                try { var _ef = _ctx0.getExternalFilesDir(null); if (_ef) _sd.push(_ef.getAbsolutePath()); } catch(e) {}
+                for (var _i = 0; _i < _sd.length; _i++) {
+                    if (_F0.$new(_sd[_i] + '/ssl_bypass_disabled.txt').exists()) {
+                        sslBypassEnabled = false;
+                        Log.i(TAG, '[*] SSL bypass DISABLED by ssl_bypass_disabled.txt');
+                        break;
                     }
-                });
-                return [EmptyTrustManager.$new()];
-            };
-        } catch (err) { }
+                }
+            }
+        } catch(e) {}
 
-        // HttpsURLConnection default hostname verifier
-        try {
-            var HostnameVerifier = Java.registerClass({
-                name: 'com.hspatch.GlobalHostnameVerifier',
-                implements: [Java.use('javax.net.ssl.HostnameVerifier')],
+        if (sslBypassEnabled) {
+            // Trust-all X509TrustManager (created once, reused everywhere)
+            var _TrustAll = Java.registerClass({
+                name: 'com.hspatch.ssl.TrustAll',
+                implements: [Java.use('javax.net.ssl.X509TrustManager')],
                 methods: {
-                    verify: function(hostname, session) { return true; }
+                    checkClientTrusted: function(chain, authType) {},
+                    checkServerTrusted: function(chain, authType) {},
+                    getAcceptedIssuers: function() { return []; }
                 }
             });
-            var HttpsURLConnection = Java.use('javax.net.ssl.HttpsURLConnection');
-            HttpsURLConnection.setDefaultHostnameVerifier.implementation = function(verifier) {
-                this.setDefaultHostnameVerifier(HostnameVerifier.$new());
-            };
-        } catch (err) { }
+            var _ta = _TrustAll.$new();
 
-        console.log('[*] SSL Pinning bypass hooks installed');
+            // Accept-all HostnameVerifier (created once)
+            var _HVAll = Java.registerClass({
+                name: 'com.hspatch.ssl.HVAll',
+                implements: [Java.use('javax.net.ssl.HostnameVerifier')],
+                methods: { verify: function() { return true; } }
+            });
+            var _hv = _HVAll.$new();
+
+            // (a) SSLContext.init — THE most critical hook. Every HTTPS library
+            //     ultimately calls this to configure TLS trust.
+            var _sslCtxHooked = false;
+            try {
+                var _SSLCtx = Java.use('javax.net.ssl.SSLContext');
+                _SSLCtx.init.overload('[Ljavax.net.ssl.KeyManager;', '[Ljavax.net.ssl.TrustManager;', 'java.security.SecureRandom')
+                    .implementation = function(km, tm, sr) { this.init(km, [_ta], sr); };
+                _sslCtxHooked = true;
+                Log.d(TAG, '[+] SSLContext.init hooked');
+            } catch(e) { Log.w(TAG, '[-] SSLContext.init: ' + e); }
+
+            // (a2) SSLContext.getDefault + SSLSocketFactory.getDefault — catch pre-initialized contexts
+            try {
+                var _trustAllCtx = Java.use('javax.net.ssl.SSLContext').getInstance('TLS');
+                _trustAllCtx.init(null, [_ta], null);
+                var _trustAllFactory = _trustAllCtx.getSocketFactory();
+                try {
+                    Java.use('javax.net.ssl.SSLSocketFactory').getDefault.implementation = function() {
+                        return _trustAllFactory;
+                    };
+                    Log.d(TAG, '[+] SSLSocketFactory.getDefault hooked');
+                } catch(e) {}
+                try {
+                    Java.use('javax.net.ssl.SSLContext').getDefault.implementation = function() {
+                        return _trustAllCtx;
+                    };
+                    Log.d(TAG, '[+] SSLContext.getDefault hooked');
+                } catch(e) {}
+            } catch(e) { Log.d(TAG, '[-] default context hook: ' + e); }
+
+            // (b) TrustManagerFactory.getTrustManagers — return trust-all
+            try {
+                Java.use('javax.net.ssl.TrustManagerFactory').getTrustManagers
+                    .implementation = function() { return [_ta]; };
+                Log.d(TAG, '[+] TrustManagerFactory.getTrustManagers hooked');
+            } catch(e) {}
+
+            // (c) TrustManagerImpl (Conscrypt) — Android's built-in TLS verifier
+            var _tmiHooks = 0;
+            try {
+                var TMI = Java.use('com.android.org.conscrypt.TrustManagerImpl');
+                // verifyChain — primary path on Android 7+ (returns List<X509Certificate>)
+                try { TMI.verifyChain.implementation = function() {
+                    var chain = arguments[0];
+                    var al = Java.use('java.util.ArrayList').$new();
+                    if (chain) { for (var ci = 0; ci < chain.length; ci++) al.add(chain[ci]); }
+                    return al;
+                }; _tmiHooks++; } catch(e) {}
+                // checkTrustedRecursive — older path
+                try { TMI.checkTrustedRecursive.implementation = function() {
+                    return Java.use('java.util.ArrayList').$new();
+                }; _tmiHooks++; } catch(e) {}
+                // checkServerTrusted — multiple overloads
+                try { TMI.checkServerTrusted.overload('[Ljava.security.cert.X509Certificate;', 'java.lang.String')
+                    .implementation = function(certs, authType) { return Java.use('java.util.Arrays').asList(certs); }; _tmiHooks++; } catch(e) {}
+                try { TMI.checkServerTrusted.overload('[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'java.lang.String')
+                    .implementation = function(certs, authType, host) { return Java.use('java.util.Arrays').asList(certs); }; _tmiHooks++; } catch(e) {}
+                try { TMI.checkServerTrusted.overload('[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'javax.net.ssl.SSLSession')
+                    .implementation = function(certs, authType, session) { return Java.use('java.util.Arrays').asList(certs); }; _tmiHooks++; } catch(e) {}
+                Log.d(TAG, '[+] TrustManagerImpl: ' + _tmiHooks + ' hooks installed');
+            } catch(e) { Log.w(TAG, '[-] TrustManagerImpl: ' + e); }
+
+            // (d) Conscrypt socket-level cert chain verification (covers all socket impls)
+            var _conscryptSockets = [
+                'com.android.org.conscrypt.OpenSSLSocketImpl',
+                'com.android.org.conscrypt.ConscryptFileDescriptorSocket',
+                'com.android.org.conscrypt.ConscryptEngineSocket'
+            ];
+            var _csHooked = 0;
+            for (var _csi = 0; _csi < _conscryptSockets.length; _csi++) {
+                try { Java.use(_conscryptSockets[_csi]).verifyCertificateChain.implementation = function() {}; _csHooked++; } catch(e) {}
+            }
+            Log.d(TAG, '[+] Conscrypt sockets: ' + _csHooked + '/3 hooked');
+
+            // (e) Conscrypt CertPinManager + CertificateTransparency
+            try { var CPM = Java.use('com.android.org.conscrypt.CertPinManager');
+                try { CPM.isChainValid.implementation = function() { return true; }; } catch(e) {}
+                try { CPM.checkChainPinning.implementation = function() {}; } catch(e) {}
+            } catch(e) {}
+            try { Java.use('com.android.org.conscrypt.ct.CertificateTransparency').checkCT.implementation = function() {}; } catch(e) {}
+
+            // (f) HttpsURLConnection — hostname + socket factory overrides
+            try { var HC = Java.use('javax.net.ssl.HttpsURLConnection');
+                try { HC.setDefaultHostnameVerifier.implementation = function(v) { this.setDefaultHostnameVerifier(_hv); }; } catch(e) {}
+                try { HC.setHostnameVerifier.implementation = function(v) { this.setHostnameVerifier(_hv); }; } catch(e) {}
+                try { HC.setSSLSocketFactory.implementation = function() {}; } catch(e) {}
+            } catch(e) {}
+
+            // (g) OkHttp3 CertificatePinner — all check overloads
+            try { var CP = Java.use('okhttp3.CertificatePinner');
+                try { CP.check.overload('java.lang.String', 'java.util.List').implementation = function() {}; } catch(e) {}
+                try { CP.check.overload('java.lang.String', 'java.security.cert.Certificate').implementation = function() {}; } catch(e) {}
+                try { CP.check.overload('java.lang.String', '[Ljava.security.cert.Certificate;').implementation = function() {}; } catch(e) {}
+                try { CP['check$okhttp'].implementation = function() {}; } catch(e) {}
+            } catch(e) {}
+
+            // (h) Android vendored OkHttp v2 — hostname verifier
+            try { Java.use('com.android.okhttp.internal.tls.OkHostnameVerifier')
+                .verify.overload('java.lang.String', 'javax.net.ssl.SSLSession')
+                .implementation = function() { return true; }; } catch(e) {}
+
+            // (i) NetworkSecurityConfig — remove certificate pin sets
+            try {
+                var _EP = Java.use('android.security.net.config.PinSet').EMPTY_PINSET.value;
+                Java.use('android.security.net.config.NetworkSecurityConfig').$init.overloads
+                    .forEach(function(ov) {
+                        ov.implementation = function() {
+                            try { arguments[2] = _EP; } catch(e2) {}
+                            ov.call(this, arguments[0], arguments[1], arguments[2],
+                                arguments[3], arguments[4], arguments[5], arguments[6]);
+                        };
+                    });
+            } catch(e) {}
+
+            Log.i(TAG, '[*] SSL bypass: SSLContext + TrustManager + Conscrypt + OkHttp + NetSecCfg');
+        } else {
+            Log.i(TAG, '[*] SSL bypass SKIPPED (disabled by ssl_bypass_disabled.txt)');
+        }
 
 
         // =====================================================
@@ -988,8 +1078,8 @@ setTimeout(function() {
                     var bm = shouldBlock(h);
                     if (bm !== null) {
                         logBlocked('InetAddress', 'getByName', h, bm);
-                        // Return loopback to fail connections
-                        return _inetGetByName.call(this, '127.0.0.1');
+                        // Throw UnknownHostException for clean "offline" error
+                        throw Java.use('java.net.UnknownHostException').$new(h);
                     }
                     // Rewrite check
                     var rw = applyRewrites(h);
@@ -1006,7 +1096,7 @@ setTimeout(function() {
                         var bm = shouldBlock(h);
                         if (bm !== null) {
                             logBlocked('InetAddress', 'getAllByName', h, bm);
-                            return _inetGetAll.call(this, '127.0.0.1');
+                            throw Java.use('java.net.UnknownHostException').$new(h);
                         }
                         var rw = applyRewrites(h);
                         if (rw.changed) { logRewritten('InetAddress','getAllByName',h,rw.url); return _inetGetAll.call(this, rw.url); }
