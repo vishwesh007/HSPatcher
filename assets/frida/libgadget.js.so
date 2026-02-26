@@ -1,6 +1,6 @@
 /*
- * HSPatch Universal Frida Script v3.0
- * - SSL Certificate Pinning Bypass
+ * HSPatch Universal Frida Script v3.15
+ * - SSL Certificate Pinning Bypass (Java + Native BoringSSL)
  * - Signature Verification Bypass (runtime layer)
  * - Piracy / License / Integrity Checks Removal
  * - Screenshot / Recording FLAG_SECURE Bypass
@@ -13,35 +13,19 @@ setTimeout(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.0               [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.15              [#]');
         console.log('======================================================');
 
         // =====================================================
         // 1. SSL CERTIFICATE PINNING BYPASS (Universal)
-        //    File-driven: push ssl_bypass_disabled.txt to disable
+        //    PERMANENT — always enabled, no file toggle
         //    Ref: httptoolkit/frida-interception-and-unpinning
         // =====================================================
 
         var Log = Java.use('android.util.Log');
-        var sslBypassEnabled = true;
-        try {
-            var _ctx0 = Java.use('android.app.ActivityThread').currentApplication();
-            if (_ctx0 !== null) {
-                var _F0 = Java.use('java.io.File');
-                var _sd = [];
-                try { _sd.push(_ctx0.getFilesDir().getAbsolutePath()); } catch(e) {}
-                try { var _ef = _ctx0.getExternalFilesDir(null); if (_ef) _sd.push(_ef.getAbsolutePath()); } catch(e) {}
-                for (var _i = 0; _i < _sd.length; _i++) {
-                    if (_F0.$new(_sd[_i] + '/ssl_bypass_disabled.txt').exists()) {
-                        sslBypassEnabled = false;
-                        Log.i(TAG, '[*] SSL bypass DISABLED by ssl_bypass_disabled.txt');
-                        break;
-                    }
-                }
-            }
-        } catch(e) {}
 
-        if (sslBypassEnabled) {
+        // SSL bypass is PERMANENT — always enabled, no file toggle
+        {
             // Trust-all X509TrustManager (created once, reused everywhere)
             var _TrustAll = Java.registerClass({
                 name: 'com.hspatch.ssl.TrustAll',
@@ -176,10 +160,131 @@ setTimeout(function() {
                     });
             } catch(e) {}
 
-            Log.i(TAG, '[*] SSL bypass: SSLContext + TrustManager + Conscrypt + OkHttp + NetSecCfg');
-        } else {
-            Log.i(TAG, '[*] SSL bypass SKIPPED (disabled by ssl_bypass_disabled.txt)');
+            Log.i(TAG, '[*] SSL bypass PERMANENT: SSLContext + TrustManager + Conscrypt + OkHttp + NetSecCfg');
         }
+
+
+        // =====================================================
+        // 1b. NATIVE BoringSSL CERTIFICATE BYPASS (Cronet/libssl)
+        //     Hooks SSL_CTX_set_custom_verify & SSL_set_custom_verify
+        //     to always return SSL_VERIFY_OK (0).
+        //     This eliminates SSLHandshakeException from Cronet's
+        //     native BoringSSL path that Java hooks cannot reach.
+        //     Ref: httptoolkit/frida-interception-and-unpinning/native-tls-hook.js
+        // =====================================================
+
+        var SSL_VERIFY_OK = 0;
+        var SSL_VERIFY_NONE = 0;
+        var _nativeSslHooked = 0;
+
+        function patchNativeSSLVerify(libName) {
+            var mod = null;
+            try { mod = Process.getModuleByName(libName); } catch (e) { return 0; }
+            if (!mod) return 0;
+
+            var patched = 0;
+
+            // --- Part A: BoringSSL custom verify hooks ---
+            // Hooks SSL_CTX_set_custom_verify & SSL_set_custom_verify
+            // to replace the app's callback with one that always returns OK
+            var verifyFnNames = ['SSL_CTX_set_custom_verify', 'SSL_set_custom_verify'];
+
+            // Create a single always-OK callback (reused for all hooks)
+            var alwaysOkCallback = new NativeCallback(function(ssl, out_alert) {
+                return SSL_VERIFY_OK;
+            }, 'int', ['pointer', 'pointer']);
+
+            for (var vi = 0; vi < verifyFnNames.length; vi++) {
+                try {
+                    var fnAddr = mod.findExportByName(verifyFnNames[vi]);
+                    if (fnAddr) {
+                        var origFn = new NativeFunction(fnAddr, 'void', ['pointer', 'int', 'pointer']);
+                        (function(fn, name) {
+                            Interceptor.replace(fnAddr, new NativeCallback(function(ctx_or_ssl, mode, callback) {
+                                fn(ctx_or_ssl, mode, alwaysOkCallback);
+                            }, 'void', ['pointer', 'int', 'pointer']));
+                        })(origFn, verifyFnNames[vi]);
+                        patched++;
+                        console.log('[+] Native SSL: ' + verifyFnNames[vi] + ' hooked in ' + libName);
+                    }
+                } catch (e) {
+                    console.log('[-] Native SSL: ' + verifyFnNames[vi] + ' in ' + libName + ': ' + e);
+                }
+            }
+
+            // --- Part B: Standard OpenSSL verify mode hooks ---
+            // Forces SSL_VERIFY_NONE (0) to completely disable certificate
+            // verification at native level. This catches the default Conscrypt/
+            // BoringSSL path where SSL_CTX_set_custom_verify is never called.
+            // Signature: void SSL_CTX_set_verify(SSL_CTX *ctx, int mode, verify_callback cb)
+            //            void SSL_set_verify(SSL *ssl, int mode, verify_callback cb)
+            var stdVerifyFns = ['SSL_CTX_set_verify', 'SSL_set_verify'];
+            for (var svi = 0; svi < stdVerifyFns.length; svi++) {
+                try {
+                    var svAddr = mod.findExportByName(stdVerifyFns[svi]);
+                    if (svAddr) {
+                        (function(addr, name) {
+                            var origSvFn = new NativeFunction(addr, 'void', ['pointer', 'int', 'pointer']);
+                            Interceptor.replace(addr, new NativeCallback(function(ctx_or_ssl, mode, callback) {
+                                // Force mode to SSL_VERIFY_NONE regardless of what was requested
+                                origSvFn(ctx_or_ssl, SSL_VERIFY_NONE, ptr(0));
+                            }, 'void', ['pointer', 'int', 'pointer']));
+                        })(svAddr, stdVerifyFns[svi]);
+                        patched++;
+                        console.log('[+] Native SSL: ' + stdVerifyFns[svi] + ' -> VERIFY_NONE in ' + libName);
+                    }
+                } catch (e) {
+                    console.log('[-] Native SSL: ' + stdVerifyFns[svi] + ' in ' + libName + ': ' + e);
+                }
+            }
+
+            // Hook SSL_get_psk_identity — some verification paths check this is non-null
+            try {
+                var pskAddr = mod.findExportByName('SSL_get_psk_identity');
+                if (pskAddr) {
+                    var pskStr = Memory.allocUtf8String('PSK_PLACEHOLDER');
+                    Interceptor.replace(pskAddr, new NativeCallback(function(ssl) {
+                        return pskStr;
+                    }, 'pointer', ['pointer']));
+                    console.log('[+] Native SSL: SSL_get_psk_identity hooked in ' + libName);
+                }
+            } catch (e) {}
+
+            return patched;
+        }
+
+        // Try immediate hook on known BoringSSL/Cronet library names
+        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so'];
+        for (var nsi = 0; nsi < _nativeSslLibs.length; nsi++) {
+            _nativeSslHooked += patchNativeSSLVerify(_nativeSslLibs[nsi]);
+        }
+
+        // Also watch for late-loaded SSL/Cronet libs
+        try {
+            Process.attachModuleObserver({
+                onAdded: function(mod) {
+                    var name = mod.name;
+                    if (name === 'libssl.so' || name.indexOf('sscronet') !== -1 ||
+                        name.indexOf('cronet') !== -1 || name.indexOf('boringssl') !== -1) {
+                        var p = patchNativeSSLVerify(name);
+                        if (p > 0) {
+                            _nativeSslHooked += p;
+                            console.log('[+] Late-loaded native SSL lib patched: ' + name + ' (' + p + ' hooks)');
+                        }
+                    }
+                }
+            });
+        } catch (e) {
+            // Fallback: retry after 3s for older Frida without attachModuleObserver
+            setTimeout(function() {
+                for (var nsi2 = 0; nsi2 < _nativeSslLibs.length; nsi2++) {
+                    _nativeSslHooked += patchNativeSSLVerify(_nativeSslLibs[nsi2]);
+                }
+                if (_nativeSslHooked > 0) console.log('[+] Delayed native SSL hooks: ' + _nativeSslHooked);
+            }, 3000);
+        }
+
+        Log.i(TAG, '[*] Native BoringSSL bypass: ' + _nativeSslHooked + ' hooks installed');
 
 
         // =====================================================
