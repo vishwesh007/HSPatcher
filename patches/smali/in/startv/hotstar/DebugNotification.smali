@@ -113,13 +113,31 @@
     const-string v4, "Tap to open \u2022 Logs \u2022 Rules \u2022 Network"
     invoke-virtual {v3, v4}, Landroid/app/Notification$Builder;->setContentText(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;
 
-    # NOT ongoing — DISMISSABLE
-    const/4 v4, 0x0
+    # Persistent toggle: SharedPreferences("hspatch_settings").getBoolean("debug_notification_persistent", false)
+    const-string v4, "hspatch_settings"
+    const/4 v5, 0x0
+    invoke-virtual {p0, v4, v5}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v4
+
+    const-string v6, "debug_notification_persistent"
+    const/4 v7, 0x0
+    invoke-interface {v4, v6, v7}, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
+    move-result v4
+
+    # Precompute log message now (before v4 is reused later)
+    if-eqz v4, :msg_dismiss
+    const-string v6, "Debug notification shown (PERSISTENT) - tap to open Debug Panel"
+    goto :msg_done
+    :msg_dismiss
+    const-string v6, "Debug notification shown (dismissable) - tap to open Debug Panel"
+    :msg_done
+
+    # Ongoing (persistent) if enabled
     invoke-virtual {v3, v4}, Landroid/app/Notification$Builder;->setOngoing(Z)Landroid/app/Notification$Builder;
 
-    # Auto-cancel: dismiss on tap
-    const/4 v4, 0x1
-    invoke-virtual {v3, v4}, Landroid/app/Notification$Builder;->setAutoCancel(Z)Landroid/app/Notification$Builder;
+    # Auto-cancel only when NOT persistent
+    xor-int/lit8 v5, v4, 0x1
+    invoke-virtual {v3, v5}, Landroid/app/Notification$Builder;->setAutoCancel(Z)Landroid/app/Notification$Builder;
 
     # Set content intent
     invoke-virtual {v3, v2}, Landroid/app/Notification$Builder;->setContentIntent(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;
@@ -143,8 +161,7 @@
 
     # Log
     const-string v4, "HSPatch"
-    const-string v5, "Debug notification shown (dismissable) - tap to open Debug Panel"
-    invoke-static {v4, v5}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+    invoke-static {v4, v6}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
 
     :try_end
     .catchall {:try_start .. :try_end} :catch_block
@@ -159,6 +176,32 @@
     const-string v2, "Failed to show debug notification"
     invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
+    :after
+    return-void
+.end method
+
+
+# Cancel debug notification
+.method public static cancel(Landroid/content/Context;)V
+    .locals 3
+
+    :try_start
+    const-string v0, "notification"
+    invoke-virtual {p0, v0}, Landroid/content/Context;->getSystemService(Ljava/lang/String;)Ljava/lang/Object;
+    move-result-object v0
+    check-cast v0, Landroid/app/NotificationManager;
+
+    const/16 v1, 0x4853
+    invoke-virtual {v0, v1}, Landroid/app/NotificationManager;->cancel(I)V
+
+    const-string v0, "HSPatch"
+    const-string v1, "Debug notification canceled"
+    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+    :try_end
+    .catchall {:try_start .. :try_end} :catch
+    goto :after
+    :catch
+    move-exception v0
     :after
     return-void
 .end method

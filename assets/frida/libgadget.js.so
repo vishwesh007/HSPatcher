@@ -239,138 +239,169 @@ setTimeout(function() {
 
 
         // =====================================================
-        // 5. NETWORK TRAFFIC BLOCKING, MODIFICATION & MONITORING
+        // 5. NETWORK TRAFFIC: NATIVE + JAVA INTERCEPTION v4.0
+        // =====================================================
+        // ARCHITECTURE:
+        //   Layer 1 — Native libc hooks (connect, send, sendto, getaddrinfo)
+        //             Catches ALL traffic from ANY library (Java, native, JNI)
+        //   Layer 2 — Native TLS hooks (SSL_write, SSL_read)
+        //             Sees decrypted HTTPS payload (HTTP headers, bodies)
+        //   Layer 3 — Java hooks (OkHttp, URL, WebView)
+        //             For block/rewrite rule enforcement at application level
         // =====================================================
 
         var netLogTag = "HSPatch-Net";
         var Log = Java.use('android.util.Log');
 
-        // --- Load blocking rules from per-app file or legacy blocking_hotstar.txt ---
-        // Search order per location:
-        //   1. blocking_<packageName>.txt  (per-app dedicated)
-        //   2. blocking_rules.txt          (generic)
-        //   3. blocking_hotstar.txt        (legacy compatibility)
-        // Rules format: each line is "pattern:replacement"
-        // If replacement is empty or "BLOCK", the request is fully blocked.
-        // Otherwise, pattern is replaced with replacement in the URL.
-        var blockRules = [];
-        var blockPatterns = [];   // patterns with no replacement → full block
-        var rewriteRules = [];   // patterns with replacement → URL rewrite
+        // --- Native logcat helper (works from ANY thread, no JNI needed) ---
+        var ANDROID_LOG_INFO = 4;
+        var _logTagPtr = Memory.allocUtf8String(netLogTag);
+        var _androidLogPrint = new NativeFunction(
+            Module.getExportByName('liblog.so', '__android_log_print'),
+            'int', ['int', 'pointer', 'pointer']
+        );
+        function nativeLog(msg) {
+            var msgPtr = Memory.allocUtf8String(msg);
+            _androidLogPrint(ANDROID_LOG_INFO, _logTagPtr, msgPtr);
+        }
+
+        // --- Rules engine ---
+        var blockPatterns = [];
+        var rewriteRules = [];
+        var apiDumpEnabled = false;
+        var apiDumpMaxBytes = 10 * 1024 * 1024;
+
+        function getInternalFilePath(fileName) {
+            try {
+                var HSConfig = Java.use('in.startv.hotstar.HSPatchConfig');
+                return HSConfig.getFilePath(fileName);
+            } catch (e) { }
+            try {
+                var ctx2 = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctx2 !== null) return ctx2.getFilesDir().getAbsolutePath() + '/' + fileName;
+            } catch (e2) { }
+            return null;
+        }
+
+        function apiDumpWrite(line) {
+            if (!apiDumpEnabled) return;
+            try {
+                var path = getInternalFilePath('api_dump.txt');
+                if (path === null) return;
+                var File2 = Java.use('java.io.File');
+                var f2 = File2.$new(path);
+                if (f2.exists() && f2.length() > apiDumpMaxBytes) return;
+                var ts2 = Java.use('java.text.SimpleDateFormat').$new('HH:mm:ss.SSS')
+                    .format(Java.use('java.util.Date').$new());
+                var fw2 = Java.use('java.io.FileWriter').$new(path, true);
+                fw2.write(ts2 + ' ' + line + '\n');
+                fw2.flush();
+                fw2.close();
+            } catch (e3) { }
+        }
+
+        function apiDumpEvent(source, method, urlOrMsg) {
+            try { apiDumpWrite('[' + source + '] ' + method + ' ' + urlOrMsg); } catch (e4) { }
+        }
 
         function loadBlockingRules() {
             try {
                 var ctx = Java.use('android.app.ActivityThread').currentApplication();
                 if (ctx === null) return;
-
                 var pkgName = ctx.getPackageName();
-
-                // Build candidate file names (per-app first, then generic, then legacy)
-                var fileNames = [
-                    'blocking_' + pkgName + '.txt',
-                    'blocking_rules.txt',
-                    'blocking_hotstar.txt'
-                ];
-
-                // Build candidate directories
+                var fileNames = ['blocking_' + pkgName + '.txt', 'blocking_rules.txt', 'blocking_hotstar.txt'];
                 var dirs = [];
+                try { var fd = ctx.getFilesDir(); if (fd !== null) dirs.push(fd.getAbsolutePath()); } catch(e) {}
+                try { dirs.push(ctx.getApplicationInfo().dataDir.value + '/files'); } catch(e) {}
+                // App-specific external dir (no permission needed on Android 10+)
+                try { var efd = ctx.getExternalFilesDir(null); if (efd !== null) dirs.push(efd.getAbsolutePath()); } catch(e) {}
+                // Fallback: /sdcard/Download and /sdcard for non-root testing via adb push
                 try {
-                    var extDir = ctx.getExternalFilesDir(null);
-                    if (extDir !== null) {
-                        dirs.push(extDir.getAbsolutePath());
+                    var Environment = Java.use('android.os.Environment');
+                    var sdcard = Environment.getExternalStorageDirectory().getAbsolutePath();
+                    dirs.push(sdcard + '/Download');
+                    dirs.push(sdcard);
+                } catch(e) {}
+
+                apiDumpEnabled = false;
+                try {
+                    var File0 = Java.use('java.io.File');
+                    for (var dti = 0; dti < dirs.length; dti++) {
+                        if (File0.$new(dirs[dti] + '/api_dump_enabled.txt').exists()) { apiDumpEnabled = true; break; }
                     }
-                } catch(e) {}
-                try {
-                    var dataDir = ctx.getApplicationInfo().dataDir.value;
-                    dirs.push(dataDir + '/files');
-                } catch(e) {}
-                dirs.push('/storage/emulated/0/Download/hspatch_logs');
+                } catch (eDump) { }
 
                 var File = Java.use('java.io.File');
                 var BufferedReader = Java.use('java.io.BufferedReader');
                 var FileReader = Java.use('java.io.FileReader');
-
-                // Try each directory × each filename, stop on first found
-                // Try each filename × each directory — per-app file always prioritized
                 var found = false;
                 for (var fi = 0; fi < fileNames.length && !found; fi++) {
                     for (var di = 0; di < dirs.length && !found; di++) {
                         var fullPath = dirs[di] + '/' + fileNames[fi];
-                        var f = File.$new(fullPath);
-                        if (f.exists()) {
-                            Log.i(netLogTag, '[RULES] Loading blocking rules from: ' + fullPath);
-                            var reader = BufferedReader.$new(FileReader.$new(fullPath));
-                            var line;
-                            while ((line = reader.readLine()) !== null) {
-                                var lineStr = line.toString().trim();
-                                if (lineStr.length === 0 || lineStr.charAt(0) === '#') continue;
-
-                                var sepIdx = lineStr.indexOf(':');
-                                if (sepIdx > 0) {
-                                    var pattern = lineStr.substring(0, sepIdx).trim();
-                                    var replacement = lineStr.substring(sepIdx + 1).trim();
-                                    if (replacement.length === 0 || replacement === 'BLOCK') {
-                                        blockPatterns.push(pattern);
-                                        Log.i(netLogTag, '[RULES]   BLOCK: ' + pattern);
+                        try {
+                            var f = File.$new(fullPath);
+                            if (f.exists() && f.canRead()) {
+                                Log.i(netLogTag, '[RULES] Loading from: ' + fullPath);
+                                var reader = BufferedReader.$new(FileReader.$new(fullPath));
+                                var line;
+                                while ((line = reader.readLine()) !== null) {
+                                    var ls = line.toString().trim();
+                                    if (ls.length === 0 || ls.charAt(0) === '#') continue;
+                                    var arrowIdx = ls.indexOf('=>');
+                                    if (arrowIdx > 0) {
+                                        var pat = ls.substring(0, arrowIdx).trim();
+                                        var rep = ls.substring(arrowIdx + 2).trim();
+                                        if (rep.length === 0 || rep === 'BLOCK') { blockPatterns.push(pat); }
+                                        else { rewriteRules.push({ from: pat, to: rep }); }
                                     } else {
-                                        rewriteRules.push({ from: pattern, to: replacement });
-                                        Log.i(netLogTag, '[RULES]   REWRITE: ' + pattern + ' -> ' + replacement);
+                                        if (ls.indexOf('://') !== -1 && ls.indexOf(':') !== -1) continue;
+                                        var sepIdx = ls.indexOf(':');
+                                        if (sepIdx > 0) {
+                                            var pat2 = ls.substring(0, sepIdx).trim();
+                                            var rep2 = ls.substring(sepIdx + 1).trim();
+                                            if (rep2.length === 0 || rep2 === 'BLOCK') { blockPatterns.push(pat2); }
+                                            else { rewriteRules.push({ from: pat2, to: rep2 }); }
+                                        } else { blockPatterns.push(ls); }
                                     }
-                                } else {
-                                    // No colon = treat entire line as a block pattern
-                                    blockPatterns.push(lineStr);
-                                    Log.i(netLogTag, '[RULES]   BLOCK: ' + lineStr);
                                 }
+                                reader.close();
+                                Log.i(netLogTag, '[RULES] ' + blockPatterns.length + ' block + ' + rewriteRules.length + ' rewrite');
+                                found = true;
                             }
-                            reader.close();
-                            Log.i(netLogTag, '[RULES] Loaded ' + blockPatterns.length + ' block rules + '
-                                + rewriteRules.length + ' rewrite rules from ' + fileNames[fi]);
-                            found = true;
+                        } catch (eFile) {
+                            Log.d(netLogTag, '[RULES] Skip ' + fullPath + ': ' + eFile);
                         }
                     }
                 }
-                if (blockPatterns.length === 0 && rewriteRules.length === 0) {
-                    Log.i(netLogTag, '[RULES] No blocking rules file found (will only monitor)');
-                }
-            } catch (err) {
-                Log.w(netLogTag, '[RULES] Failed to load rules: ' + err);
-            }
+                if (!found) { Log.w(netLogTag, '[RULES] No blocking rules file found in any search dir'); }
+            } catch (err) { Log.w(netLogTag, '[RULES] Failed: ' + err); }
         }
 
-        // Reload rules periodically (every 60s) so user edits take effect
         function scheduleRuleReload() {
             setTimeout(function() {
                 Java.perform(function() {
-                    var oldBlock = blockPatterns.length;
-                    var oldRewrite = rewriteRules.length;
-                    blockPatterns = [];
-                    rewriteRules = [];
+                    var ob = blockPatterns.length, or2 = rewriteRules.length, od = apiDumpEnabled;
+                    blockPatterns = []; rewriteRules = [];
                     loadBlockingRules();
-                    if (blockPatterns.length !== oldBlock || rewriteRules.length !== oldRewrite) {
-                        Log.i(netLogTag, '[RULES] Rules reloaded: ' + blockPatterns.length + ' block, '
-                            + rewriteRules.length + ' rewrite');
+                    if (blockPatterns.length !== ob || rewriteRules.length !== or2 || apiDumpEnabled !== od) {
+                        Log.i(netLogTag, '[RULES] Reloaded: ' + blockPatterns.length + ' block, ' + rewriteRules.length + ' rewrite, dump=' + (apiDumpEnabled?'ON':'OFF'));
                     }
                 });
                 scheduleRuleReload();
-            }, 60000);
+            }, 5000);
         }
-
         loadBlockingRules();
         scheduleRuleReload();
 
-        // Check if a URL should be blocked (returns true if blocked)
         function shouldBlock(url) {
             for (var i = 0; i < blockPatterns.length; i++) {
-                if (url.indexOf(blockPatterns[i]) !== -1) {
-                    return blockPatterns[i];
-                }
+                if (url.indexOf(blockPatterns[i]) !== -1) return blockPatterns[i];
             }
             return null;
         }
 
-        // Apply rewrite rules to URL, returns modified URL string
         function applyRewrites(url) {
-            var modified = url;
-            var changed = false;
+            var modified = url, changed = false;
             for (var i = 0; i < rewriteRules.length; i++) {
                 if (modified.indexOf(rewriteRules[i].from) !== -1) {
                     modified = modified.split(rewriteRules[i].from).join(rewriteRules[i].to);
@@ -384,489 +415,612 @@ setTimeout(function() {
             try {
                 var ctx = Java.use('android.app.ActivityThread').currentApplication();
                 if (ctx === null) return;
-                var NL = Java.use('in.startv.hotstar.NetworkLogger');
-                NL.init(ctx);
+                Java.use('in.startv.hotstar.NetworkLogger').init(ctx);
             } catch (e) { }
         }
-
         function safeNetworkLoggerLog(line) {
-            try {
-                ensureNetworkLoggerInitialized();
-                var NL = Java.use('in.startv.hotstar.NetworkLogger');
-                NL.log(line);
-            } catch (e) { }
+            try { ensureNetworkLoggerInitialized(); Java.use('in.startv.hotstar.NetworkLogger').log(line); } catch (e) { }
         }
-
         function logRewritten(source, method, before, after) {
             Log.i(netLogTag, '[REWRITE] [' + source + '] ' + method + ' ' + before + ' -> ' + after);
             safeNetworkLoggerLog('[REWRITE] [' + source + '] ' + method + ' ' + before + ' -> ' + after);
+            apiDumpEvent(source, method, before + ' -> ' + after);
         }
-
-        // Log blocked request
         function logBlocked(source, method, url, pattern) {
             Log.i(netLogTag, '[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
-            // Also log to file via NetworkLogger if available
+            safeNetworkLoggerLog('[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
             try {
-                ensureNetworkLoggerInitialized();
-                var NL = Java.use('in.startv.hotstar.NetworkLogger');
-                NL.log('[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
-            } catch(e) {}
-
-            // Also log to blocked_urls.txt
-            try {
-                var HSConfig = Java.use('in.startv.hotstar.HSPatchConfig');
-                var blockedPath = HSConfig.getFilePath('blocked_urls.txt');
-                var fw = Java.use('java.io.FileWriter').$new(blockedPath, true);
-                var ts = Java.use('java.text.SimpleDateFormat').$new('HH:mm:ss')
-                    .format(Java.use('java.util.Date').$new());
-                fw.write(ts + ' [' + source + '] ' + method + ' ' + url + '\n');
-                fw.flush();
-                fw.close();
+                var bp = getInternalFilePath('blocked_urls.txt');
+                if (bp) { var fw = Java.use('java.io.FileWriter').$new(bp, true); fw.write(url + '\n'); fw.flush(); fw.close(); }
             } catch(e2) {}
+            apiDumpEvent(source, method, 'BLOCK ' + url + ' (matched: ' + pattern + ')');
         }
 
-        // ===== Hostname-level rewriting so rules apply to raw sockets / DNS / UDP too =====
-        function rewriteHostIfNeeded(source, method, host) {
-            if (host === null || host === undefined) return host;
-            var hostStr = host.toString();
-            if (hostStr.length === 0) return host;
-            // Avoid rewriting full URLs passed to DNS APIs by accident
-            if (hostStr.indexOf('://') !== -1 || hostStr.indexOf('/') !== -1) return host;
+        // =========================================================
+        //  LAYER 1: NATIVE libc HOOKS  — GROUND TRUTH
+        //  Every TCP/UDP/DNS call on Android goes through these.
+        //  No Java library, native SDK, or JNI code can bypass them.
+        // =========================================================
 
-            var rewritten = applyRewrites(hostStr);
-            if (rewritten.changed && rewritten.url !== hostStr) {
-                logRewritten(source, method, hostStr, rewritten.url);
-                return rewritten.url;
+        // fd → destination map for correlating send/recv with connections
+        var _fdMap = {};
+        // Throttle: don't spam logcat for every send/recv on the same fd
+        var _fdLoggedSend = {};
+        var _fdLoggedRecv = {};
+
+        // Parse struct sockaddr → { family, ip, port }
+        function parseSockaddr(addrPtr, addrLen) {
+            try {
+                if (addrPtr.isNull()) return null;
+                var family = addrPtr.readU16();
+
+                if (family === 2 && addrLen >= 8) { // AF_INET
+                    var port = (addrPtr.add(2).readU8() << 8) | addrPtr.add(3).readU8();
+                    var ip = addrPtr.add(4).readU8() + '.' + addrPtr.add(5).readU8() + '.' +
+                             addrPtr.add(6).readU8() + '.' + addrPtr.add(7).readU8();
+                    return { family: 'IPv4', ip: ip, port: port };
+                }
+
+                if (family === 10 && addrLen >= 28) { // AF_INET6
+                    var port6 = (addrPtr.add(2).readU8() << 8) | addrPtr.add(3).readU8();
+                    // Check for IPv4-mapped (::ffff:x.x.x.x)
+                    var b10 = addrPtr.add(8 + 10).readU8(), b11 = addrPtr.add(8 + 11).readU8();
+                    if (b10 === 0xff && b11 === 0xff) {
+                        var ip4 = addrPtr.add(8+12).readU8() + '.' + addrPtr.add(8+13).readU8() + '.' +
+                                  addrPtr.add(8+14).readU8() + '.' + addrPtr.add(8+15).readU8();
+                        return { family: 'IPv4', ip: ip4, port: port6 };
+                    }
+                    var parts = [];
+                    for (var j = 0; j < 16; j += 2) {
+                        parts.push(((addrPtr.add(8+j).readU8() << 8) | addrPtr.add(8+j+1).readU8()).toString(16));
+                    }
+                    return { family: 'IPv6', ip: parts.join(':'), port: port6 };
+                }
+
+                return null; // AF_UNIX, etc. — skip
+            } catch (e) { return null; }
+        }
+
+        // Util: first N printable chars from a buffer (for peeking at HTTP headers)
+        function peekBuf(ptr, len, maxChars) {
+            try {
+                var n = Math.min(len, maxChars || 256);
+                var bytes = ptr.readByteArray(n);
+                if (bytes === null) return '';
+                var arr = new Uint8Array(bytes);
+                var s = '';
+                for (var i = 0; i < arr.length; i++) {
+                    var c = arr[i];
+                    if (c === 0) break;
+                    if (c >= 0x20 && c < 0x7f) s += String.fromCharCode(c);
+                    else if (c === 0x0a) s += '\\n';
+                    else if (c === 0x0d) s += '\\r';
+                    else s += '.';
+                }
+                return s;
+            } catch (e) { return ''; }
+        }
+
+        // === connect(fd, addr, addrlen) — EVERY outbound TCP/UDP connection ===
+        try {
+            var _connectPtr = Module.getExportByName('libc.so', 'connect');
+            Interceptor.attach(_connectPtr, {
+                onEnter: function(args) {
+                    this.fd = args[0].toInt32();
+                    this.sa = parseSockaddr(args[1], args[2].toInt32());
+                },
+                onLeave: function(retval) {
+                    if (this.sa === null) return;
+                    var dest = this.sa.ip + ':' + this.sa.port;
+                    _fdMap[this.fd] = dest;
+                    _fdLoggedSend[this.fd] = 0;
+                    _fdLoggedRecv[this.fd] = 0;
+
+                    // Skip loopback noise
+                    if (this.sa.ip === '127.0.0.1' || this.sa.ip === '0:0:0:0:0:0:0:1') return;
+
+                    var ret = retval.toInt32();
+                    var status = (ret === 0 || ret === -1) ? '' : ' err=' + ret;
+                    // -1 with EINPROGRESS is normal for non-blocking sockets
+
+                    console.log('[NET] CONNECT fd=' + this.fd + ' -> ' + dest + status);
+                    nativeLog('[NET] CONNECT fd=' + this.fd + ' -> ' + dest + status);
+                    apiDumpEvent('NATIVE', 'CONNECT', 'fd=' + this.fd + ' ' + this.sa.family + ' ' + dest + status);
+                }
+            });
+            nativeLog('[+] Native connect() hooked');
+        } catch (e) { nativeLog('[-] connect hook: ' + e); }
+
+        // === getaddrinfo(hostname, service, hints, res) — ALL DNS lookups ===
+        try {
+            var _gaiPtr = Module.getExportByName('libc.so', 'getaddrinfo');
+            Interceptor.attach(_gaiPtr, {
+                onEnter: function(args) {
+                    this.host = args[0].isNull() ? null : args[0].readCString();
+                    this.svc = args[1].isNull() ? null : args[1].readCString();
+                },
+                onLeave: function(retval) {
+                    if (this.host === null) return;
+                    var entry = this.host + (this.svc ? ':' + this.svc : '');
+                    nativeLog('[NET] DNS ' + entry);
+                    apiDumpEvent('DNS', 'RESOLVE', entry);
+
+                    // Block check on hostname
+                    var bm = shouldBlock(this.host);
+                    if (bm !== null) {
+                        nativeLog('[NET] DNS BLOCKED: ' + this.host + ' (rule: ' + bm + ')');
+                        apiDumpEvent('DNS', 'BLOCKED', this.host + ' rule=' + bm);
+                        // Return EAI_NONAME (8) to fail the lookup
+                        retval.replace(8);
+                    }
+                }
+            });
+            nativeLog('[+] Native getaddrinfo() hooked');
+        } catch (e) { nativeLog('[-] getaddrinfo hook: ' + e); }
+
+        // === send(fd, buf, len, flags) — outbound data on sockets ===
+        try {
+            var _sendPtr = Module.getExportByName('libc.so', 'send');
+            Interceptor.attach(_sendPtr, {
+                onEnter: function(args) {
+                    this.fd = args[0].toInt32();
+                    this.buf = args[1];
+                    this.len = args[2].toInt32();
+                },
+                onLeave: function(retval) {
+                    var sent = retval.toInt32();
+                    if (sent <= 0) return;
+                    var dest = _fdMap[this.fd];
+                    if (!dest) return; // Not a tracked socket (local/IPC)
+
+                    // Log first occurrence per fd, then only every 50th to reduce spam
+                    if (!_fdLoggedSend[this.fd]) _fdLoggedSend[this.fd] = 0;
+                    _fdLoggedSend[this.fd]++;
+                    if (_fdLoggedSend[this.fd] === 1 || _fdLoggedSend[this.fd] % 50 === 0) {
+                        var peek = peekBuf(this.buf, this.len, 128);
+                        console.log('[NET] >> SEND fd=' + this.fd + ' ' + dest + ' ' + sent + 'B' + (peek.length > 0 ? ' [' + peek.substring(0, 80) + ']' : ''));
+                    }
+                    apiDumpEvent('NATIVE', 'SEND', dest + ' ' + sent + 'B fd=' + this.fd);
+                    if (apiDumpEnabled && this.len > 0) {
+                        var p = peekBuf(this.buf, this.len, 512);
+                        if (p.length > 0) apiDumpWrite('  >> ' + p);
+                    }
+                }
+            });
+            console.log('[+] Native send() hooked');
+        } catch (e) { console.log('[-] send hook: ' + e); }
+
+        // === sendto(fd, buf, len, flags, dest_addr, addrlen) — UDP + unconnected sends ===
+        try {
+            var _sendtoPtr = Module.getExportByName('libc.so', 'sendto');
+            Interceptor.attach(_sendtoPtr, {
+                onEnter: function(args) {
+                    this.fd = args[0].toInt32();
+                    this.buf = args[1];
+                    this.len = args[2].toInt32();
+                    // arg[4] = dest sockaddr (for UDP)
+                    if (!args[4].isNull()) {
+                        this.dest = parseSockaddr(args[4], args[5].toInt32());
+                    } else {
+                        this.dest = null;
+                    }
+                },
+                onLeave: function(retval) {
+                    var sent = retval.toInt32();
+                    if (sent <= 0) return;
+                    var dest = this.dest ? (this.dest.ip + ':' + this.dest.port) : (_fdMap[this.fd] || null);
+                    if (!dest) return;
+                    if (dest.indexOf('127.0.0.1') === 0) return;
+
+                    console.log('[NET] >> SENDTO fd=' + this.fd + ' ' + dest + ' ' + sent + 'B');
+                    apiDumpEvent('NATIVE', 'SENDTO', dest + ' ' + sent + 'B fd=' + this.fd);
+                    if (apiDumpEnabled && this.len > 0) {
+                        var p = peekBuf(this.buf, this.len, 512);
+                        if (p.length > 0) apiDumpWrite('  >> ' + p);
+                    }
+                }
+            });
+            console.log('[+] Native sendto() hooked');
+        } catch (e) { console.log('[-] sendto hook: ' + e); }
+
+        // === recvfrom(fd, buf, len, flags, src_addr, addrlen) — incoming data ===
+        try {
+            var _recvfromPtr = Module.getExportByName('libc.so', 'recvfrom');
+            Interceptor.attach(_recvfromPtr, {
+                onEnter: function(args) {
+                    this.fd = args[0].toInt32();
+                    this.buf = args[1];
+                    this.len = args[2].toInt32();
+                },
+                onLeave: function(retval) {
+                    var recvd = retval.toInt32();
+                    if (recvd <= 0) return;
+                    var src = _fdMap[this.fd];
+                    if (!src) return;
+
+                    if (!_fdLoggedRecv[this.fd]) _fdLoggedRecv[this.fd] = 0;
+                    _fdLoggedRecv[this.fd]++;
+                    if (_fdLoggedRecv[this.fd] === 1 || _fdLoggedRecv[this.fd] % 50 === 0) {
+                        console.log('[NET] << RECV fd=' + this.fd + ' ' + src + ' ' + recvd + 'B');
+                    }
+                    apiDumpEvent('NATIVE', 'RECV', src + ' ' + recvd + 'B fd=' + this.fd);
+                    if (apiDumpEnabled && recvd > 0) {
+                        var p = peekBuf(this.buf, recvd, 512);
+                        if (p.length > 0) apiDumpWrite('  << ' + p);
+                    }
+                }
+            });
+            console.log('[+] Native recvfrom() hooked');
+        } catch (e) { console.log('[-] recvfrom hook: ' + e); }
+
+        // === write(fd, buf, count) — catches HTTP libs that use write() on sockets ===
+        try {
+            var _writePtr = Module.getExportByName('libc.so', 'write');
+            Interceptor.attach(_writePtr, {
+                onEnter: function(args) {
+                    this.fd = args[0].toInt32();
+                    this.buf = args[1];
+                    this.count = args[2].toInt32();
+                },
+                onLeave: function(retval) {
+                    var written = retval.toInt32();
+                    if (written <= 0) return;
+                    // Only log if this fd is a known network socket (from connect)
+                    var dest = _fdMap[this.fd];
+                    if (!dest) return;
+
+                    apiDumpEvent('NATIVE', 'WRITE', dest + ' ' + written + 'B fd=' + this.fd);
+                    if (apiDumpEnabled && this.count > 0) {
+                        var p = peekBuf(this.buf, this.count, 512);
+                        if (p.length > 0) apiDumpWrite('  w> ' + p);
+                    }
+                }
+            });
+            console.log('[+] Native write() hooked (socket-filtered)');
+        } catch (e) { console.log('[-] write hook: ' + e); }
+
+        // === read(fd, buf, count) — catches responses on sockets ===
+        try {
+            var _readPtr = Module.getExportByName('libc.so', 'read');
+            Interceptor.attach(_readPtr, {
+                onEnter: function(args) {
+                    this.fd = args[0].toInt32();
+                    this.buf = args[1];
+                },
+                onLeave: function(retval) {
+                    var rd = retval.toInt32();
+                    if (rd <= 0) return;
+                    var src = _fdMap[this.fd];
+                    if (!src) return;
+
+                    apiDumpEvent('NATIVE', 'READ', src + ' ' + rd + 'B fd=' + this.fd);
+                    if (apiDumpEnabled && rd > 0) {
+                        var p = peekBuf(this.buf, rd, 512);
+                        if (p.length > 0) apiDumpWrite('  r< ' + p);
+                    }
+                }
+            });
+            console.log('[+] Native read() hooked (socket-filtered)');
+        } catch (e) { console.log('[-] read hook: ' + e); }
+
+        // === close(fd) — cleanup fd tracking ===
+        try {
+            var _closePtr = Module.getExportByName('libc.so', 'close');
+            Interceptor.attach(_closePtr, {
+                onEnter: function(args) {
+                    var fd = args[0].toInt32();
+                    if (_fdMap[fd]) {
+                        delete _fdMap[fd];
+                        delete _fdLoggedSend[fd];
+                        delete _fdLoggedRecv[fd];
+                    }
+                }
+            });
+        } catch (e) { }
+
+        console.log('[*] Native libc network hooks installed (Layer 1)');
+
+
+        // =========================================================
+        //  LAYER 2: NATIVE TLS HOOKS — SEE DECRYPTED HTTPS DATA
+        //  Hooks SSL_write/SSL_read from BoringSSL (libssl.so)
+        //  This lets us see actual HTTP request/response HEADERS
+        //  through TLS. Works for ANY HTTP library.
+        // =========================================================
+
+        function tryAttachSSL(libName) {
+            var sslMod = null;
+            try { sslMod = Process.getModuleByName(libName); } catch (e) { return false; }
+            if (sslMod === null) return false;
+
+            // SSL_write(SSL*, buf, num) → see outgoing HTTPS plaintext
+            try {
+                var sslWritePtr = sslMod.getExportByName('SSL_write');
+                if (sslWritePtr) {
+                    Interceptor.attach(sslWritePtr, {
+                        onEnter: function(args) {
+                            this.ssl = args[0];
+                            this.buf = args[1];
+                            this.num = args[2].toInt32();
+                        },
+                        onLeave: function(retval) {
+                            var written = retval.toInt32();
+                            if (written <= 0) return;
+                            var peek = peekBuf(this.buf, written, 384);
+                            if (peek.length === 0) return;
+
+                            // HTTP method detection: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS
+                            var isHttp = /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|CONNECT) /.test(peek);
+                            if (isHttp) {
+                                // Extract first line (request line)
+                                var firstLine = peek.split('\\r\\n')[0] || peek.split('\\n')[0] || peek.substring(0, 120);
+                                console.log('[NET] >> TLS-OUT: ' + firstLine);
+                                apiDumpEvent('TLS', 'REQUEST', firstLine);
+                                // Try extracting Host header
+                                var hostMatch = peek.match(/Host: ([^\r\n\\]+)/i);
+                                if (hostMatch) {
+                                    apiDumpEvent('TLS', 'HOST', hostMatch[1]);
+                                }
+                            }
+                            if (apiDumpEnabled) {
+                                apiDumpWrite('  TLS>> ' + peek.substring(0, 512));
+                            }
+                        }
+                    });
+                    console.log('[+] SSL_write hooked from ' + libName);
+                }
+            } catch (e) { }
+
+            // SSL_read(SSL*, buf, num) → see incoming HTTPS plaintext
+            try {
+                var sslReadPtr = sslMod.getExportByName('SSL_read');
+                if (sslReadPtr) {
+                    Interceptor.attach(sslReadPtr, {
+                        onEnter: function(args) {
+                            this.ssl = args[0];
+                            this.buf = args[1];
+                            this.num = args[2].toInt32();
+                        },
+                        onLeave: function(retval) {
+                            var rd = retval.toInt32();
+                            if (rd <= 0) return;
+                            var peek = peekBuf(this.buf, rd, 384);
+                            if (peek.length === 0) return;
+
+                            // HTTP response detection
+                            var isResponse = /^HTTP\/[12]/.test(peek);
+                            if (isResponse) {
+                                var firstLine = peek.split('\\r\\n')[0] || peek.split('\\n')[0] || peek.substring(0, 120);
+                                console.log('[NET] << TLS-IN: ' + firstLine);
+                                apiDumpEvent('TLS', 'RESPONSE', firstLine);
+                            }
+                            if (apiDumpEnabled) {
+                                apiDumpWrite('  TLS<< ' + peek.substring(0, 512));
+                            }
+                        }
+                    });
+                    console.log('[+] SSL_read hooked from ' + libName);
+                }
+            } catch (e) { }
+
+            return true;
+        }
+
+        // Try hooking SSL from various possible library names
+        // BoringSSL on Android is typically libssl.so
+        // Some apps bundle their own (Chromium-based, Flutter, etc.)
+        var sslLibNames = ['libssl.so', 'libssl.so.3', 'libssl.so.1.1'];
+        var sslHooked = false;
+        for (var si = 0; si < sslLibNames.length; si++) {
+            if (tryAttachSSL(sslLibNames[si])) { sslHooked = true; break; }
+        }
+
+        // Also try hooking on module load for lazy-loaded SSL
+        if (!sslHooked) {
+            try {
+                var _sslObserver = Process.attachModuleObserver({
+                    onAdded: function(mod) {
+                        if (mod.name === 'libssl.so' || mod.name.indexOf('libssl') !== -1) {
+                            console.log('[+] Late-loaded SSL: ' + mod.name);
+                            tryAttachSSL(mod.name);
+                        }
+                    }
+                });
+            } catch (e) {
+                // attachModuleObserver not available on older Frida; fall back to delayed retry
+                setTimeout(function() {
+                    for (var si2 = 0; si2 < sslLibNames.length; si2++) {
+                        if (tryAttachSSL(sslLibNames[si2])) break;
+                    }
+                }, 3000);
             }
-            return host;
         }
 
-        try {
-            var InetAddress = Java.use('java.net.InetAddress');
-            InetAddress.getByName.overload('java.lang.String').implementation = function(host) {
-                var newHost = rewriteHostIfNeeded('InetAddress', 'getByName', host);
-                return this.getByName(newHost);
-            };
-        } catch (err) { }
+        console.log('[*] Native TLS hooks installed (Layer 2)');
 
-        try {
-            var InetSocketAddress = Java.use('java.net.InetSocketAddress');
-            InetSocketAddress.$init.overload('java.lang.String', 'int').implementation = function(host, port) {
-                var newHost = rewriteHostIfNeeded('InetSocketAddress', 'init', host);
-                return this.$init(newHost, port);
-            };
-        } catch (err) { }
 
-        try {
-            var DatagramPacket = Java.use('java.net.DatagramPacket');
-            DatagramPacket.$init.overload('[B', 'int', 'java.lang.String', 'int').implementation = function(buf, length, host, port) {
-                var newHost = rewriteHostIfNeeded('DatagramPacket', 'init', host);
-                return this.$init(buf, length, newHost, port);
-            };
-        } catch (err) { }
+        // =========================================================
+        //  LAYER 3: JAVA HOOKS — BLOCK/REWRITE ENFORCEMENT
+        //  These apply your blocking_rules to Java HTTP libraries.
+        //  Monitoring is handled by Layer 1+2 above.
+        // =========================================================
 
-        try {
-            var SocketCtor = Java.use('java.net.Socket');
-            SocketCtor.$init.overload('java.lang.String', 'int').implementation = function(host, port) {
-                var newHost = rewriteHostIfNeeded('Socket', 'init', host);
-                return this.$init(newHost, port);
-            };
-        } catch (err) { }
-
-        // URL.openConnection() — block or rewrite before connection opens
+        // --- URL constructor + openConnection ---
         try {
             var URL = Java.use('java.net.URL');
-            URL.openConnection.overload().implementation = function() {
-                var url = this.toString();
-
-                // Check block rules
-                var blockMatch = shouldBlock(url);
-                if (blockMatch !== null) {
-                    logBlocked('URL', 'OPEN', url, blockMatch);
-                    // Return connection to localhost to effectively null-route
-                    var nullUrl = Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked');
-                    return nullUrl.openConnection();
-                }
-
-                // Apply rewrite rules
-                var rewritten = applyRewrites(url);
-                if (rewritten.changed && rewritten.url !== url) {
-                    logRewritten('URL', 'OPEN', url, rewritten.url);
-                    var newUrl = Java.use('java.net.URL').$new(rewritten.url);
-                    return newUrl.openConnection();
-                }
-
-                Log.i(netLogTag, 'OPEN ' + url);
-                return this.openConnection();
+            try {
+                var _urlInit = URL.$init.overload('java.lang.String');
+                _urlInit.implementation = function(spec) {
+                    var s = spec ? spec.toString() : '';
+                    if (s.length > 0) {
+                        var bm = shouldBlock(s);
+                        if (bm !== null) { logBlocked('URL', 'INIT', s, bm); return _urlInit.call(this, 'http://127.0.0.1:1/blocked'); }
+                        var rw = applyRewrites(s);
+                        if (rw.changed) { logRewritten('URL', 'INIT', s, rw.url); return _urlInit.call(this, rw.url); }
+                    }
+                    return _urlInit.call(this, spec);
+                };
+            } catch (e) { }
+            var _urlOpen0 = URL.openConnection.overload();
+            _urlOpen0.implementation = function() {
+                var u = this.toString();
+                var bm = shouldBlock(u);
+                if (bm !== null) { logBlocked('URL', 'OPEN', u, bm); return _urlOpen0.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked')); }
+                var rw = applyRewrites(u);
+                if (rw.changed) { logRewritten('URL', 'OPEN', u, rw.url); return _urlOpen0.call(Java.use('java.net.URL').$new(rw.url)); }
+                return _urlOpen0.call(this);
             };
-
-            // Also cover openConnection(Proxy)
-            URL.openConnection.overload('java.net.Proxy').implementation = function(proxy) {
-                var url = this.toString();
-
-                var blockMatch = shouldBlock(url);
-                if (blockMatch !== null) {
-                    logBlocked('URL', 'OPEN_PROXY', url, blockMatch);
-                    var nullUrl = Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked');
-                    return nullUrl.openConnection(proxy);
-                }
-
-                var rewritten = applyRewrites(url);
-                if (rewritten.changed && rewritten.url !== url) {
-                    logRewritten('URL', 'OPEN_PROXY', url, rewritten.url);
-                    var newUrl = Java.use('java.net.URL').$new(rewritten.url);
-                    return newUrl.openConnection(proxy);
-                }
-
-                Log.i(netLogTag, 'OPEN_PROXY ' + url);
-                return this.openConnection(proxy);
-            };
+            try {
+                var _urlOpenProxy = URL.openConnection.overload('java.net.Proxy');
+                _urlOpenProxy.implementation = function(proxy) {
+                    var u = this.toString();
+                    var bm = shouldBlock(u);
+                    if (bm !== null) { logBlocked('URL', 'OPEN_PROXY', u, bm); return _urlOpenProxy.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked'), proxy); }
+                    var rw = applyRewrites(u);
+                    if (rw.changed) { logRewritten('URL', 'OPEN_PROXY', u, rw.url); return _urlOpenProxy.call(Java.use('java.net.URL').$new(rw.url), proxy); }
+                    return _urlOpenProxy.call(this, proxy);
+                };
+            } catch (e) { }
         } catch (err) { }
 
-        // OkHttp3 — intercept newCall, block or rewrite request URL
+        // --- OkHttp3 newCall — block/rewrite ---
         try {
             var OkHttpClient = Java.use('okhttp3.OkHttpClient');
-            OkHttpClient.newCall.implementation = function(request) {
+            var _okNewCall = OkHttpClient.newCall.overload('okhttp3.Request');
+            _okNewCall.implementation = function(request) {
                 var url = request.url().toString();
                 var method = request.method();
-
-                // Check block rules
-                var blockMatch = shouldBlock(url);
-                if (blockMatch !== null) {
-                    logBlocked('OkHttp3', method, url, blockMatch);
-                    // Build a new request to localhost to null-route
-                    var Builder = Java.use('okhttp3.Request$Builder');
-                    var HttpUrl = Java.use('okhttp3.HttpUrl');
-                    var blockedUrl = HttpUrl.parse('http://127.0.0.1:1/blocked');
-                    var blockedReq = request.newBuilder().url(blockedUrl).build();
-                    return this.newCall(blockedReq);
+                var bm = shouldBlock(url);
+                if (bm !== null) {
+                    logBlocked('OkHttp3', method, url, bm);
+                    var blockedReq = request.newBuilder().url(Java.use('okhttp3.HttpUrl').parse('http://127.0.0.1:1/blocked')).build();
+                    return _okNewCall.call(this, blockedReq);
                 }
-
-                // Apply rewrite rules
-                var rewritten = applyRewrites(url);
-                if (rewritten.changed && rewritten.url !== url) {
-                    logRewritten('OkHttp3', method, url, rewritten.url);
-                    var HttpUrl2 = Java.use('okhttp3.HttpUrl');
-                    var newHttpUrl = HttpUrl2.parse(rewritten.url);
-                    if (newHttpUrl !== null) {
-                        var newReq = request.newBuilder().url(newHttpUrl).build();
-                        return this.newCall(newReq);
-                    }
+                var rw = applyRewrites(url);
+                if (rw.changed) {
+                    logRewritten('OkHttp3', method, url, rw.url);
+                    var newHttpUrl = Java.use('okhttp3.HttpUrl').parse(rw.url);
+                    if (newHttpUrl !== null) return _okNewCall.call(this, request.newBuilder().url(newHttpUrl).build());
                 }
-
-                Log.i(netLogTag, 'REQ ' + method + ' ' + url);
-                return this.newCall(request);
+                return _okNewCall.call(this, request);
             };
         } catch (err) { }
 
-        // HttpURLConnection — block before connect
+        // --- Cronet newUrlRequestBuilder — block/rewrite ---
+        // Cronet is Chromium's native HTTP stack. Hotstar uses it for most API traffic.
+        // It bypasses HttpURLConnection and OkHttp completely.
         try {
-            var HttpURLConnection = Java.use('java.net.HttpURLConnection');
-            HttpURLConnection.connect.implementation = function() {
-                var url = this.getURL().toString();
-
-                var blockMatch = shouldBlock(url);
-                if (blockMatch !== null) {
-                    logBlocked('HttpConn', 'CONN', url, blockMatch);
-                    // Throw IOException to prevent the connection
-                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+            var CronetEngine = Java.use('org.chromium.net.CronetEngine');
+            var _cronetNewUrlReq = CronetEngine.newUrlRequestBuilder.overload(
+                'java.lang.String', 'org.chromium.net.UrlRequest$Callback', 'java.util.concurrent.Executor'
+            );
+            _cronetNewUrlReq.implementation = function(url, callback, executor) {
+                var u = url ? url.toString() : '';
+                var bm = shouldBlock(u);
+                if (bm !== null) {
+                    logBlocked('Cronet', 'REQUEST', u, bm);
+                    // Redirect to loopback — Cronet will fail with connection refused
+                    return _cronetNewUrlReq.call(this, 'http://127.0.0.1:1/blocked', callback, executor);
                 }
-
-                Log.i(netLogTag, 'CONN ' + url);
-                this.connect();
+                var rw = applyRewrites(u);
+                if (rw.changed) {
+                    logRewritten('Cronet', 'REQUEST', u, rw.url);
+                    return _cronetNewUrlReq.call(this, rw.url, callback, executor);
+                }
+                return _cronetNewUrlReq.call(this, url, callback, executor);
             };
-        } catch (err) { }
+            Log.i(netLogTag, '[+] Cronet newUrlRequestBuilder hooked');
+        } catch (err) { Log.d(netLogTag, '[-] Cronet hook: ' + err); }
 
-        // WebView URL — block before loading
+        // --- WebView loadUrl — block/rewrite ---
         try {
             var WebView = Java.use('android.webkit.WebView');
-            WebView.loadUrl.overload('java.lang.String').implementation = function(url) {
-                var blockMatch = shouldBlock(url);
-                if (blockMatch !== null) {
-                    logBlocked('WebView', 'LOAD', url, blockMatch);
-                    // Load blank page instead
-                    this.loadUrl('about:blank');
-                    return;
-                }
-
-                var rewritten = applyRewrites(url);
-                if (rewritten.changed && rewritten.url !== url) {
-                    logRewritten('WebView', 'LOAD', url, rewritten.url);
-                    this.loadUrl(rewritten.url);
-                    return;
-                }
-
-                Log.i(netLogTag, 'WEBVIEW ' + url);
-                this.loadUrl(url);
+            var _wvLoad1 = WebView.loadUrl.overload('java.lang.String');
+            _wvLoad1.implementation = function(url) {
+                var bm = shouldBlock(url);
+                if (bm !== null) { logBlocked('WebView', 'LOAD', url, bm); _wvLoad1.call(this, 'about:blank'); return; }
+                var rw = applyRewrites(url);
+                if (rw.changed) { logRewritten('WebView', 'LOAD', url, rw.url); _wvLoad1.call(this, rw.url); return; }
+                _wvLoad1.call(this, url);
             };
+            try {
+                var _wvLoad2 = WebView.loadUrl.overload('java.lang.String', 'java.util.Map');
+                _wvLoad2.implementation = function(url, headers) {
+                    var bm = shouldBlock(url);
+                    if (bm !== null) { logBlocked('WebView', 'LOAD', url, bm); _wvLoad1.call(this, 'about:blank'); return; }
+                    var rw = applyRewrites(url);
+                    if (rw.changed) { logRewritten('WebView', 'LOAD', url, rw.url); _wvLoad2.call(this, rw.url, headers); return; }
+                    _wvLoad2.call(this, url, headers);
+                };
+            } catch (e) { }
+            try {
+                var _wvPost = WebView.postUrl.overload('java.lang.String', '[B');
+                _wvPost.implementation = function(url, data) {
+                    var bm = shouldBlock(url);
+                    if (bm !== null) { logBlocked('WebView', 'POST', url, bm); _wvLoad1.call(this, 'about:blank'); return; }
+                    var rw = applyRewrites(url);
+                    if (rw.changed) { logRewritten('WebView', 'POST', url, rw.url); _wvPost.call(this, rw.url, data); return; }
+                    _wvPost.call(this, url, data);
+                };
+            } catch (e) { }
+        } catch (err) { }
 
-            // loadUrl(String, Map) overload
-            WebView.loadUrl.overload('java.lang.String', 'java.util.Map').implementation = function(url, headers) {
-                var blockMatch = shouldBlock(url);
-                if (blockMatch !== null) {
-                    logBlocked('WebView', 'LOAD_HEADERS', url, blockMatch);
-                    this.loadUrl('about:blank');
-                    return;
-                }
-
-                var rewritten = applyRewrites(url);
-                if (rewritten.changed && rewritten.url !== url) {
-                    logRewritten('WebView', 'LOAD_HEADERS', url, rewritten.url);
-                    this.loadUrl(rewritten.url, headers);
-                    return;
-                }
-
-                Log.i(netLogTag, 'WEBVIEW ' + url);
-                this.loadUrl(url, headers);
-            };
-
-            // postUrl(String, byte[]) overload
-            WebView.postUrl.overload('java.lang.String', '[B').implementation = function(url, postData) {
-                var blockMatch = shouldBlock(url);
-                if (blockMatch !== null) {
-                    logBlocked('WebView', 'POST', url, blockMatch);
-                    this.loadUrl('about:blank');
-                    return;
-                }
-
-                var rewritten = applyRewrites(url);
-                if (rewritten.changed && rewritten.url !== url) {
-                    logRewritten('WebView', 'POST', url, rewritten.url);
-                    this.postUrl(rewritten.url, postData);
-                    return;
-                }
-
-                Log.i(netLogTag, 'WEBVIEW.POST ' + url);
-                this.postUrl(url, postData);
+        // --- HttpURLConnection — block before connect ---
+        try {
+            var HttpURLConnection = Java.use('java.net.HttpURLConnection');
+            var _hucConnect = HttpURLConnection.connect;
+            _hucConnect.implementation = function() {
+                var u = this.getURL().toString();
+                var bm = shouldBlock(u);
+                if (bm !== null) { logBlocked('HttpConn', 'CONN', u, bm); throw Java.use('java.io.IOException').$new('HSPatch: blocked: ' + bm); }
+                return _hucConnect.call(this);
             };
         } catch (err) { }
 
-        // Socket connect — block by host pattern (both overloads)
+        // --- InetAddress/Socket blocking + rewriting for hostname-level rules ---
         try {
-            var Socket = Java.use('java.net.Socket');
-            Socket.connect.overload('java.net.SocketAddress', 'int').implementation = function(addr, timeout) {
-                var addrStr = addr.toString();
-
-                var blockMatch = shouldBlock(addrStr);
-                if (blockMatch !== null) {
-                    logBlocked('Socket', 'CONNECT', addrStr, blockMatch);
-                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
-                }
-
-                // Attempt rewrite for InetSocketAddress hostnames
-                try {
-                    var InetSocketAddress = Java.use('java.net.InetSocketAddress');
-                    var isa = Java.cast(addr, InetSocketAddress);
-                    var host = isa.getHostString ? isa.getHostString() : isa.getHostName();
-                    var port = isa.getPort();
-                    var newHost = rewriteHostIfNeeded('Socket', 'CONNECT', host);
-                    if (newHost !== host) {
-                        var newAddr = InetSocketAddress.$new(newHost, port);
-                        Log.i(netLogTag, 'SOCKET ' + newHost + ':' + port);
-                        this.connect(newAddr, timeout);
-                        return;
+            var InetAddress = Java.use('java.net.InetAddress');
+            var _inetGetByName = InetAddress.getByName.overload('java.lang.String');
+            _inetGetByName.implementation = function(host) {
+                if (host) {
+                    var h = host.toString();
+                    // Block check first
+                    var bm = shouldBlock(h);
+                    if (bm !== null) {
+                        logBlocked('InetAddress', 'getByName', h, bm);
+                        // Return loopback to fail connections
+                        return _inetGetByName.call(this, '127.0.0.1');
                     }
-                } catch (e) { }
-
-                Log.i(netLogTag, 'SOCKET ' + addrStr);
-                this.connect(addr, timeout);
-            };
-        } catch (err) { }
-
-        try {
-            var Socket2 = Java.use('java.net.Socket');
-            Socket2.connect.overload('java.net.SocketAddress').implementation = function(addr) {
-                var addrStr = addr.toString();
-
-                var blockMatch = shouldBlock(addrStr);
-                if (blockMatch !== null) {
-                    logBlocked('Socket', 'CONNECT0', addrStr, blockMatch);
-                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
+                    // Rewrite check
+                    var rw = applyRewrites(h);
+                    if (rw.changed) { logRewritten('InetAddress','getByName',h,rw.url); return _inetGetByName.call(this, rw.url); }
                 }
-
-                try {
-                    var InetSocketAddress = Java.use('java.net.InetSocketAddress');
-                    var isa = Java.cast(addr, InetSocketAddress);
-                    var host = isa.getHostString ? isa.getHostString() : isa.getHostName();
-                    var port = isa.getPort();
-                    var newHost = rewriteHostIfNeeded('Socket', 'CONNECT0', host);
-                    if (newHost !== host) {
-                        var newAddr = InetSocketAddress.$new(newHost, port);
-                        Log.i(netLogTag, 'SOCKET ' + newHost + ':' + port);
-                        this.connect(newAddr);
-                        return;
+                return _inetGetByName.call(this, host);
+            };
+            // Also hook getAllByName for comprehensive blocking
+            try {
+                var _inetGetAll = InetAddress.getAllByName.overload('java.lang.String');
+                _inetGetAll.implementation = function(host) {
+                    if (host) {
+                        var h = host.toString();
+                        var bm = shouldBlock(h);
+                        if (bm !== null) {
+                            logBlocked('InetAddress', 'getAllByName', h, bm);
+                            return _inetGetAll.call(this, '127.0.0.1');
+                        }
+                        var rw = applyRewrites(h);
+                        if (rw.changed) { logRewritten('InetAddress','getAllByName',h,rw.url); return _inetGetAll.call(this, rw.url); }
                     }
-                } catch (e) { }
-
-                Log.i(netLogTag, 'SOCKET ' + addrStr);
-                this.connect(addr);
-            };
+                    return _inetGetAll.call(this, host);
+                };
+            } catch (e) { }
         } catch (err) { }
 
-        // SocketChannel.open(SocketAddress) — NIO socket blocking
-        try {
-            var SocketChannel = Java.use('java.nio.channels.SocketChannel');
-            SocketChannel.open.overload('java.net.SocketAddress').implementation = function(addr) {
-                var addrStr = addr.toString();
-
-                var blockMatch = shouldBlock(addrStr);
-                if (blockMatch !== null) {
-                    logBlocked('SocketChannel', 'OPEN', addrStr, blockMatch);
-                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
-                }
-
-                try {
-                    var InetSocketAddress = Java.use('java.net.InetSocketAddress');
-                    var isa = Java.cast(addr, InetSocketAddress);
-                    var host = isa.getHostString ? isa.getHostString() : isa.getHostName();
-                    var port = isa.getPort();
-                    var newHost = rewriteHostIfNeeded('SocketChannel', 'OPEN', host);
-                    if (newHost !== host) {
-                        var newAddr = InetSocketAddress.$new(newHost, port);
-                        Log.i(netLogTag, 'SOCKETCHANNEL ' + newHost + ':' + port);
-                        return this.open(newAddr);
-                    }
-                } catch (e) { }
-
-                Log.i(netLogTag, 'SOCKETCHANNEL ' + addrStr);
-                return this.open(addr);
-            };
-        } catch (err) { }
-
-        // SocketChannel.connect(SocketAddress) — NIO channel connect
-        try {
-            var SocketChannel2 = Java.use('java.nio.channels.SocketChannel');
-            SocketChannel2.connect.overload('java.net.SocketAddress').implementation = function(addr) {
-                var addrStr = addr.toString();
-
-                var blockMatch = shouldBlock(addrStr);
-                if (blockMatch !== null) {
-                    logBlocked('SocketChannel', 'CONNECT', addrStr, blockMatch);
-                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
-                }
-
-                try {
-                    var InetSocketAddress = Java.use('java.net.InetSocketAddress');
-                    var isa = Java.cast(addr, InetSocketAddress);
-                    var host = isa.getHostString ? isa.getHostString() : isa.getHostName();
-                    var port = isa.getPort();
-                    var newHost = rewriteHostIfNeeded('SocketChannel', 'CONNECT', host);
-                    if (newHost !== host) {
-                        var newAddr = InetSocketAddress.$new(newHost, port);
-                        Log.i(netLogTag, 'SOCKETCHANNEL.CONNECT ' + newHost + ':' + port);
-                        return this.connect(newAddr);
-                    }
-                } catch (e) { }
-
-                Log.i(netLogTag, 'SOCKETCHANNEL.CONNECT ' + addrStr);
-                return this.connect(addr);
-            };
-        } catch (err) { }
-
-        // DatagramSocket.connect — UDP socket blocking
-        try {
-            var DatagramSocket = Java.use('java.net.DatagramSocket');
-            DatagramSocket.connect.overload('java.net.InetAddress', 'int').implementation = function(address, port) {
-                var addrStr = address.getHostAddress() + ':' + port;
-
-                var blockMatch = shouldBlock(addrStr);
-                if (blockMatch !== null) {
-                    logBlocked('DatagramSocket', 'CONNECT', addrStr, blockMatch);
-                    throw Java.use('java.net.SocketException').$new('HSPatch: blocked by rule: ' + blockMatch);
-                }
-
-                Log.i(netLogTag, 'UDP.CONNECT ' + addrStr);
-                this.connect(address, port);
-            };
-        } catch (err) { }
-
-        // DatagramSocket.send — UDP packet blocking
-        try {
-            var DatagramSocket2 = Java.use('java.net.DatagramSocket');
-            DatagramSocket2.send.overload('java.net.DatagramPacket').implementation = function(packet) {
-                var addr = packet.getAddress();
-                if (addr !== null) {
-                    var addrStr = addr.getHostAddress() + ':' + packet.getPort();
-
-                    var blockMatch = shouldBlock(addrStr);
-                    if (blockMatch !== null) {
-                        logBlocked('DatagramSocket', 'SEND', addrStr, blockMatch);
-                        throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
-                    }
-
-                    Log.i(netLogTag, 'UDP.SEND ' + addrStr);
-                }
-                this.send(packet);
-            };
-        } catch (err) { }
-
-        // SSLSocketFactory.createSocket — SSL socket blocking
-        try {
-            var SSLSocketFactory = Java.use('javax.net.ssl.SSLSocketFactory');
-            SSLSocketFactory.createSocket.overload('java.lang.String', 'int').implementation = function(host, port) {
-                var addrStr = host + ':' + port;
-
-                var blockMatch = shouldBlock(addrStr);
-                if (blockMatch !== null) {
-                    logBlocked('SSLSocket', 'CREATE', addrStr, blockMatch);
-                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
-                }
-
-                var newHost = rewriteHostIfNeeded('SSLSocket', 'CREATE', host);
-                if (newHost !== host) {
-                    Log.i(netLogTag, 'SSL.CREATE ' + newHost + ':' + port);
-                    return this.createSocket(newHost, port);
-                }
-
-                Log.i(netLogTag, 'SSL.CREATE ' + addrStr);
-                return this.createSocket(host, port);
-            };
-
-            // Common overload used when TLS is layered on an existing Socket
-            SSLSocketFactory.createSocket.overload('java.net.Socket', 'java.lang.String', 'int', 'boolean').implementation = function(sock, host, port, autoClose) {
-                var addrStr = host + ':' + port;
-
-                var blockMatch = shouldBlock(addrStr);
-                if (blockMatch !== null) {
-                    logBlocked('SSLSocket', 'CREATE_WRAP', addrStr, blockMatch);
-                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
-                }
-
-                var newHost = rewriteHostIfNeeded('SSLSocket', 'CREATE_WRAP', host);
-                if (newHost !== host) {
-                    Log.i(netLogTag, 'SSL.CREATE_WRAP ' + newHost + ':' + port);
-                    return this.createSocket(sock, newHost, port, autoClose);
-                }
-
-                Log.i(netLogTag, 'SSL.CREATE_WRAP ' + addrStr);
-                return this.createSocket(sock, host, port, autoClose);
-            };
-
-            // Bind-local variant with hostname
-            SSLSocketFactory.createSocket.overload('java.lang.String', 'int', 'java.net.InetAddress', 'int').implementation = function(host, port, localAddr, localPort) {
-                var addrStr = host + ':' + port;
-
-                var blockMatch = shouldBlock(addrStr);
-                if (blockMatch !== null) {
-                    logBlocked('SSLSocket', 'CREATE_LOCAL', addrStr, blockMatch);
-                    throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + blockMatch);
-                }
-
-                var newHost = rewriteHostIfNeeded('SSLSocket', 'CREATE_LOCAL', host);
-                if (newHost !== host) {
-                    Log.i(netLogTag, 'SSL.CREATE_LOCAL ' + newHost + ':' + port);
-                    return this.createSocket(newHost, port, localAddr, localPort);
-                }
-
-                Log.i(netLogTag, 'SSL.CREATE_LOCAL ' + addrStr);
-                return this.createSocket(host, port, localAddr, localPort);
-            };
-        } catch (err) { }
-
-        console.log('[*] Network blocking + monitoring hooks installed');
-        console.log('[*] Block rules: ' + blockPatterns.length + ', Rewrite rules: ' + rewriteRules.length);
-        console.log('======================================================');
-        console.log('[#] HSPatch: All bypass modules active                [#]');
-        console.log('======================================================');
+        Log.i(netLogTag, '[*] Java block/rewrite hooks installed (Layer 3)');
+        Log.i(netLogTag, '======================================================');
+        Log.i(netLogTag, '[#] HSPatch v4.0: Native + Java network hooks active  [#]');
+        Log.i(netLogTag, '[*] Block rules: ' + blockPatterns.length + ', Rewrite rules: ' + rewriteRules.length);
+        Log.i(netLogTag, '[*] API dump: ' + (apiDumpEnabled ? 'ENABLED' : 'Create api_dump_enabled.txt to enable'));
+        Log.i(netLogTag, '======================================================');
     });
 }, 0);

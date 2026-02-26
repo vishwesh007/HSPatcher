@@ -160,6 +160,22 @@
     invoke-static {v1, v2}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I
     :after_dump
 
+    # 6) Show debug panel notification (dismissable or persistent based on toggle)
+    :try_notif
+    invoke-static {p0}, Lin/startv/hotstar/DebugNotification;->show(Landroid/content/Context;)V
+    :try_notif_end
+    .catch Ljava/lang/Throwable; {:try_notif .. :try_notif_end} :catch_notif
+    const-string v0, "HSPatch-Net"
+    const-string v1, "  [6] Debug notification: OK"
+    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+    goto :after_notif
+    :catch_notif
+    move-exception v0
+    const-string v0, "HSPatch-Net"
+    const-string v1, "  [6] Debug notification: skipped"
+    invoke-static {v0, v1}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I
+    :after_notif
+
     const/4 v0, 0x1
     sput-boolean v0, Lin/startv/hotstar/NetworkInterceptor;->initialized:Z
 

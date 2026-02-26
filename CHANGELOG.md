@@ -1,5 +1,13 @@
 # HSPatcher Changelog
 
+## v3.13 — 2026-02-25: URL-Safe Rewrite Rules + Socket Log Rewrites
+
+### Summary
+- **URL-safe rewrite delimiter**: rules now support `pattern=>replacement` so full URL character-sequence rewrites like `https://...` work reliably.
+- **Socket host logs reflect rewrites**: `[Socket] NEW HOST: ...` lines now pass through `UrlHook` so socket host entries show the rewritten sequence too.
+
+---
+
 ## v3.12 — 2026-02-25: Rewrites Everywhere + Consistent Logs
 
 ### Summary

@@ -1,0 +1,4 @@
+# Socket-log test: this should show up ONLY in '[Socket] NEW HOST' logs
+secure-media.hotstar.com=>secure-media.hotstar.com__TEST
+# Keep an obvious one too
+bifrost=>bisfrost

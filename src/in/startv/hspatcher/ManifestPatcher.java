@@ -33,6 +33,8 @@ public class ManifestPatcher {
     private static final int RES_ATTR_NAME       = 0x01010003;
     private static final int RES_ATTR_EXPORTED    = 0x01010010;
     private static final int RES_ATTR_AUTHORITIES = 0x01010018;
+    private static final int RES_ATTR_EXTRACT_NATIVE_LIBS = 0x010104ea;
+    private static final int RES_ATTR_REQUEST_LEGACY_STORAGE = 0x01010569;
 
     // Typed value types
     private static final int VAL_STRING  = 0x03;
@@ -543,5 +545,167 @@ public class ManifestPatcher {
         data[off + 1] = (byte) ((v >> 8) & 0xFF);
         data[off + 2] = (byte) ((v >> 16) & 0xFF);
         data[off + 3] = (byte) ((v >> 24) & 0xFF);
+    }
+
+    private static void writeShortAt(byte[] data, int off, int v) {
+        data[off]     = (byte) (v & 0xFF);
+        data[off + 1] = (byte) ((v >> 8) & 0xFF);
+    }
+
+    // ======================== extractNativeLibs FORCING ========================
+
+    /**
+     * Force android:extractNativeLibs="true" in the &lt;application&gt; element.
+     * Required for Frida gadget: when extractNativeLibs=false, native libs are
+     * loaded directly from the APK and Frida cannot find its config/script files
+     * (they must exist on the filesystem relative to the gadget binary).
+     *
+     * Handles two cases:
+     * 1) Attribute exists with value false → flip to true (simple byte change)
+     * 2) Attribute not present on &lt;application&gt; but resource ID is in the map
+     *    → insert 20-byte attribute into the element
+     */
+    public static byte[] forceExtractNativeLibs(byte[] data) {
+        try {
+            return forceApplicationBoolTrue(data, RES_ATTR_EXTRACT_NATIVE_LIBS, "extractNativeLibs");
+        } catch (Exception e) {
+            Log.e(TAG, "forceExtractNativeLibs failed: " + e.getMessage());
+            return data;
+        }
+    }
+
+    /**
+     * Force android:requestLegacyExternalStorage="true" on &lt;application&gt;.
+     * Required on Android 10 (API 29) for the app to read /sdcard/Download files
+     * with READ_EXTERNAL_STORAGE permission (scoped storage bypass).
+     */
+    public static byte[] forceRequestLegacyExternalStorage(byte[] data) {
+        try {
+            return forceApplicationBoolTrue(data, RES_ATTR_REQUEST_LEGACY_STORAGE, "requestLegacyExternalStorage");
+        } catch (Exception e) {
+            Log.e(TAG, "forceRequestLegacyExternalStorage failed: " + e.getMessage());
+            return data;
+        }
+    }
+
+    private static byte[] forceApplicationBoolTrue(byte[] data, int resId, String attrName) throws Exception {
+        if (data.length < 16) return data;
+        if (rShort(data, 0) != TYPE_XML) return data;
+
+        // ---- Parse string pool ----
+        int spOff = 8;
+        if (rShort(data, spOff) != TYPE_STRING_POOL) return data;
+        int spHdrSize   = rShort(data, spOff + 2);
+        int spChunkSize = rInt(data, spOff + 4);
+        int strCount    = rInt(data, spOff + 8);
+        int spFlags     = rInt(data, spOff + 16);
+        boolean utf8    = (spFlags & 0x100) != 0;
+        int strStart    = rInt(data, spOff + 20);
+
+        int offsBase    = spOff + spHdrSize;
+        int strDataBase = spOff + strStart;
+        String[] strings = new String[strCount];
+        for (int i = 0; i < strCount; i++) {
+            int off = rInt(data, offsBase + i * 4);
+            strings[i] = decodeString(data, strDataBase + off, utf8);
+        }
+
+        int applicationIdx = findStr(strings, "application");
+        if (applicationIdx < 0) return data;
+
+        int androidNsIdx = findStr(strings, "http://schemas.android.com/apk/res/android");
+        if (androidNsIdx < 0) return data;
+
+        // ---- Parse resource map ----
+        int rmOff = spOff + spChunkSize;
+        int rmChunkSize = 0;
+        int targetAttrIdx = -1;
+
+        if (rmOff + 8 <= data.length && rShort(data, rmOff) == TYPE_RESOURCE_MAP) {
+            rmChunkSize = rInt(data, rmOff + 4);
+            int rmCount = (rmChunkSize - 8) / 4;
+            for (int i = 0; i < rmCount; i++) {
+                if (rInt(data, rmOff + 8 + i * 4) == resId) {
+                    targetAttrIdx = i;
+                    break;
+                }
+            }
+        }
+
+        if (targetAttrIdx < 0) {
+            Log.w(TAG, "  " + attrName + " (0x" + Integer.toHexString(resId) + ") not in resource map — cannot patch");
+            return data;
+        }
+
+        // ---- Find <application> StartElement ----
+        int xmlTreeStart = rmOff + rmChunkSize;
+        int pos = xmlTreeStart;
+        while (pos + 8 <= data.length) {
+            int chunkType = rShort(data, pos);
+            int chunkSize = rInt(data, pos + 4);
+            if (chunkSize < 8 || pos + chunkSize > data.length) break;
+
+            if (chunkType == TYPE_ELEM_START && pos + 36 <= data.length) {
+                int nameIdx = rInt(data, pos + 20);
+                if (nameIdx == applicationIdx) {
+                    int attrCount = rShort(data, pos + 28) & 0xFFFF;
+
+                    // Scan attributes for target boolean attribute
+                    for (int a = 0; a < attrCount; a++) {
+                        int aOff = pos + 36 + a * 20;
+                        if (aOff + 20 > data.length) break;
+                        int attrNameIdx = rInt(data, aOff + 4);
+                        if (attrNameIdx == targetAttrIdx) {
+                            int dataType = data[aOff + 15] & 0xFF;
+                            int dataValue = rInt(data, aOff + 16);
+                            if (dataType == 0x12 && dataValue == 0) {
+                                // Case 1: boolean false → flip to true
+                                byte[] patched = data.clone();
+                                writeIntAt(patched, aOff + 16, 0xFFFFFFFF);
+                                Log.d(TAG, "  " + attrName + ": false → true (flipped)");
+                                return patched;
+                            }
+                            Log.d(TAG, "  " + attrName + " already true (type=0x"
+                                    + Integer.toHexString(dataType)
+                                    + " val=0x" + Integer.toHexString(dataValue) + ")");
+                            return data;
+                        }
+                    }
+
+                    // Case 2: attribute not on <application> — insert it
+                    int insertPos = pos + 36 + attrCount * 20;
+                    byte[] attr = new byte[20];
+                    writeIntAt(attr, 0, androidNsIdx);            // namespace
+                    writeIntAt(attr, 4, targetAttrIdx);           // name
+                    writeIntAt(attr, 8, 0xFFFFFFFF);              // rawValue = none
+                    attr[12] = 0x08; attr[13] = 0x00;            // typedValue.size = 8
+                    attr[14] = 0x00;                              // typedValue.res0
+                    attr[15] = 0x12;                              // typedValue.dataType = boolean
+                    writeIntAt(attr, 16, 0xFFFFFFFF);             // typedValue.data = true
+
+                    byte[] result = new byte[data.length + 20];
+                    System.arraycopy(data, 0, result, 0, insertPos);
+                    System.arraycopy(attr, 0, result, insertPos, 20);
+                    System.arraycopy(data, insertPos, result, insertPos + 20,
+                                     data.length - insertPos);
+
+                    // Update attrCount
+                    writeShortAt(result, pos + 28, attrCount + 1);
+                    // Update <application> chunk size
+                    int elemChunkSize = rInt(result, pos + 4);
+                    writeIntAt(result, pos + 4, elemChunkSize + 20);
+                    // Update file total size
+                    int fileSize = rInt(result, 4);
+                    writeIntAt(result, 4, fileSize + 20);
+
+                    Log.d(TAG, "  " + attrName + ": added as true (inserted attribute)");
+                    return result;
+                }
+            }
+            pos += chunkSize;
+        }
+
+        Log.w(TAG, "  <application> element not found in manifest");
+        return data;
     }
 }

@@ -1438,6 +1438,12 @@ public class PatchEngine {
             if (name.equals("AndroidManifest.xml")) {
                 byte[] mfBytes = readAllBytes(origZip.getInputStream(entry));
                 byte[] patched = ManifestPatcher.patch(mfBytes, packageName);
+                // Force extractNativeLibs=true so Frida gadget can find its
+                // config and script files on the filesystem
+                patched = ManifestPatcher.forceExtractNativeLibs(patched);
+                // Force requestLegacyExternalStorage=true for Android 10
+                // so the app can read blocking rules from /sdcard/Download
+                patched = ManifestPatcher.forceRequestLegacyExternalStorage(patched);
                 ZipEntry ne = new ZipEntry("AndroidManifest.xml");
                 ne.setMethod(ZipEntry.DEFLATED);
                 zos.putNextEntry(ne);
@@ -1488,7 +1494,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.12";
+            String version = "3.13";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);

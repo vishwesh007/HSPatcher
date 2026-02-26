@@ -42,7 +42,7 @@
 # select() — called before every socket connection
 # ========================================================================
 .method public select(Ljava/net/URI;)Ljava/util/List;
-    .locals 6
+    .locals 7
     .param p1, "uri"
 
     :try_log
@@ -68,6 +68,11 @@
     :no_scheme
     invoke-virtual {v2, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v2
+
+    # Apply UrlHook rules to socket host key before dedup/logging
+    const-string v6, "UTF-8"
+    invoke-static {v2, v6}, Lin/startv/hotstar/UrlHook;->decodeAndPatch(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
     move-result-object v2
 
     # Check if we've seen this host before (log anyway for first time)

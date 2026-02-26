@@ -112,6 +112,36 @@
 
     :not_block_prefix
 
+    # Preferred rewrite delimiter: "pattern=>replacement" (safe for full URLs with https://)
+    const-string v5, "=>"
+    invoke-virtual {v1, v5}, Ljava/lang/String;->indexOf(Ljava/lang/String;)I
+    move-result v5
+    if-lez v5, :legacy_colon
+
+    const/4 v3, 0x0
+    invoke-virtual {v1, v3, v5}, Ljava/lang/String;->substring(II)Ljava/lang/String;
+    move-result-object v3
+    invoke-virtual {v3}, Ljava/lang/String;->trim()Ljava/lang/String;
+    move-result-object v3
+
+    const/4 v4, 0x2
+    add-int/2addr v5, v4
+    invoke-virtual {v1, v5}, Ljava/lang/String;->substring(I)Ljava/lang/String;
+    move-result-object v4
+    invoke-virtual {v4}, Ljava/lang/String;->trim()Ljava/lang/String;
+    move-result-object v4
+
+    goto :parsed_pair
+
+    :legacy_colon
+    # Legacy delimiter: ':' — skip URL-looking rules like https://... to avoid mis-parsing.
+    const-string v5, "://"
+    invoke-virtual {v1, v5}, Ljava/lang/String;->indexOf(Ljava/lang/String;)I
+    move-result v5
+    if-ltz v5, :do_split
+    goto :skip_line
+
+    :do_split
     const-string v3, ":"
 
     invoke-virtual {v1, v3}, Ljava/lang/String;->split(Ljava/lang/String;)[Ljava/lang/String;
@@ -131,6 +161,8 @@
     const/4 v4, 0x1
 
     aget-object v4, v1, v4
+
+    :parsed_pair
 
     # If replacement is BLOCK and pattern matches, mark as blocked
     const-string v5, "BLOCK"

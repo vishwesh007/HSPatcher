@@ -12,6 +12,7 @@
 .field public static filesDir:Ljava/lang/String;
 .field public static initialized:Z
 .field public static autoResetFingerprint:Z
+.field public static debugNotificationPersistent:Z
 
 
 # direct methods
@@ -24,7 +25,7 @@
 
 # ================================================================
 # init(Context) - Called first in Application.onCreate()
-# Sets filesDir to the app's external files directory
+# Sets filesDir to the app's INTERNAL files directory
 # ================================================================
 .method public static init(Landroid/content/Context;)V
     .locals 3
@@ -33,9 +34,8 @@
     if-nez v0, :already_init
 
     :try_start
-    # Get external files dir (works for ANY app)
-    const/4 v0, 0x0
-    invoke-virtual {p0, v0}, Landroid/content/Context;->getExternalFilesDir(Ljava/lang/String;)Ljava/io/File;
+    # Prefer INTERNAL files dir (no scoped-storage issues)
+    invoke-virtual {p0}, Landroid/content/Context;->getFilesDir()Ljava/io/File;
     move-result-object v0
 
     if-eqz v0, :try_internal
@@ -80,6 +80,13 @@
     move-result v1
     sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->autoResetFingerprint:Z
 
+    # Load debug notification persistence toggle from SharedPreferences
+    const-string v1, "debug_notification_persistent"
+    const/4 v2, 0x0
+    invoke-interface {v0, v1, v2}, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
+    move-result v1
+    sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->debugNotificationPersistent:Z
+
     const-string v0, "HSPatch"
     new-instance v1, Ljava/lang/StringBuilder;
     invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
@@ -97,8 +104,19 @@
 
     :catch_init
     move-exception v0
-    # Ultimate fallback
-    const-string v0, "/storage/emulated/0/Download/hspatch_logs"
+    # Fallback to internal data dir path
+    invoke-virtual {p0}, Landroid/content/Context;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;
+    move-result-object v0
+    iget-object v0, v0, Landroid/content/pm/ApplicationInfo;->dataDir:Ljava/lang/String;
+
+    new-instance v1, Ljava/lang/StringBuilder;
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v2, "/files"
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v0
+
     sput-object v0, Lin/startv/hotstar/HSPatchConfig;->filesDir:Ljava/lang/String;
     new-instance v1, Ljava/io/File;
     invoke-direct {v1, v0}, Ljava/io/File;-><init>(Ljava/lang/String;)V
@@ -178,7 +196,7 @@
 # ================================================================
 # getBlockingFilePath() - Returns full path to first found blocking file
 # Search order: blocking_<pkg>.txt > blocking_rules.txt > blocking_hotstar.txt
-# Each checked in filesDir first, then Download/hspatch_logs
+# Only checked in app-private filesDir (no shared/external storage)
 # Returns null if no file found
 # ================================================================
 .method public static getBlockingFilePath()Ljava/lang/String;
@@ -196,21 +214,7 @@
     move-result v2
     if-nez v2, :return_path
 
-    # 2. Per-app file in Download
-    new-instance v1, Ljava/lang/StringBuilder;
-    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v2, "/storage/emulated/0/Download/hspatch_logs/"
-    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-    move-result-object v1
-    new-instance v2, Ljava/io/File;
-    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-    invoke-virtual {v2}, Ljava/io/File;->exists()Z
-    move-result v2
-    if-nez v2, :return_path
-
-    # 3. Generic blocking_rules.txt in filesDir
+    # 2. Generic blocking_rules.txt in filesDir
     const-string v0, "blocking_rules.txt"
     invoke-static {v0}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
     move-result-object v1
@@ -220,26 +224,10 @@
     move-result v2
     if-nez v2, :return_path
 
-    # 4. Generic blocking_rules.txt in Download
-    const-string v1, "/storage/emulated/0/Download/hspatch_logs/blocking_rules.txt"
-    new-instance v2, Ljava/io/File;
-    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-    invoke-virtual {v2}, Ljava/io/File;->exists()Z
-    move-result v2
-    if-nez v2, :return_path
-
-    # 5. Legacy blocking_hotstar.txt in filesDir
+    # 3. Legacy blocking_hotstar.txt in filesDir
     const-string v0, "blocking_hotstar.txt"
     invoke-static {v0}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
     move-result-object v1
-    new-instance v2, Ljava/io/File;
-    invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-    invoke-virtual {v2}, Ljava/io/File;->exists()Z
-    move-result v2
-    if-nez v2, :return_path
-
-    # 6. Legacy blocking_hotstar.txt in Download
-    const-string v1, "/storage/emulated/0/Download/hspatch_logs/blocking_hotstar.txt"
     new-instance v2, Ljava/io/File;
     invoke-direct {v2, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
     invoke-virtual {v2}, Ljava/io/File;->exists()Z
@@ -252,6 +240,28 @@
 
     :return_path
     return-object v1
+.end method
+
+
+# ================================================================
+# setDebugNotificationPersistent(Context, boolean) - Persist toggle
+# ================================================================
+.method public static setDebugNotificationPersistent(Landroid/content/Context;Z)V
+    .locals 3
+
+    sput-boolean p1, Lin/startv/hotstar/HSPatchConfig;->debugNotificationPersistent:Z
+
+    const-string v0, "hspatch_settings"
+    const/4 v1, 0x0
+    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v0
+    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+    const-string v2, "debug_notification_persistent"
+    invoke-interface {v1, v2, p1}, Landroid/content/SharedPreferences$Editor;->putBoolean(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
+
+    return-void
 .end method
 
 
