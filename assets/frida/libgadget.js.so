@@ -1,6 +1,7 @@
 /*
- * HSPatch Universal Frida Script v3.17
- * - SSL Certificate Pinning Bypass (Java + Native BoringSSL)
+ * HSPatch Universal Frida Script v3.20
+ * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
+ * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
  * - Piracy / License / Integrity Checks Removal
  * - Screenshot / Recording FLAG_SECURE Bypass
@@ -13,7 +14,7 @@ setTimeout(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.16              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.20              [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -161,21 +162,202 @@ setTimeout(function() {
             } catch(e) {}
 
             Log.i(TAG, '[*] SSL bypass PERMANENT: SSLContext + TrustManager + Conscrypt + OkHttp + NetSecCfg');
-        }
 
+            // =====================================================
+            // 1a-2. SECURITY ERROR DIALOG SUPPRESSION
+            //       The "Security error" dialog is now neutralized at APK level
+            //       by PatchEngine (JSON config patching), so this is a BEST-EFFORT
+            //       runtime fallback. Uses delayed Java.enumerateLoadedClasses to
+            //       find the obfuscated class dynamically (name changes per release).
+            // =====================================================
+
+            // Delayed attempt: find the error-mapping class after classes are loaded
+            function attemptErrorMapperHook() {
+                Java.perform(function() {
+                    try {
+                        // Use Java.enumerateMethods to find the class dynamically
+                        // Pattern: class with method a(IOException) in a 2-char package
+                        var candidates = [];
+                        try {
+                            // Search for methods named 'a' in short-package classes
+                            // that take IOException and return an enum-like type
+                            var results = Java.enumerateMethods('*!a/s');
+                            for (var ri = 0; ri < results.length; ri++) {
+                                var group = results[ri];
+                                for (var ci = 0; ci < group.classes.length; ci++) {
+                                    var cls = group.classes[ci];
+                                    var name = cls.name;
+                                    // Look for 2-segment names like Nh.k, Ab.c, etc.
+                                    if (/^[A-Z][a-z]\.[a-z]$/.test(name)) {
+                                        for (var mi = 0; mi < cls.methods.length; mi++) {
+                                            var sig = cls.methods[mi];
+                                            if (sig.indexOf('IOException') !== -1) {
+                                                candidates.push(name);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch(eEnum) {
+                            Log.w(TAG, '[-] enumerateMethods failed: ' + eEnum);
+                        }
+
+                        if (candidates.length > 0) {
+                            Log.i(TAG, '[+] Error mapper candidates: ' + JSON.stringify(candidates));
+                            for (var ci2 = 0; ci2 < candidates.length; ci2++) {
+                                try {
+                                    var candidateName = candidates[ci2];
+                                    // Find the right classloader
+                                    var factory = null;
+                                    Java.enumerateClassLoaders({
+                                        onMatch: function(loader) {
+                                            try {
+                                                loader.loadClass(candidateName);
+                                                factory = Java.ClassFactory.get(loader);
+                                            } catch(e) {}
+                                        },
+                                        onComplete: function() {}
+                                    });
+
+                                    if (!factory) continue;
+
+                                    var MapperClass = factory.use(candidateName);
+                                    var methods = MapperClass.a.overloads;
+                                    for (var oi = 0; oi < methods.length; oi++) {
+                                        var argTypes = methods[oi].argumentTypes;
+                                        if (argTypes.length === 1) {
+                                            var argClass = argTypes[0].className;
+                                            if (argClass === 'java.io.IOException' || argClass === 'java.lang.Exception') {
+                                                var retType = methods[oi].returnType.className;
+                                                // Get the enum's generic-error field
+                                                var EnumClass = factory.use(retType);
+                                                var genericValue = null;
+                                                // Try common field names for NET_104 (generic error)
+                                                try { genericValue = EnumClass.f.value; } catch(e) {}
+                                                if (!genericValue) {
+                                                    try { genericValue = EnumClass.b.value; } catch(e) {}
+                                                }
+
+                                                if (genericValue) {
+                                                    var SSLExc = Java.use('javax.net.ssl.SSLException').class;
+                                                    (function(method, gv, cn) {
+                                                        method.implementation = function(exc) {
+                                                            if (SSLExc.isInstance(exc)) {
+                                                                Log.i(TAG, '[!] SSL error reclassified via ' + cn + ': ' + exc.getMessage());
+                                                                return gv;
+                                                            }
+                                                            return method.call(this, exc);
+                                                        };
+                                                        Log.i(TAG, '[+] ' + cn + '.a(IOException) hooked → generic error');
+                                                    })(methods[oi], genericValue, candidateName);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch(eCand) {
+                                    Log.w(TAG, '[-] Candidate ' + candidates[ci2] + ' failed: ' + eCand);
+                                }
+                            }
+                        } else {
+                            Log.d(TAG, '[-] No error mapper class found (JSON config patch handles this)');
+                        }
+                    } catch(eMapper) {
+                        Log.w(TAG, '[-] Error mapper hook failed: ' + eMapper + ' (JSON patch handles this)');
+                    }
+                });
+            }
+            // Attempt after 8 seconds when more classes are loaded
+            setTimeout(attemptErrorMapperHook, 8000);
+
+            // Suppress SSLHandshakeException at Java level
+            try {
+                var SSLHandshakeException = Java.use('javax.net.ssl.SSLHandshakeException');
+                SSLHandshakeException.$init.overload('java.lang.String').implementation = function(msg) {
+                    Log.i(TAG, '[!] SSLHandshakeException SUPPRESSED: ' + msg);
+                    this.$init(msg);
+                };
+            } catch(eSSL) {}
+
+            // Hook Cronet's UrlRequest.Callback.onFailed to suppress SSL errors
+            function hookCronetCallbacks() {
+                var hookedCount = 0;
+                try {
+                    Java.enumerateLoadedClasses({
+                        onMatch: function(className) {
+                            if (className.indexOf('UrlRequest') !== -1 && className.indexOf('Callback') !== -1) {
+                                try {
+                                    var cls = Java.use(className);
+                                    if (cls.onFailed) {
+                                        cls.onFailed.implementation = function(request, info, error) {
+                                            var errMsg = error ? error.toString() : 'null';
+                                            if (errMsg.indexOf('SSL') !== -1 || errMsg.indexOf('ERR_CERT') !== -1 ||
+                                                errMsg.indexOf('ERR_SSL') !== -1 || errMsg.indexOf('handshake') !== -1 ||
+                                                errMsg.indexOf('CERT_') !== -1) {
+                                                Log.i(TAG, '[!] Cronet onFailed SUPPRESSED: ' + errMsg);
+                                                return; // Suppress SSL errors
+                                            }
+                                            this.onFailed(request, info, error);
+                                        };
+                                        hookedCount++;
+                                        console.log('[+] Cronet callback hooked: ' + className);
+                                    }
+                                } catch(cbE) {}
+                            }
+                        },
+                        onComplete: function() {}
+                    });
+                } catch(eCronet) {}
+                return hookedCount;
+            }
+            hookCronetCallbacks();
+
+            // Re-hook Cronet callbacks after 5s (catches late-loaded classes)
+            setTimeout(function() {
+                Java.perform(function() {
+                    var cnt = hookCronetCallbacks();
+                    if (cnt > 0) Log.i(TAG, '[+] Delayed Cronet callback hooks: ' + cnt);
+                });
+            }, 5000);
+
+            // Also hook SSLPeerUnverifiedException
+            try {
+                var SSLPeerUnverified = Java.use('javax.net.ssl.SSLPeerUnverifiedException');
+                SSLPeerUnverified.$init.overload('java.lang.String').implementation = function(msg) {
+                    Log.i(TAG, '[!] SSLPeerUnverifiedException SUPPRESSED: ' + msg);
+                    this.$init(msg);
+                };
+            } catch(ePeer) {}
+        }
 
         // =====================================================
         // 1b. NATIVE BoringSSL CERTIFICATE BYPASS (Cronet/libssl)
         //     Hooks SSL_CTX_set_custom_verify & SSL_set_custom_verify
         //     to always return SSL_VERIFY_OK (0).
-        //     This eliminates SSLHandshakeException from Cronet's
-        //     native BoringSSL path that Java hooks cannot reach.
+        //     For libwebviewchromium.so, uses enumerateSymbols() to find
+        //     non-exported BoringSSL symbols (statically linked).
         //     Ref: httptoolkit/frida-interception-and-unpinning/native-tls-hook.js
         // =====================================================
 
         var SSL_VERIFY_OK = 0;
         var SSL_VERIFY_NONE = 0;
         var _nativeSslHooked = 0;
+
+        // Helper: find a function address by name - tries exports first, then symbols table
+        function findSSLFunction(mod, fnName) {
+            var addr = mod.findExportByName(fnName);
+            if (addr) return addr;
+            // For statically-linked BoringSSL (e.g. libwebviewchromium.so),
+            // symbols are NOT exported. Use enumerateSymbols() to find them.
+            try {
+                var syms = mod.enumerateSymbols();
+                for (var si = 0; si < syms.length; si++) {
+                    if (syms[si].name === fnName) {
+                        return syms[si].address;
+                    }
+                }
+            } catch(e) {}
+            return null;
+        }
 
         function patchNativeSSLVerify(libName) {
             var mod = null;
@@ -196,14 +378,14 @@ setTimeout(function() {
 
             for (var vi = 0; vi < verifyFnNames.length; vi++) {
                 try {
-                    var fnAddr = mod.findExportByName(verifyFnNames[vi]);
+                    var fnAddr = findSSLFunction(mod, verifyFnNames[vi]);
                     if (fnAddr) {
                         var origFn = new NativeFunction(fnAddr, 'void', ['pointer', 'int', 'pointer']);
-                        (function(fn, name) {
-                            Interceptor.replace(fnAddr, new NativeCallback(function(ctx_or_ssl, mode, callback) {
+                        (function(fn, name, addr) {
+                            Interceptor.replace(addr, new NativeCallback(function(ctx_or_ssl, mode, callback) {
                                 fn(ctx_or_ssl, mode, alwaysOkCallback);
                             }, 'void', ['pointer', 'int', 'pointer']));
-                        })(origFn, verifyFnNames[vi]);
+                        })(origFn, verifyFnNames[vi], fnAddr);
                         patched++;
                         console.log('[+] Native SSL: ' + verifyFnNames[vi] + ' hooked in ' + libName);
                     }
@@ -221,7 +403,7 @@ setTimeout(function() {
             var stdVerifyFns = ['SSL_CTX_set_verify', 'SSL_set_verify'];
             for (var svi = 0; svi < stdVerifyFns.length; svi++) {
                 try {
-                    var svAddr = mod.findExportByName(stdVerifyFns[svi]);
+                    var svAddr = findSSLFunction(mod, stdVerifyFns[svi]);
                     if (svAddr) {
                         (function(addr, name) {
                             var origSvFn = new NativeFunction(addr, 'void', ['pointer', 'int', 'pointer']);
@@ -240,7 +422,7 @@ setTimeout(function() {
 
             // Hook SSL_get_psk_identity — some verification paths check this is non-null
             try {
-                var pskAddr = mod.findExportByName('SSL_get_psk_identity');
+                var pskAddr = findSSLFunction(mod, 'SSL_get_psk_identity');
                 if (pskAddr) {
                     var pskStr = Memory.allocUtf8String('PSK_PLACEHOLDER');
                     Interceptor.replace(pskAddr, new NativeCallback(function(ssl) {
@@ -255,17 +437,16 @@ setTimeout(function() {
             var sslNewFns = ['SSL_new', 'SSL_CTX_new'];
             for (var sni = 0; sni < sslNewFns.length; sni++) {
                 try {
-                    var snAddr = mod.findExportByName(sslNewFns[sni]);
+                    var snAddr = findSSLFunction(mod, sslNewFns[sni]);
                     if (snAddr) {
                         (function(addr, name) {
                             Interceptor.attach(addr, {
                                 onLeave: function(retval) {
                                     if (!retval.isNull()) {
-                                        // After SSL_new/SSL_CTX_new returns, call SSL_set_verify/SSL_CTX_set_verify with SSL_VERIFY_NONE
                                         var setVerifyName = name === 'SSL_new' ? 'SSL_set_verify' : 'SSL_CTX_set_verify';
-                                        var svAddr = mod.findExportByName(setVerifyName);
-                                        if (svAddr) {
-                                            var setVerifyFn = new NativeFunction(svAddr, 'void', ['pointer', 'int', 'pointer']);
+                                        var svAddr2 = findSSLFunction(mod, setVerifyName);
+                                        if (svAddr2) {
+                                            var setVerifyFn = new NativeFunction(svAddr2, 'void', ['pointer', 'int', 'pointer']);
                                             setVerifyFn(retval, SSL_VERIFY_NONE, ptr(0));
                                             console.log('[+] Native SSL: ' + name + ' -> forced VERIFY_NONE in ' + libName);
                                         }
@@ -281,34 +462,15 @@ setTimeout(function() {
                 }
             }
 
-            // Hook SSL_do_handshake and SSL_connect to ignore handshake failures
-            // This catches handshake errors that occur despite verify hooks
-            var handshakeFns = ['SSL_do_handshake', 'SSL_connect'];
-            for (var hfi = 0; hfi < handshakeFns.length; hfi++) {
-                try {
-                    var hfAddr = mod.findExportByName(handshakeFns[hfi]);
-                    if (hfAddr) {
-                        (function(addr, name) {
-                            Interceptor.attach(addr, {
-                                onLeave: function(retval) {
-                                    if (retval.toInt32() <= 0) {
-                                        console.log('[+] Native SSL: ' + name + ' failed, pretending success in ' + libName);
-                                        retval.replace(1); // Pretend success
-                                    }
-                                }
-                            });
-                        })(hfAddr, handshakeFns[hfi]);
-                        patched++;
-                        console.log('[+] Native SSL: ' + handshakeFns[hfi] + ' hooked in ' + libName);
-                    }
-                } catch (e) {
-                    console.log('[-] Native SSL: ' + handshakeFns[hfi] + ' in ' + libName + ': ' + e);
-                }
-            }
+            // Note: SSL_do_handshake/SSL_connect hooks REMOVED in v3.19
+            // Pretending handshake success corrupts TLS state machine and
+            // CAUSES failures on valid connections. The verify hooks above
+            // are sufficient - they allow the handshake to complete naturally
+            // with certificate verification disabled.
 
             // Hook SSL_get_verify_result to always return X509_V_OK (0)
             try {
-                var vrAddr = mod.findExportByName('SSL_get_verify_result');
+                var vrAddr = findSSLFunction(mod, 'SSL_get_verify_result');
                 if (vrAddr) {
                     Interceptor.replace(vrAddr, new NativeCallback(function(ssl) {
                         return 0; // X509_V_OK
@@ -324,24 +486,67 @@ setTimeout(function() {
         }
 
         // Try immediate hook on known BoringSSL/Cronet library names
-        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so'];
+        // libwebviewchromium.so is the system WebView (Chromium) with statically-linked BoringSSL
+        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so', 'libwebviewchromium.so'];
         for (var nsi = 0; nsi < _nativeSslLibs.length; nsi++) {
             _nativeSslHooked += patchNativeSSLVerify(_nativeSslLibs[nsi]);
         }
 
-        // Also watch for late-loaded SSL/Cronet libs
+        // Also scan ALL loaded modules for SSL exports (catches statically-linked BoringSSL in any lib)
         try {
+            var allMods = Process.enumerateModules();
+            for (var ami = 0; ami < allMods.length; ami++) {
+                var amName = allMods[ami].name;
+                // Skip already-tried libs and system/framework libs
+                if (_nativeSslLibs.indexOf(amName) !== -1) continue;
+                if (amName.indexOf('frida') !== -1 || amName.indexOf('gadget') !== -1) continue;
+                if (amName.indexOf('libc.so') !== -1 || amName.indexOf('libm.so') !== -1) continue;
+                // Try to find SSL exports - if any exist, hook them
+                try {
+                    var testMod = Process.getModuleByName(amName);
+                    var hasSSL = findSSLFunction(testMod, 'SSL_CTX_set_custom_verify') ||
+                                 findSSLFunction(testMod, 'SSL_set_custom_verify') ||
+                                 findSSLFunction(testMod, 'SSL_CTX_set_verify') ||
+                                 findSSLFunction(testMod, 'SSL_set_verify') ||
+                                 findSSLFunction(testMod, 'SSL_new');
+                    if (hasSSL) {
+                        var ap = patchNativeSSLVerify(amName);
+                        if (ap > 0) {
+                            _nativeSslHooked += ap;
+                            console.log('[+] Found SSL in unexpected lib: ' + amName + ' (' + ap + ' hooks)');
+                        }
+                    }
+                } catch(scanE) {}
+            }
+        } catch(enumE) {
+            console.log('[-] Module enumeration failed: ' + enumE);
+        }
+
+        // Watch for ALL late-loaded libs - scan each one for SSL exports
+        try {
+            var _patchedModules = {};
             Process.attachModuleObserver({
                 onAdded: function(mod) {
                     var name = mod.name;
-                    if (name === 'libssl.so' || name.indexOf('sscronet') !== -1 ||
-                        name.indexOf('cronet') !== -1 || name.indexOf('boringssl') !== -1) {
-                        var p = patchNativeSSLVerify(name);
-                        if (p > 0) {
-                            _nativeSslHooked += p;
-                            console.log('[+] Late-loaded native SSL lib patched: ' + name + ' (' + p + ' hooks)');
+                    if (_patchedModules[name]) return; // Already patched
+                    if (name.indexOf('frida') !== -1 || name.indexOf('gadget') !== -1) return;
+                    // Check if this module has SSL exports or symbols
+                    try {
+                        var hasSslExport = findSSLFunction(mod, 'SSL_CTX_set_custom_verify') ||
+                                          findSSLFunction(mod, 'SSL_set_custom_verify') ||
+                                          findSSLFunction(mod, 'SSL_CTX_set_verify') ||
+                                          findSSLFunction(mod, 'SSL_set_verify') ||
+                                          findSSLFunction(mod, 'SSL_new') ||
+                                          findSSLFunction(mod, 'SSL_do_handshake');
+                        if (hasSslExport) {
+                            _patchedModules[name] = true;
+                            var p = patchNativeSSLVerify(name);
+                            if (p > 0) {
+                                _nativeSslHooked += p;
+                                console.log('[+] Late-loaded SSL lib patched: ' + name + ' (' + p + ' hooks)');
+                            }
                         }
-                    }
+                    } catch(lateE) {}
                 }
             });
         } catch (e) {
@@ -350,6 +555,24 @@ setTimeout(function() {
                 for (var nsi2 = 0; nsi2 < _nativeSslLibs.length; nsi2++) {
                     _nativeSslHooked += patchNativeSSLVerify(_nativeSslLibs[nsi2]);
                 }
+                // Also try a broad scan again
+                try {
+                    var lateMods = Process.enumerateModules();
+                    for (var lmi = 0; lmi < lateMods.length; lmi++) {
+                        var lmName = lateMods[lmi].name;
+                        if (_nativeSslLibs.indexOf(lmName) !== -1) continue;
+                        try {
+                            var lm = Process.getModuleByName(lmName);
+                            if (findSSLFunction(lm, 'SSL_CTX_set_verify') || findSSLFunction(lm, 'SSL_new')) {
+                                var lp = patchNativeSSLVerify(lmName);
+                                if (lp > 0) {
+                                    _nativeSslHooked += lp;
+                                    console.log('[+] Delayed scan found SSL in: ' + lmName);
+                                }
+                            }
+                        } catch(dscanE) {}
+                    }
+                } catch(deE) {}
                 if (_nativeSslHooked > 0) console.log('[+] Delayed native SSL hooks: ' + _nativeSslHooked);
             }, 3000);
         }

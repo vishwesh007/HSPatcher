@@ -1456,6 +1456,48 @@ public class PatchEngine {
                 continue;
             }
 
+            // Patch JSON config files to neutralize NET_201 "Security error" dialog
+            // Instead of showing "Security error — Something is interfering with your
+            // secure connection", show the generic "Connection issue" message.
+            if (name.equals("assets/remote_config.json") ||
+                name.equals("res/raw/default_strings.json") ||
+                name.equals("assets/default_config.json")) {
+                byte[] jsonBytes = readAllBytes(origZip.getInputStream(entry));
+                String json = new String(jsonBytes, "UTF-8");
+                String originalJson = json;
+
+                if (name.contains("remote_config") || name.contains("default_config")) {
+                    // Point NET_201 to the same generic strings as NET_104
+                    json = json.replace(
+                        "\"common-v2__network_security_error_title\"",
+                        "\"common-v2__network_error_title\"");
+                    json = json.replace(
+                        "\"common-v2__network_security_error_message\"",
+                        "\"common-v2__network_unavailable_message\"");
+                }
+                if (name.contains("default_strings")) {
+                    // Change the actual display strings as fallback
+                    json = json.replace(
+                        "\"Security error\"",
+                        "\"Connection issue\"");
+                    json = json.replace(
+                        "Something is interfering with your secure connection",
+                        "Please check your network and retry");
+                }
+
+                if (!json.equals(originalJson)) {
+                    byte[] patchedJson = json.getBytes("UTF-8");
+                    ZipEntry ne = new ZipEntry(name);
+                    ne.setMethod(ZipEntry.DEFLATED);
+                    zos.putNextEntry(ne);
+                    zos.write(patchedJson);
+                    zos.closeEntry();
+                    log("   🔧 Patched: " + name + " (NET_201 → generic error)");
+                    copied++;
+                    continue;
+                }
+            }
+
             ZipEntry ne = cloneEntry(entry);
             zos.putNextEntry(ne);
             copyStream(origZip.getInputStream(entry), zos, false);
