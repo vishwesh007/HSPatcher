@@ -1,5 +1,5 @@
 /*
- * HSPatch Universal Frida Script v3.15
+ * HSPatch Universal Frida Script v3.17
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL)
  * - Signature Verification Bypass (runtime layer)
  * - Piracy / License / Integrity Checks Removal
@@ -13,7 +13,7 @@ setTimeout(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.15              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.16              [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -249,6 +249,76 @@ setTimeout(function() {
                     console.log('[+] Native SSL: SSL_get_psk_identity hooked in ' + libName);
                 }
             } catch (e) {}
+
+            // Hook SSL_new and SSL_CTX_new to force SSL_VERIFY_NONE on all new SSL objects
+            // This catches SSL contexts created after Frida loads, preventing SSLHandshakeExceptions
+            var sslNewFns = ['SSL_new', 'SSL_CTX_new'];
+            for (var sni = 0; sni < sslNewFns.length; sni++) {
+                try {
+                    var snAddr = mod.findExportByName(sslNewFns[sni]);
+                    if (snAddr) {
+                        (function(addr, name) {
+                            Interceptor.attach(addr, {
+                                onLeave: function(retval) {
+                                    if (!retval.isNull()) {
+                                        // After SSL_new/SSL_CTX_new returns, call SSL_set_verify/SSL_CTX_set_verify with SSL_VERIFY_NONE
+                                        var setVerifyName = name === 'SSL_new' ? 'SSL_set_verify' : 'SSL_CTX_set_verify';
+                                        var svAddr = mod.findExportByName(setVerifyName);
+                                        if (svAddr) {
+                                            var setVerifyFn = new NativeFunction(svAddr, 'void', ['pointer', 'int', 'pointer']);
+                                            setVerifyFn(retval, SSL_VERIFY_NONE, ptr(0));
+                                            console.log('[+] Native SSL: ' + name + ' -> forced VERIFY_NONE in ' + libName);
+                                        }
+                                    }
+                                }
+                            });
+                        })(snAddr, sslNewFns[sni]);
+                        patched++;
+                        console.log('[+] Native SSL: ' + sslNewFns[sni] + ' hooked in ' + libName);
+                    }
+                } catch (e) {
+                    console.log('[-] Native SSL: ' + sslNewFns[sni] + ' in ' + libName + ': ' + e);
+                }
+            }
+
+            // Hook SSL_do_handshake and SSL_connect to ignore handshake failures
+            // This catches handshake errors that occur despite verify hooks
+            var handshakeFns = ['SSL_do_handshake', 'SSL_connect'];
+            for (var hfi = 0; hfi < handshakeFns.length; hfi++) {
+                try {
+                    var hfAddr = mod.findExportByName(handshakeFns[hfi]);
+                    if (hfAddr) {
+                        (function(addr, name) {
+                            Interceptor.attach(addr, {
+                                onLeave: function(retval) {
+                                    if (retval.toInt32() <= 0) {
+                                        console.log('[+] Native SSL: ' + name + ' failed, pretending success in ' + libName);
+                                        retval.replace(1); // Pretend success
+                                    }
+                                }
+                            });
+                        })(hfAddr, handshakeFns[hfi]);
+                        patched++;
+                        console.log('[+] Native SSL: ' + handshakeFns[hfi] + ' hooked in ' + libName);
+                    }
+                } catch (e) {
+                    console.log('[-] Native SSL: ' + handshakeFns[hfi] + ' in ' + libName + ': ' + e);
+                }
+            }
+
+            // Hook SSL_get_verify_result to always return X509_V_OK (0)
+            try {
+                var vrAddr = mod.findExportByName('SSL_get_verify_result');
+                if (vrAddr) {
+                    Interceptor.replace(vrAddr, new NativeCallback(function(ssl) {
+                        return 0; // X509_V_OK
+                    }, 'long', ['pointer']));
+                    patched++;
+                    console.log('[+] Native SSL: SSL_get_verify_result hooked in ' + libName);
+                }
+            } catch (e) {
+                console.log('[-] Native SSL: SSL_get_verify_result in ' + libName + ': ' + e);
+            }
 
             return patched;
         }
