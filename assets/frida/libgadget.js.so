@@ -1,11 +1,12 @@
 /*
- * HSPatch Universal Frida Script v3.20
+ * HSPatch Universal Frida Script v3.21
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
  * - Piracy / License / Integrity Checks Removal
  * - Screenshot / Recording FLAG_SECURE Bypass
  * - Network Traffic Monitoring, Blocking & Modification
+ * - URL-Level Content Blocker (ads/tracking path pattern matching)
  */
 
 setTimeout(function() {
@@ -14,7 +15,7 @@ setTimeout(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.20              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.21              [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -881,9 +882,26 @@ setTimeout(function() {
         loadBlockingRules();
         scheduleRuleReload();
 
+        // Separate domain-only rules from path rules for smarter matching
+        // Domain rules: no '/' → apply to DNS + URL hooks
+        // Path rules: contain '/' → apply to URL hooks only (not DNS)
+        function isDomainRule(pattern) {
+            return pattern.indexOf('/') === -1;
+        }
+
         function shouldBlock(url) {
             for (var i = 0; i < blockPatterns.length; i++) {
                 if (url.indexOf(blockPatterns[i]) !== -1) return blockPatterns[i];
+            }
+            return null;
+        }
+
+        // DNS-safe version: only checks domain-level rules (no path patterns)
+        function shouldBlockDNS(hostname) {
+            for (var i = 0; i < blockPatterns.length; i++) {
+                if (isDomainRule(blockPatterns[i]) && hostname.indexOf(blockPatterns[i]) !== -1) {
+                    return blockPatterns[i];
+                }
             }
             return null;
         }
@@ -1033,8 +1051,8 @@ setTimeout(function() {
                     nativeLog('[NET] DNS ' + entry);
                     apiDumpEvent('DNS', 'RESOLVE', entry);
 
-                    // Block check on hostname
-                    var bm = shouldBlock(this.host);
+                    // Block check on hostname — DNS-safe (domain rules only, no path patterns)
+                    var bm = shouldBlockDNS(this.host);
                     if (bm !== null) {
                         nativeLog('[NET] DNS BLOCKED: ' + this.host + ' (rule: ' + bm + ')');
                         apiDumpEvent('DNS', 'BLOCKED', this.host + ' rule=' + bm);
@@ -1466,32 +1484,31 @@ setTimeout(function() {
         } catch (err) { }
 
         // --- InetAddress/Socket blocking + rewriting for hostname-level rules ---
+        // Uses shouldBlockDNS (domain-only rules) so path patterns like /ads/v1/
+        // don't accidentally block essential API domains.
         try {
             var InetAddress = Java.use('java.net.InetAddress');
             var _inetGetByName = InetAddress.getByName.overload('java.lang.String');
             _inetGetByName.implementation = function(host) {
                 if (host) {
                     var h = host.toString();
-                    // Block check first
-                    var bm = shouldBlock(h);
+                    // DNS-safe block check (domain rules only)
+                    var bm = shouldBlockDNS(h);
                     if (bm !== null) {
                         logBlocked('InetAddress', 'getByName', h, bm);
-                        // Throw UnknownHostException for clean "offline" error
                         throw Java.use('java.net.UnknownHostException').$new(h);
                     }
-                    // Rewrite check
                     var rw = applyRewrites(h);
                     if (rw.changed) { logRewritten('InetAddress','getByName',h,rw.url); return _inetGetByName.call(this, rw.url); }
                 }
                 return _inetGetByName.call(this, host);
             };
-            // Also hook getAllByName for comprehensive blocking
             try {
                 var _inetGetAll = InetAddress.getAllByName.overload('java.lang.String');
                 _inetGetAll.implementation = function(host) {
                     if (host) {
                         var h = host.toString();
-                        var bm = shouldBlock(h);
+                        var bm = shouldBlockDNS(h);
                         if (bm !== null) {
                             logBlocked('InetAddress', 'getAllByName', h, bm);
                             throw Java.use('java.net.UnknownHostException').$new(h);
@@ -1505,9 +1522,16 @@ setTimeout(function() {
         } catch (err) { }
 
         Log.i(netLogTag, '[*] Java block/rewrite hooks installed (Layer 3)');
+        // Count domain vs path rules for summary
+        var domainRuleCount = 0, pathRuleCount = 0;
+        for (var ri = 0; ri < blockPatterns.length; ri++) {
+            if (isDomainRule(blockPatterns[ri])) domainRuleCount++;
+            else pathRuleCount++;
+        }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v4.0: Native + Java network hooks active  [#]');
-        Log.i(netLogTag, '[*] Block rules: ' + blockPatterns.length + ', Rewrite rules: ' + rewriteRules.length);
+        Log.i(netLogTag, '[#] HSPatch v3.21: URL-level content blocker active   [#]');
+        Log.i(netLogTag, '[*] Block: ' + domainRuleCount + ' domains + ' + pathRuleCount + ' path patterns');
+        Log.i(netLogTag, '[*] Rewrite rules: ' + rewriteRules.length);
         Log.i(netLogTag, '[*] API dump: ' + (apiDumpEnabled ? 'ENABLED' : 'Create api_dump_enabled.txt to enable'));
         Log.i(netLogTag, '======================================================');
     });

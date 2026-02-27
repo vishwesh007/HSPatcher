@@ -1474,6 +1474,29 @@ public class PatchEngine {
                     json = json.replace(
                         "\"common-v2__network_security_error_message\"",
                         "\"common-v2__network_unavailable_message\"");
+
+                    // Disable client-side ad insertion (preroll, midroll)
+                    json = json.replace(
+                        "\"android.ads.enable_preroll\": true",
+                        "\"android.ads.enable_preroll\": false");
+                    json = json.replace(
+                        "\"android.ads.enable_midroll\": true",
+                        "\"android.ads.enable_midroll\": false");
+                    json = json.replace(
+                        "\"android.ads.enable_early_preroll_load\": true",
+                        "\"android.ads.enable_early_preroll_load\": false");
+                    json = json.replace(
+                        "\"common.ads.enable_live_midroll\": true",
+                        "\"common.ads.enable_live_midroll\": false");
+                    json = json.replace(
+                        "\"android.playback.enable_ssai\": true",
+                        "\"android.playback.enable_ssai\": false");
+                    json = json.replace(
+                        "\"common.ads.enable_gam\": true",
+                        "\"common.ads.enable_gam\": false");
+                    json = json.replace(
+                        "\"android.appsflyer.enabled\": true",
+                        "\"android.appsflyer.enabled\": false");
                 }
                 if (name.contains("default_strings")) {
                     // Change the actual display strings as fallback
