@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="in.startv.hspatcher"
-    android:versionCode="321"
-    android:versionName="3.21">
+    android:versionCode="322"
+    android:versionName="3.22">
 
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
@@ -35,6 +35,12 @@
 
         <activity
             android:name=".AppListActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <activity
+            android:name=".ApkSignerActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize"
             android:theme="@android:style/Theme.Material.NoActionBar" />

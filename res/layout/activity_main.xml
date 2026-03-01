@@ -200,4 +200,49 @@
         android:layout_marginTop="0dp"
         android:layout_marginBottom="8dp" />
 
+    <!-- Tools Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="4dp">
+
+        <Button
+            android:id="@+id/btn_traffic_toggle"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:text="📡 TRAFFIC: ON"
+            android:textColor="#FF000000"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:background="#FF00E676"
+            android:layout_marginEnd="4dp" />
+
+        <Button
+            android:id="@+id/btn_backup"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:text="💾 BACKUP APP"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:background="#FF5C6BC0"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp" />
+
+        <Button
+            android:id="@+id/btn_signer"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:text="🔐 APK SIGNER"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:background="#FF448AFF"
+            android:layout_marginStart="4dp" />
+    </LinearLayout>
+
 </LinearLayout>

@@ -1,5 +1,5 @@
 /*
- * HSPatch Universal Frida Script v3.21
+ * HSPatch Universal Frida Script v3.22
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -15,7 +15,7 @@ setTimeout(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.21              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.22              [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -758,6 +758,7 @@ setTimeout(function() {
         var blockPatterns = [];
         var rewriteRules = [];
         var apiDumpEnabled = false;
+        var trafficMonitorEnabled = true; // Can be toggled via traffic_monitor_disabled.txt
         var apiDumpMaxBytes = 10 * 1024 * 1024;
 
         function getInternalFilePath(fileName) {
@@ -813,10 +814,19 @@ setTimeout(function() {
                 } catch(e) {}
 
                 apiDumpEnabled = false;
+                trafficMonitorEnabled = true;
                 try {
                     var File0 = Java.use('java.io.File');
                     for (var dti = 0; dti < dirs.length; dti++) {
                         if (File0.$new(dirs[dti] + '/api_dump_enabled.txt').exists()) { apiDumpEnabled = true; break; }
+                    }
+                    // Check for traffic monitoring toggle
+                    for (var dti2 = 0; dti2 < dirs.length; dti2++) {
+                        if (File0.$new(dirs[dti2] + '/traffic_monitor_disabled.txt').exists()) {
+                            trafficMonitorEnabled = false;
+                            Log.i(netLogTag, '[TRAFFIC] Monitoring DISABLED via flag file');
+                            break;
+                        }
                     }
                 } catch (eDump) { }
 
@@ -890,6 +900,7 @@ setTimeout(function() {
         }
 
         function shouldBlock(url) {
+            if (!trafficMonitorEnabled) return null;
             for (var i = 0; i < blockPatterns.length; i++) {
                 if (url.indexOf(blockPatterns[i]) !== -1) return blockPatterns[i];
             }
@@ -898,6 +909,7 @@ setTimeout(function() {
 
         // DNS-safe version: only checks domain-level rules (no path patterns)
         function shouldBlockDNS(hostname) {
+            if (!trafficMonitorEnabled) return null;
             for (var i = 0; i < blockPatterns.length; i++) {
                 if (isDomainRule(blockPatterns[i]) && hostname.indexOf(blockPatterns[i]) !== -1) {
                     return blockPatterns[i];
@@ -1529,7 +1541,8 @@ setTimeout(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.21: URL-level content blocker active   [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.22: URL-level content blocker active   [#]');
+        Log.i(netLogTag, '[*] Traffic monitor: ' + (trafficMonitorEnabled ? 'ENABLED' : 'DISABLED (toggle via traffic_monitor_disabled.txt)'));
         Log.i(netLogTag, '[*] Block: ' + domainRuleCount + ' domains + ' + pathRuleCount + ' path patterns');
         Log.i(netLogTag, '[*] Rewrite rules: ' + rewriteRules.length);
         Log.i(netLogTag, '[*] API dump: ' + (apiDumpEnabled ? 'ENABLED' : 'Create api_dump_enabled.txt to enable'));

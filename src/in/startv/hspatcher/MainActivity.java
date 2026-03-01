@@ -35,8 +35,10 @@ public class MainActivity extends Activity {
     private static final int EXTRACT_APP = 1005;
     private static final int INSTALL_PERM = 1006;
     private static final int UNINSTALL_REQUEST = 1007;
+    private static final int BACKUP_APP = 1008;
 
     private Button btnSelect, btnPatch, btnInstall, btnExtract, btnUninstall;
+    private Button btnTrafficToggle, btnBackup, btnSigner;
     private TextView logOutput, apkName, apkSize, progressText, versionText;
     private ScrollView logScroll;
     private ProgressBar progressBar;
@@ -52,6 +54,7 @@ public class MainActivity extends Activity {
     private String targetPackageName = null;
     private boolean autoPatchAfterLoad = false;
     private String selectedApkPatchedVersion = null; // non-null if APK is already patched
+    private boolean trafficMonitorEnabled = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -87,6 +90,18 @@ public class MainActivity extends Activity {
         btnInstall.setOnClickListener(v -> onInstallClick());
         btnExtract.setOnClickListener(v -> onExtractClick());
         btnUninstall.setOnClickListener(v -> onUninstallClick());
+
+        // New feature buttons
+        btnTrafficToggle = findViewById(R.id.btn_traffic_toggle);
+        btnBackup = findViewById(R.id.btn_backup);
+        btnSigner = findViewById(R.id.btn_signer);
+
+        btnTrafficToggle.setOnClickListener(v -> onTrafficToggleClick());
+        btnBackup.setOnClickListener(v -> onBackupClick());
+        btnSigner.setOnClickListener(v -> onSignerClick());
+
+        // Initialize traffic toggle state
+        initTrafficToggleState();
 
         requestStoragePermission();
 
@@ -255,6 +270,13 @@ public class MainActivity extends Activity {
             String label = data.getStringExtra(AppListActivity.EXTRA_APP_LABEL);
             if (path != null) {
                 loadExtractedApp(new File(path), isSplit, label);
+            }
+        } else if (requestCode == BACKUP_APP && resultCode == RESULT_OK && data != null) {
+            String path = data.getStringExtra(AppListActivity.EXTRA_APK_PATH);
+            boolean isSplit = data.getBooleanExtra(AppListActivity.EXTRA_IS_SPLIT, false);
+            String label = data.getStringExtra(AppListActivity.EXTRA_APP_LABEL);
+            if (path != null) {
+                handleBackupResult(path, isSplit, label);
             }
         } else if (requestCode == INSTALL_PERM) {
             if (Build.VERSION.SDK_INT >= 26 && getPackageManager().canRequestPackageInstalls()) {
@@ -507,7 +529,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.13 — Starting one-click patch");
+        log("⚡ HSPatcher v3.22 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {
@@ -969,6 +991,201 @@ public class MainActivity extends Activity {
             uninstall2.setData(Uri.parse("package:" + packageName));
             startActivityForResult(uninstall2, UNINSTALL_REQUEST);
         }
+    }
+
+    // ======================== TRAFFIC MONITORING TOGGLE ========================
+
+    private void initTrafficToggleState() {
+        // Check all common locations for the flag file
+        new Thread(() -> {
+            boolean disabled = false;
+            String[] dirs = getTrafficFlagDirs();
+            for (String dir : dirs) {
+                File flag = new File(dir, "traffic_monitor_disabled.txt");
+                if (flag.exists()) {
+                    disabled = true;
+                    break;
+                }
+            }
+            final boolean isDisabled = disabled;
+            trafficMonitorEnabled = !isDisabled;
+            mainHandler.post(() -> updateTrafficToggleUI());
+        }).start();
+    }
+
+    private String[] getTrafficFlagDirs() {
+        java.util.List<String> dirs = new java.util.ArrayList<>();
+
+        // If we have a target package, use its external files dir
+        if (targetPackageName != null) {
+            File extDir = new File(Environment.getExternalStorageDirectory(),
+                "Android/data/" + targetPackageName + "/files");
+            dirs.add(extDir.getAbsolutePath());
+        }
+
+        // Check for common hotstar package
+        File hsDir = new File(Environment.getExternalStorageDirectory(),
+            "Android/data/in.startv.hotstar/files");
+        dirs.add(hsDir.getAbsolutePath());
+
+        // Downloads / sdcard fallback
+        dirs.add(Environment.getExternalStoragePublicDirectory(
+            Environment.DIRECTORY_DOWNLOADS).getAbsolutePath());
+        dirs.add(Environment.getExternalStorageDirectory().getAbsolutePath());
+
+        return dirs.toArray(new String[0]);
+    }
+
+    private void updateTrafficToggleUI() {
+        if (trafficMonitorEnabled) {
+            btnTrafficToggle.setText("📡 TRAFFIC: ON");
+            btnTrafficToggle.setBackgroundColor(0xFF00E676);
+            btnTrafficToggle.setTextColor(0xFF000000);
+        } else {
+            btnTrafficToggle.setText("📡 TRAFFIC: OFF");
+            btnTrafficToggle.setBackgroundColor(0xFFB00020);
+            btnTrafficToggle.setTextColor(0xFFFFFFFF);
+        }
+    }
+
+    private void onTrafficToggleClick() {
+        trafficMonitorEnabled = !trafficMonitorEnabled;
+        updateTrafficToggleUI();
+
+        new Thread(() -> {
+            try {
+                String[] dirs = getTrafficFlagDirs();
+                if (trafficMonitorEnabled) {
+                    // Remove flag files from all locations
+                    for (String dir : dirs) {
+                        File flag = new File(dir, "traffic_monitor_disabled.txt");
+                        if (flag.exists()) flag.delete();
+                    }
+                    log("📡 Traffic monitoring ENABLED");
+                    log("   Blocking & rewrite rules are now active.");
+                    log("   Changes take effect within 5 seconds (auto-reload).");
+                } else {
+                    // Create flag file in each target app dir
+                    int created = 0;
+                    for (String dir : dirs) {
+                        try {
+                            File dirFile = new File(dir);
+                            if (!dirFile.exists()) dirFile.mkdirs();
+                            File flag = new File(dir, "traffic_monitor_disabled.txt");
+                            FileOutputStream fos = new FileOutputStream(flag);
+                            fos.write("disabled\n".getBytes());
+                            fos.close();
+                            created++;
+                        } catch (Exception e) {
+                            // some dirs may not be writable
+                        }
+                    }
+                    log("📡 Traffic monitoring DISABLED");
+                    log("   All blocking & rewrite rules suspended.");
+                    log("   Flag written to " + created + " location(s).");
+                    log("   Changes take effect within 5 seconds (auto-reload).");
+                }
+            } catch (Exception e) {
+                log("❌ Toggle error: " + e.getMessage());
+            }
+        }).start();
+
+        Toast.makeText(this,
+            trafficMonitorEnabled ? "Traffic monitoring ON" : "Traffic monitoring OFF",
+            Toast.LENGTH_SHORT).show();
+    }
+
+    // ======================== APP BACKUP ========================
+
+    private void onBackupClick() {
+        if (isPatching) return;
+        Intent intent = new Intent(this, AppListActivity.class);
+        startActivityForResult(intent, BACKUP_APP);
+    }
+
+    private void handleBackupResult(String path, boolean isSplit, String label) {
+        logClear();
+        log("💾 Starting app backup: " + label);
+
+        new Thread(() -> {
+            try {
+                File downloads = Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS);
+                File backupDir = new File(downloads, "HSPatcher_Backups");
+                if (!backupDir.exists()) backupDir.mkdirs();
+
+                String timestamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+                    .format(new Date());
+                String safeName = sanitizeFileName(label);
+
+                if (isSplit) {
+                    // Split APK — copy all files into a zip
+                    File splitDir = new File(path);
+                    File[] apks = splitDir.listFiles();
+                    if (apks == null || apks.length == 0) {
+                        log("❌ No APK files found for backup");
+                        return;
+                    }
+
+                    File backupZip = new File(backupDir,
+                        "Backup_" + safeName + "_" + timestamp + ".apks");
+
+                    log("📦 Creating split APK backup (" + apks.length + " files)...");
+                    java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
+                        new FileOutputStream(backupZip));
+                    long totalBytes = 0;
+                    for (File apk : apks) {
+                        zos.putNextEntry(new java.util.zip.ZipEntry(apk.getName()));
+                        InputStream in = new java.io.FileInputStream(apk);
+                        byte[] buf = new byte[65536];
+                        int len;
+                        while ((len = in.read(buf)) > 0) {
+                            zos.write(buf, 0, len);
+                            totalBytes += len;
+                        }
+                        in.close();
+                        zos.closeEntry();
+                        log("   📄 " + apk.getName() + " (" + (apk.length() / 1024) + " KB)");
+                    }
+                    zos.close();
+
+                    log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    log("✅ Backup complete!");
+                    log("📁 " + backupZip.getAbsolutePath());
+                    log("📏 " + (backupZip.length() / (1024 * 1024)) + " MB");
+
+                    mainHandler.post(() -> Toast.makeText(this,
+                        "Backup saved to Downloads/HSPatcher_Backups/",
+                        Toast.LENGTH_LONG).show());
+                } else {
+                    // Single APK — simple copy
+                    File src = new File(path);
+                    File backupFile = new File(backupDir,
+                        "Backup_" + safeName + "_" + timestamp + ".apk");
+
+                    log("📦 Backing up single APK...");
+                    copyFile(src, backupFile);
+
+                    log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    log("✅ Backup complete!");
+                    log("📁 " + backupFile.getAbsolutePath());
+                    log("📏 " + (backupFile.length() / (1024 * 1024)) + " MB");
+
+                    mainHandler.post(() -> Toast.makeText(this,
+                        "Backup saved to Downloads/HSPatcher_Backups/",
+                        Toast.LENGTH_LONG).show());
+                }
+            } catch (Exception e) {
+                log("❌ Backup failed: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    // ======================== APK SIGNER ========================
+
+    private void onSignerClick() {
+        Intent intent = new Intent(this, ApkSignerActivity.class);
+        startActivity(intent);
     }
 
     private String sanitizeFileName(String input) {
