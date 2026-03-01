@@ -234,54 +234,66 @@ public class HSPatchInjector {
         }
 
         int methodEnd = content.indexOf(".end method", onCreateIdx);
-        int localsIdx = content.indexOf(".locals", onCreateIdx);
-        boolean usesRegisters = false;
-        if (localsIdx == -1 || localsIdx > methodEnd) {
-            localsIdx = content.indexOf(".registers", onCreateIdx);
-            usesRegisters = true;
-        }
-        if (localsIdx == -1 || localsIdx > methodEnd) {
-            log("❌ No .locals/.registers in onCreate");
-            return;
-        }
 
-        int localsLineEnd = content.indexOf('\n', localsIdx);
-        String localsLine = content.substring(localsIdx, localsLineEnd).trim();
-        int currentCount = Integer.parseInt(localsLine.split("\\s+")[1]);
-        int neededCount = usesRegisters ? currentCount : Math.max(currentCount, 1);
-
+        // Find the super call
         int superCallEnd = -1;
         int superCallIdx = content.indexOf("invoke-super", onCreateIdx);
         if (superCallIdx != -1 && superCallIdx < methodEnd) {
             superCallEnd = content.indexOf('\n', superCallIdx);
         }
 
-        String hookCode = "\n" +
-            "\n    # === HSPatch v3.0: Single init call ===\n" +
-            "    :try_start_hspatch\n" +
-            "    invoke-static {p0}, Lin/startv/hotstar/HSPatchInit;->init(Landroid/content/Context;)V\n" +
-            "    :try_end_hspatch\n" +
-            "    .catchall {:try_start_hspatch .. :try_end_hspatch} :catch_hspatch\n" +
-            "    goto :after_hspatch\n" +
-            "    :catch_hspatch\n    move-exception v0\n    :after_hspatch\n";
+        // Determine the smali type for this class (e.g. Lcom/example/MyApp;)
+        String thisType = null;
+        int classIdx = content.indexOf(".class ");
+        if (classIdx >= 0) {
+            int classLineEnd = content.indexOf('\n', classIdx);
+            String classLine = content.substring(classIdx, classLineEnd).trim();
+            String[] parts = classLine.split("\\s+");
+            thisType = parts[parts.length - 1]; // last token is the type
+        }
+        if (thisType == null) thisType = "Ljava/lang/Object;";
 
-        String before, after;
+        // v5 helper method approach: don't modify .locals at all
+        // Just insert a single invoke-static {p0} call after invoke-super
+        String hookCall = "\n\n    # === HSPatch v5: init via helper method ===\n" +
+            "    invoke-static {p0}, " + thisType + "->_hsp_init_hook(Landroid/content/Context;)V\n";
+
+        // Append helper method at end of file
+        String helperMethod = "\n\n.method private static _hsp_init_hook(Landroid/content/Context;)V\n" +
+            "    .locals 2\n\n" +
+            "    :try_hsp_init\n" +
+            "    const-string v0, \"HSPatch\"\n" +
+            "    const-string v1, \">>> Hook reached in onCreate\"\n" +
+            "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n" +
+            "    invoke-static {p0}, Lin/startv/hotstar/HSPatchInit;->init(Landroid/content/Context;)V\n" +
+            "    :try_hsp_init_end\n" +
+            "    .catch Ljava/lang/Throwable; {:try_hsp_init .. :try_hsp_init_end} :catch_hsp_init\n" +
+            "    goto :after_hsp_init\n\n" +
+            "    :catch_hsp_init\n" +
+            "    move-exception v0\n\n" +
+            "    :after_hsp_init\n" +
+            "    return-void\n" +
+            ".end method\n";
+
+        String result;
         if (superCallEnd != -1) {
-            before = content.substring(0, superCallEnd);
-            after = content.substring(superCallEnd);
+            result = content.substring(0, superCallEnd) + hookCall + content.substring(superCallEnd) + helperMethod;
         } else {
-            before = content.substring(0, localsLineEnd);
-            after = content.substring(localsLineEnd);
+            // No super call found — insert after .locals line
+            int localsIdx = content.indexOf(".locals", onCreateIdx);
+            if (localsIdx == -1 || localsIdx > methodEnd) {
+                localsIdx = content.indexOf(".registers", onCreateIdx);
+            }
+            if (localsIdx == -1 || localsIdx > methodEnd) {
+                log("❌ No .locals/.registers in onCreate");
+                return;
+            }
+            int localsLineEnd = content.indexOf('\n', localsIdx);
+            result = content.substring(0, localsLineEnd) + hookCall + content.substring(localsLineEnd) + helperMethod;
         }
 
-        String newLocalsLine = usesRegisters ?
-            "    .registers " + neededCount :
-            "    .locals " + neededCount;
-        String result = before + hookCode + after;
-        result = result.replace(localsLine, newLocalsLine);
-
         writeFile(appSmali, result);
-        log("✅ Hooked with HSPatchInit.init() [1 cross-DEX ref]");
+        log("✅ Hooked with helper method _hsp_init_hook (register-safe)");
         hookCount++;
     }
 
@@ -375,21 +387,6 @@ public class HSPatchInjector {
         }
 
         int methodEnd = content.indexOf(".end method", onCreateIdx);
-        int localsIdx = content.indexOf(".locals", onCreateIdx);
-        boolean usesRegisters = false;
-        if (localsIdx == -1 || localsIdx > methodEnd) {
-            localsIdx = content.indexOf(".registers", onCreateIdx);
-            usesRegisters = true;
-        }
-        if (localsIdx == -1 || localsIdx > methodEnd) {
-            log("❌ No .locals/.registers in Activity.onCreate");
-            return;
-        }
-
-        int localsLineEnd = content.indexOf('\n', localsIdx);
-        String localsLine = content.substring(localsIdx, localsLineEnd).trim();
-        int currentCount = Integer.parseInt(localsLine.split("\\s+")[1]);
-        int neededCount = usesRegisters ? currentCount : Math.max(currentCount, 1);
 
         // Find the invoke-super call (after which we inject)
         int superCallEnd = -1;
@@ -398,32 +395,55 @@ public class HSPatchInjector {
             superCallEnd = content.indexOf('\n', superCallIdx);
         }
 
-        String hookCode = "\n" +
-            "\n    # === HSPatch v3.0: Activity hook (no Application class) ===\n" +
-            "    :try_start_hspatch\n" +
-            "    invoke-static {p0}, Lin/startv/hotstar/HSPatchInit;->init(Landroid/content/Context;)V\n" +
-            "    :try_end_hspatch\n" +
-            "    .catchall {:try_start_hspatch .. :try_end_hspatch} :catch_hspatch\n" +
-            "    goto :after_hspatch\n" +
-            "    :catch_hspatch\n    move-exception v0\n    :after_hspatch\n";
+        // Determine the smali type for this class
+        String thisType = null;
+        int classIdx = content.indexOf(".class ");
+        if (classIdx >= 0) {
+            int classLineEnd = content.indexOf('\n', classIdx);
+            String classLine = content.substring(classIdx, classLineEnd).trim();
+            String[] parts = classLine.split("\\s+");
+            thisType = parts[parts.length - 1];
+        }
+        if (thisType == null) thisType = "Ljava/lang/Object;";
 
-        String before, after;
+        // v5 helper method approach: don't modify .locals at all
+        String hookCall = "\n\n    # === HSPatch v5: Activity hook via helper method ===\n" +
+            "    invoke-static {p0}, " + thisType + "->_hsp_init_hook(Landroid/content/Context;)V\n";
+
+        String helperMethod = "\n\n.method private static _hsp_init_hook(Landroid/content/Context;)V\n" +
+            "    .locals 2\n\n" +
+            "    :try_hsp_init\n" +
+            "    const-string v0, \"HSPatch\"\n" +
+            "    const-string v1, \">>> Activity hook init\"\n" +
+            "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n" +
+            "    invoke-static {p0}, Lin/startv/hotstar/HSPatchInit;->init(Landroid/content/Context;)V\n" +
+            "    :try_hsp_init_end\n" +
+            "    .catch Ljava/lang/Throwable; {:try_hsp_init .. :try_hsp_init_end} :catch_hsp_init\n" +
+            "    goto :after_hsp_init\n\n" +
+            "    :catch_hsp_init\n" +
+            "    move-exception v0\n\n" +
+            "    :after_hsp_init\n" +
+            "    return-void\n" +
+            ".end method\n";
+
+        String result;
         if (superCallEnd != -1) {
-            before = content.substring(0, superCallEnd);
-            after = content.substring(superCallEnd);
+            result = content.substring(0, superCallEnd) + hookCall + content.substring(superCallEnd) + helperMethod;
         } else {
-            before = content.substring(0, localsLineEnd);
-            after = content.substring(localsLineEnd);
+            int localsIdx = content.indexOf(".locals", onCreateIdx);
+            if (localsIdx == -1 || localsIdx > methodEnd) {
+                localsIdx = content.indexOf(".registers", onCreateIdx);
+            }
+            if (localsIdx == -1 || localsIdx > methodEnd) {
+                log("❌ No .locals/.registers in Activity.onCreate");
+                return;
+            }
+            int localsLineEnd = content.indexOf('\n', localsIdx);
+            result = content.substring(0, localsLineEnd) + hookCall + content.substring(localsLineEnd) + helperMethod;
         }
 
-        String newLocalsLine = usesRegisters ?
-            "    .registers " + neededCount :
-            "    .locals " + neededCount;
-        String result = before + hookCode + after;
-        result = result.replace(localsLine, newLocalsLine);
-
         writeFile(activitySmali, result);
-        log("✅ Hooked Activity.onCreate with HSPatchInit.init()");
+        log("✅ Hooked Activity.onCreate with helper method (register-safe)");
         hookCount++;
     }
 

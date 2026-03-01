@@ -283,47 +283,69 @@ public class PatchEngine {
             List<String> manifestStrings = new ArrayList<>();
             if (mfEntry != null) {
                 byte[] mfData = readAllBytes(zip.getInputStream(mfEntry));
-                manifestStrings = extractBinaryXmlStrings(mfData);
 
-                // Package name: first string matching a Java package pattern
-                // Prefer the "package" attribute which is typically one of the first strings
-                // Validate: must be printable ASCII, reasonable length
-                for (String s : manifestStrings) {
-                    if (s.length() > 100) continue; // too long
-                    if (!isPrintableAscii(s)) continue; // garbled
-                    if (s.matches("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+") &&
-                        !s.startsWith("android.") && !s.startsWith("http") &&
-                        !s.startsWith("com.android.vending") &&
-                        !s.startsWith("com.android.") && !s.contains("/")) {
-                        info.packageName = s;
-                        break;
+                // === Proper AXML element parsing (reliable for all APKs) ===
+                String[] manifestAttrs = parseBinaryManifestElements(mfData);
+                if (manifestAttrs[0] != null) {
+                    info.packageName = manifestAttrs[0];
+                    log("   Package (from manifest element): " + info.packageName);
+                }
+                if (manifestAttrs[1] != null) {
+                    String appClass = manifestAttrs[1];
+                    // Handle relative class names (starting with ".")
+                    if (appClass.startsWith(".") && manifestAttrs[0] != null) {
+                        appClass = manifestAttrs[0] + appClass;
                     }
+                    info.hookClassName = appClass;
+                    info.isApplication = true;
+                    log("   Application class (from manifest element): " + appClass);
                 }
 
-                // If package still unknown, try to infer from class names in manifest
-                if ("unknown".equals(info.packageName)) {
-                    for (String s : manifestStrings) {
-                        if (s.length() > 150) continue;
-                        if (!isPrintableAscii(s)) continue;
-                        if (s.contains(".") && !s.contains(" ") && !s.contains("/") &&
-                            !s.startsWith("android.") && !s.startsWith("http") &&
-                            !s.startsWith("com.android.") && !s.startsWith("org.xmlpull") &&
-                            s.matches("[a-z].*\\.[A-Z].*")) {
-                            // Extract package from class name (everything before last dot)
-                            int lastDot = s.lastIndexOf('.');
-                            if (lastDot > 0) {
-                                info.packageName = s.substring(0, lastDot);
-                                log("   Package inferred from class: " + info.packageName);
+                // === Fallback: string pool heuristics (for unusual manifests) ===
+                if ("unknown".equals(info.packageName) || info.hookClassName == null) {
+                    manifestStrings = extractBinaryXmlStrings(mfData);
+
+                    // Package name: first string matching a Java package pattern
+                    if ("unknown".equals(info.packageName)) {
+                        for (String s : manifestStrings) {
+                            if (s.length() > 100) continue;
+                            if (!isPrintableAscii(s)) continue;
+                            if (s.matches("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+") &&
+                                !s.startsWith("android.") && !s.startsWith("http") &&
+                                !s.startsWith("com.android.vending") &&
+                                !s.startsWith("com.android.") && !s.contains("/")) {
+                                info.packageName = s;
                                 break;
                             }
                         }
-                    }
-                }
 
-                findApplicationClass(info, manifestStrings);
-                if (info.hookClassName == null) {
-                    findActivityClass(info, manifestStrings);
-                }
+                        // If package still unknown, try to infer from class names
+                        if ("unknown".equals(info.packageName)) {
+                            for (String s : manifestStrings) {
+                                if (s.length() > 150) continue;
+                                if (!isPrintableAscii(s)) continue;
+                                if (s.contains(".") && !s.contains(" ") && !s.contains("/") &&
+                                    !s.startsWith("android.") && !s.startsWith("http") &&
+                                    !s.startsWith("com.android.") && !s.startsWith("org.xmlpull") &&
+                                    s.matches("[a-z].*\\.[A-Z].*")) {
+                                    int lastDot = s.lastIndexOf('.');
+                                    if (lastDot > 0) {
+                                        info.packageName = s.substring(0, lastDot);
+                                        log("   Package inferred from class: " + info.packageName);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (info.hookClassName == null) {
+                        findApplicationClass(info, manifestStrings);
+                        if (info.hookClassName == null) {
+                            findActivityClass(info, manifestStrings);
+                        }
+                    }
+                } // end fallback heuristics
             }
 
             if (info.hookClassName == null) {
@@ -1048,8 +1070,13 @@ public class PatchEngine {
         int ok = 0, fail = 0;
         for (File sf : allSmali) {
             try {
-                SmaliMod.assembleSmaliFile(sf, db, 35, false, false);
-                ok++;
+                boolean assembled = SmaliMod.assembleSmaliFile(sf, db, 35, true, false);
+                if (!assembled) {
+                    fail++;
+                    log("   ⚠️ SmaliMod returned false: " + relativePath(smaliDir, sf));
+                } else {
+                    ok++;
+                }
             } catch (Exception e) {
                 fail++;
                 if (fail <= 5) log("   ⚠️ " + relativePath(smaliDir, sf) + ": " + e.getMessage());
@@ -1218,25 +1245,13 @@ public class PatchEngine {
         if (locIdx == -1 || locIdx > mEnd) throw new IOException("No .locals/.registers");
 
         int locEnd = content.indexOf('\n', locIdx);
-        String locLine = content.substring(locIdx, locEnd).trim();
-        int curN = Integer.parseInt(locLine.split("\\s+")[1]);
-        // Allocate 2 EXTRA registers beyond what the original method uses.
-        // Use those dedicated registers for hook code — never touch original v0,v1.
-        // This prevents VerifyError from register type conflicts.
-        // paramCount: onCreate()V on App=1(p0), attachBaseContext(Context)V=2(p0,p1),
-        //             onCreate(Bundle)V on Activity=2(p0,p1)
-        int paramCount = (isApp && !usingAttachBase) ? 1 : 2;
-        int origLocals;
-        if (useRegs) {
-            origLocals = curN - paramCount;
-        } else {
-            origLocals = curN;
-        }
-        int hv0 = origLocals;      // hook-private register 0
-        int hv1 = origLocals + 1;  // hook-private register 1
-        int newN = (useRegs) ? curN + 2 : curN + 2;  // always add 2 extra
-        log("   Registers: orig=" + curN + (useRegs ? " .registers" : " .locals") +
-            " → " + newN + " (hook uses v" + hv0 + ",v" + hv1 + ")");
+
+        // === Strategy: Add a private static helper method _hsp_init_hook(Context)V ===
+        // This avoids modifying .locals/.registers of the original method entirely.
+        // Increasing .locals shifts p0 to higher register numbers, which breaks
+        // existing invoke-* instructions that use both p0 and low v-registers
+        // (format 35c has 4-bit register limit v0-v15, and 3rc needs consecutive regs).
+        // By using a separate method, we get our own fresh register space.
 
         int insertAt;
         int superIdx = content.indexOf("invoke-super", mStart);
@@ -1249,26 +1264,35 @@ public class PatchEngine {
             insertAt = locEnd;
         }
 
-        String hook =
-            "\n\n    # === HSPatch v4: init hook (v" + hv0 + ",v" + hv1 + " dedicated) ===\n" +
-            "    const-string v" + hv0 + ", \"HSPatch\"\n" +
-            "    const-string v" + hv1 + ", \">>> Hook reached in onCreate\"\n" +
-            "    invoke-static {v" + hv0 + ", v" + hv1 + "}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n" +
-            "    :try_hsp\n" +
-            "    invoke-static {p0}, Lin/startv/hotstar/HSPatchInit;->init(Landroid/content/Context;)V\n" +
-            "    :try_hsp_end\n" +
-            "    .catchall {:try_hsp .. :try_hsp_end} :catch_hsp\n" +
-            "    goto :after_hsp\n" +
-            "    :catch_hsp\n" +
-            "    move-exception v" + hv0 + "\n" +
-            "    :after_hsp\n";
+        // Single-line hook call — uses p0 which is unchanged (no .locals change!)
+        String hookCall =
+            "\n\n    # === HSPatch v5: init via helper method ===\n" +
+            "    invoke-static {p0}, " + thisType + "->_hsp_init_hook(Landroid/content/Context;)V\n";
 
-        String result = content.substring(0, insertAt) + hook + content.substring(insertAt);
-        String newLoc = useRegs ? "    .registers " + newN : "    .locals " + newN;
-        result = result.replace(locLine, newLoc);
+        // Helper method — has its own .locals 2, so p0 = v2 (well within 35c limit)
+        String helperMethod =
+            "\n\n.method private static _hsp_init_hook(Landroid/content/Context;)V\n" +
+            "    .locals 2\n\n" +
+            "    :try_hsp_init\n" +
+            "    const-string v0, \"HSPatch\"\n" +
+            "    const-string v1, \">>> Hook reached in onCreate\"\n" +
+            "    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n" +
+            "    invoke-static {p0}, Lin/startv/hotstar/HSPatchInit;->init(Landroid/content/Context;)V\n" +
+            "    :try_hsp_init_end\n" +
+            "    .catch Ljava/lang/Throwable; {:try_hsp_init .. :try_hsp_init_end} :catch_hsp_init\n" +
+            "    goto :after_hsp_init\n\n" +
+            "    :catch_hsp_init\n" +
+            "    move-exception v0\n\n" +
+            "    :after_hsp_init\n" +
+            "    return-void\n" +
+            ".end method\n";
+
+        // Insert the hook call in onCreate, then append the helper method at file end
+        String result = content.substring(0, insertAt) + hookCall + content.substring(insertAt);
+        result = result + helperMethod;
 
         writeFileStr(smaliFile, result);
-        log("   ✅ Injected HSPatchInit.init() hook");
+        log("   ✅ Injected HSPatchInit.init() hook (helper method)");
     }
 
     private String findOnCreate(String content, boolean isApp) {
@@ -2016,6 +2040,109 @@ public class PatchEngine {
 
     // ======================== BINARY MANIFEST ========================
 
+    /**
+     * Parse binary AndroidManifest.xml by walking the AXML element tree
+     * to extract the exact package name and Application class name.
+     * Returns [packageName, applicationClassName] — either may be null.
+     * Uses proper chunk-based parsing with headerSize/chunkSize for reliability.
+     */
+    private String[] parseBinaryManifestElements(byte[] xml) {
+        String[] result = new String[] {null, null};
+        if (xml == null || xml.length < 36) return result;
+
+        List<String> strings = extractBinaryXmlStrings(xml);
+        if (strings.isEmpty()) return result;
+
+        // Skip file header (8 bytes), then skip chunks by reading chunk sizes
+        int pos = 8;
+        while (pos + 8 <= xml.length) {
+            int chunkType = readShort(xml, pos);
+            int headerSize = readShort(xml, pos + 2);
+            int chunkSize = readInt(xml, pos + 4);
+            if (chunkSize < 8 || pos + chunkSize > xml.length) break;
+
+            if (chunkType == 0x0001 || chunkType == 0x0180) {
+                // String pool or resource ID table — skip
+                pos += chunkSize;
+                continue;
+            }
+
+            if (chunkType == 0x0100 || chunkType == 0x0101) {
+                // XML_START_NAMESPACE or XML_END_NAMESPACE — skip
+                pos += chunkSize;
+                continue;
+            }
+
+            if (chunkType == 0x0103) {
+                // XML_END_ELEMENT — skip
+                pos += chunkSize;
+                continue;
+            }
+
+            if (chunkType == 0x0102) {
+                // XML_START_ELEMENT
+                // attrExt starts at pos + headerSize
+                int extOff = pos + headerSize;
+                if (extOff + 20 > xml.length) break;
+
+                int nsIdx = readInt(xml, extOff);       // namespace string index
+                int nameIdx = readInt(xml, extOff + 4);  // element name string index
+                int attrStart = readShort(xml, extOff + 8);  // byte offset from extOff to first attr
+                int attrSize = readShort(xml, extOff + 10);  // bytes per attribute (typically 20)
+                int attrCount = readShort(xml, extOff + 12); // number of attributes
+                if (attrSize == 0) attrSize = 20;
+
+                String elemName = (nameIdx >= 0 && nameIdx < strings.size())
+                    ? strings.get(nameIdx) : "";
+
+                int attrBase = extOff + attrStart;
+
+                if ("manifest".equals(elemName)) {
+                    for (int a = 0; a < attrCount; a++) {
+                        int ao = attrBase + a * attrSize;
+                        if (ao + attrSize > xml.length) break;
+                        int attrNameIdx  = readInt(xml, ao + 4);
+                        int attrValueIdx = readInt(xml, ao + 8);
+                        String attrName = (attrNameIdx >= 0 && attrNameIdx < strings.size())
+                            ? strings.get(attrNameIdx) : "";
+                        if ("package".equals(attrName) &&
+                            attrValueIdx >= 0 && attrValueIdx < strings.size()) {
+                            result[0] = strings.get(attrValueIdx);
+                        }
+                    }
+                } else if ("application".equals(elemName)) {
+                    for (int a = 0; a < attrCount; a++) {
+                        int ao = attrBase + a * attrSize;
+                        if (ao + attrSize > xml.length) break;
+                        int attrNsIdx   = readInt(xml, ao);
+                        int attrNameIdx = readInt(xml, ao + 4);
+                        int attrValueIdx = readInt(xml, ao + 8);
+                        String attrName = (attrNameIdx >= 0 && attrNameIdx < strings.size())
+                            ? strings.get(attrNameIdx) : "";
+                        if ("name".equals(attrName)) {
+                            String ns = (attrNsIdx >= 0 && attrNsIdx < strings.size())
+                                ? strings.get(attrNsIdx) : "";
+                            if (ns.contains("android") &&
+                                attrValueIdx >= 0 && attrValueIdx < strings.size()) {
+                                result[1] = strings.get(attrValueIdx);
+                                break;
+                            }
+                        }
+                    }
+                    break; // found application element, done
+                }
+
+                pos += chunkSize;
+
+            } else {
+                // Unknown chunk type — skip using chunk size
+                pos += chunkSize;
+            }
+        }
+
+        return result;
+    }
+
     private List<String> extractBinaryXmlStrings(byte[] data) {
         List<String> result = new ArrayList<>();
         if (data.length < 12) return result;
@@ -2025,7 +2152,7 @@ public class PatchEngine {
         if (ct != 0x0001) return result;
         int sc = readInt(data, off + 8);
         int fl = readInt(data, off + 16);
-        int ss = readInt(data, off + 20) + off + 8;
+        int ss = readInt(data, off + 20) + off;  // stringsStart is relative to chunk start (off)
         boolean utf8 = (fl & (1 << 8)) != 0;
         if (sc > 50000) return result;
 
