@@ -38,7 +38,7 @@ public class MainActivity extends Activity {
     private static final int BACKUP_APP = 1008;
 
     private Button btnSelect, btnPatch, btnInstall, btnExtract, btnUninstall;
-    private Button btnTrafficToggle, btnBackup, btnSigner;
+    private Button btnBackup, btnSigner;
     private TextView logOutput, apkName, apkSize, progressText, versionText;
     private ScrollView logScroll;
     private ProgressBar progressBar;
@@ -54,7 +54,6 @@ public class MainActivity extends Activity {
     private String targetPackageName = null;
     private boolean autoPatchAfterLoad = false;
     private String selectedApkPatchedVersion = null; // non-null if APK is already patched
-    private boolean trafficMonitorEnabled = true;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -92,16 +91,11 @@ public class MainActivity extends Activity {
         btnUninstall.setOnClickListener(v -> onUninstallClick());
 
         // New feature buttons
-        btnTrafficToggle = findViewById(R.id.btn_traffic_toggle);
         btnBackup = findViewById(R.id.btn_backup);
         btnSigner = findViewById(R.id.btn_signer);
 
-        btnTrafficToggle.setOnClickListener(v -> onTrafficToggleClick());
         btnBackup.setOnClickListener(v -> onBackupClick());
         btnSigner.setOnClickListener(v -> onSignerClick());
-
-        // Initialize traffic toggle state
-        initTrafficToggleState();
 
         requestStoragePermission();
 
@@ -529,7 +523,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.22 — Starting one-click patch");
+        log("⚡ HSPatcher v3.24 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {
@@ -991,108 +985,6 @@ public class MainActivity extends Activity {
             uninstall2.setData(Uri.parse("package:" + packageName));
             startActivityForResult(uninstall2, UNINSTALL_REQUEST);
         }
-    }
-
-    // ======================== TRAFFIC MONITORING TOGGLE ========================
-
-    private void initTrafficToggleState() {
-        // Check all common locations for the flag file
-        new Thread(() -> {
-            boolean disabled = false;
-            String[] dirs = getTrafficFlagDirs();
-            for (String dir : dirs) {
-                File flag = new File(dir, "traffic_monitor_disabled.txt");
-                if (flag.exists()) {
-                    disabled = true;
-                    break;
-                }
-            }
-            final boolean isDisabled = disabled;
-            trafficMonitorEnabled = !isDisabled;
-            mainHandler.post(() -> updateTrafficToggleUI());
-        }).start();
-    }
-
-    private String[] getTrafficFlagDirs() {
-        java.util.List<String> dirs = new java.util.ArrayList<>();
-
-        // If we have a target package, use its external files dir
-        if (targetPackageName != null) {
-            File extDir = new File(Environment.getExternalStorageDirectory(),
-                "Android/data/" + targetPackageName + "/files");
-            dirs.add(extDir.getAbsolutePath());
-        }
-
-        // Check for common hotstar package
-        File hsDir = new File(Environment.getExternalStorageDirectory(),
-            "Android/data/in.startv.hotstar/files");
-        dirs.add(hsDir.getAbsolutePath());
-
-        // Downloads / sdcard fallback
-        dirs.add(Environment.getExternalStoragePublicDirectory(
-            Environment.DIRECTORY_DOWNLOADS).getAbsolutePath());
-        dirs.add(Environment.getExternalStorageDirectory().getAbsolutePath());
-
-        return dirs.toArray(new String[0]);
-    }
-
-    private void updateTrafficToggleUI() {
-        if (trafficMonitorEnabled) {
-            btnTrafficToggle.setText("📡 TRAFFIC: ON");
-            btnTrafficToggle.setBackgroundColor(0xFF00E676);
-            btnTrafficToggle.setTextColor(0xFF000000);
-        } else {
-            btnTrafficToggle.setText("📡 TRAFFIC: OFF");
-            btnTrafficToggle.setBackgroundColor(0xFFB00020);
-            btnTrafficToggle.setTextColor(0xFFFFFFFF);
-        }
-    }
-
-    private void onTrafficToggleClick() {
-        trafficMonitorEnabled = !trafficMonitorEnabled;
-        updateTrafficToggleUI();
-
-        new Thread(() -> {
-            try {
-                String[] dirs = getTrafficFlagDirs();
-                if (trafficMonitorEnabled) {
-                    // Remove flag files from all locations
-                    for (String dir : dirs) {
-                        File flag = new File(dir, "traffic_monitor_disabled.txt");
-                        if (flag.exists()) flag.delete();
-                    }
-                    log("📡 Traffic monitoring ENABLED");
-                    log("   Blocking & rewrite rules are now active.");
-                    log("   Changes take effect within 5 seconds (auto-reload).");
-                } else {
-                    // Create flag file in each target app dir
-                    int created = 0;
-                    for (String dir : dirs) {
-                        try {
-                            File dirFile = new File(dir);
-                            if (!dirFile.exists()) dirFile.mkdirs();
-                            File flag = new File(dir, "traffic_monitor_disabled.txt");
-                            FileOutputStream fos = new FileOutputStream(flag);
-                            fos.write("disabled\n".getBytes());
-                            fos.close();
-                            created++;
-                        } catch (Exception e) {
-                            // some dirs may not be writable
-                        }
-                    }
-                    log("📡 Traffic monitoring DISABLED");
-                    log("   All blocking & rewrite rules suspended.");
-                    log("   Flag written to " + created + " location(s).");
-                    log("   Changes take effect within 5 seconds (auto-reload).");
-                }
-            } catch (Exception e) {
-                log("❌ Toggle error: " + e.getMessage());
-            }
-        }).start();
-
-        Toast.makeText(this,
-            trafficMonitorEnabled ? "Traffic monitoring ON" : "Traffic monitoring OFF",
-            Toast.LENGTH_SHORT).show();
     }
 
     // ======================== APP BACKUP ========================

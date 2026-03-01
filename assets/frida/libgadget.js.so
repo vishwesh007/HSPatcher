@@ -758,7 +758,10 @@ setTimeout(function() {
         var blockPatterns = [];
         var rewriteRules = [];
         var apiDumpEnabled = false;
-        var trafficMonitorEnabled = true; // Can be toggled via traffic_monitor_disabled.txt
+        var trafficMonitorEnabled = true; // Toggled via in-app notification, persisted via flag file
+        var toggleReceiverRegistered = false;
+        var NOTIF_ID = 19730;
+        var NOTIF_CHANNEL = 'hspatch_block';
         var apiDumpMaxBytes = 10 * 1024 * 1024;
 
         function getInternalFilePath(fileName) {
@@ -814,17 +817,18 @@ setTimeout(function() {
                 } catch(e) {}
 
                 apiDumpEnabled = false;
-                trafficMonitorEnabled = true;
+                // trafficMonitorEnabled is now managed by SharedPreferences (set after loadBlockingRules)
+                // Flag file is only a fallback for first-run or manual override
+                var flagFileDisabled = false;
                 try {
                     var File0 = Java.use('java.io.File');
                     for (var dti = 0; dti < dirs.length; dti++) {
                         if (File0.$new(dirs[dti] + '/api_dump_enabled.txt').exists()) { apiDumpEnabled = true; break; }
                     }
-                    // Check for traffic monitoring toggle
+                    // Check for traffic monitoring & blocking toggle (flag file fallback)
                     for (var dti2 = 0; dti2 < dirs.length; dti2++) {
                         if (File0.$new(dirs[dti2] + '/traffic_monitor_disabled.txt').exists()) {
-                            trafficMonitorEnabled = false;
-                            Log.i(netLogTag, '[TRAFFIC] Monitoring DISABLED via flag file');
+                            flagFileDisabled = true;
                             break;
                         }
                     }
@@ -891,6 +895,162 @@ setTimeout(function() {
         }
         loadBlockingRules();
         scheduleRuleReload();
+
+        // Restore toggle state from SharedPreferences (primary), flag file (fallback)
+        try {
+            var ctx0 = Java.use('android.app.ActivityThread').currentApplication();
+            if (ctx0 !== null) {
+                var prefs = ctx0.getSharedPreferences(
+                    Java.use('java.lang.String').$new('hspatch_config'), 0);
+                if (prefs.contains(Java.use('java.lang.String').$new('blocking_enabled'))) {
+                    trafficMonitorEnabled = prefs.getBoolean(
+                        Java.use('java.lang.String').$new('blocking_enabled'), true);
+                    Log.i(netLogTag, '[TOGGLE] State restored from preferences: ' + (trafficMonitorEnabled ? 'ON' : 'OFF'));
+                } else {
+                    Log.i(netLogTag, '[TOGGLE] No saved preference, using default (ON)');
+                }
+            }
+        } catch(ep) {
+            Log.w(netLogTag, '[TOGGLE] Could not read preferences: ' + ep);
+        }
+
+        // =================== IN-APP BLOCKING TOGGLE (Notification) ===================
+        function saveBlockingState(enabled) {
+            try {
+                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctx === null) return;
+                var prefs = ctx.getSharedPreferences(
+                    Java.use('java.lang.String').$new('hspatch_config'), 0);
+                prefs.edit()
+                    .putBoolean(Java.use('java.lang.String').$new('blocking_enabled'), enabled)
+                    .apply();
+                Log.i(netLogTag, '[TOGGLE] State saved to preferences: ' + (enabled ? 'ON' : 'OFF'));
+            } catch(e) {
+                Log.e(netLogTag, '[TOGGLE] Save error: ' + e);
+            }
+        }
+
+        function updateBlockingNotification() {
+            try {
+                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctx === null) return;
+                var context = Java.cast(ctx, Java.use('android.content.Context'));
+
+                var Intent = Java.use('android.content.Intent');
+                var PendingIntent = Java.use('android.app.PendingIntent');
+                var toggleIntent = Intent.$new(Java.use('java.lang.String').$new('hspatch.TOGGLE_BLOCK'));
+                // FLAG_UPDATE_CURRENT | FLAG_IMMUTABLE
+                var piFlags = 0x08000000 | 0x04000000;
+                var togglePi = PendingIntent.getBroadcast(context, 0, toggleIntent, piFlags);
+
+                var Builder = Java.use('android.app.Notification$Builder');
+                var builder = Builder.$new(context, Java.use('java.lang.String').$new(NOTIF_CHANNEL));
+
+                var title = trafficMonitorEnabled
+                    ? '\uD83D\uDEE1 Blocking: ON'
+                    : '\uD83D\uDEE1 Blocking: OFF';
+                var text = trafficMonitorEnabled
+                    ? 'Ad/tracker blocking active \u2022 Tap to disable'
+                    : 'Blocking disabled \u2022 Tap to enable';
+
+                var iconId = 17301624; // android.R.drawable.ic_lock_idle_lock
+                try { iconId = ctx.getApplicationInfo().icon.value; } catch(e) {}
+
+                builder.setSmallIcon(iconId);
+                builder.setContentTitle(Java.use('java.lang.String').$new(title));
+                builder.setContentText(Java.use('java.lang.String').$new(text));
+                builder.setOngoing(true);
+                builder.setContentIntent(togglePi);
+                // Add explicit action button
+                var actionLabel = trafficMonitorEnabled ? '\u274C Turn OFF' : '\u2705 Turn ON';
+                builder.addAction(iconId,
+                    Java.cast(Java.use('java.lang.String').$new(actionLabel), Java.use('java.lang.CharSequence')),
+                    togglePi);
+
+                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
+                                   Java.use('android.app.NotificationManager'));
+                nm.notify(NOTIF_ID, builder.build());
+            } catch(e) {
+                Log.e(netLogTag, '[TOGGLE] Notification error: ' + e);
+            }
+        }
+
+        function setupBlockingToggleUI() {
+            try {
+                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctx === null) {
+                    Log.w(netLogTag, '[TOGGLE] No context yet, retrying in 3s...');
+                    setTimeout(function() { Java.perform(function() { setupBlockingToggleUI(); }); }, 3000);
+                    return;
+                }
+                var context = Java.cast(ctx, Java.use('android.content.Context'));
+
+                // Create notification channel (Android O+)
+                var NotificationChannel = Java.use('android.app.NotificationChannel');
+                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
+                                   Java.use('android.app.NotificationManager'));
+                var ch = NotificationChannel.$new(
+                    Java.use('java.lang.String').$new(NOTIF_CHANNEL),
+                    Java.cast(Java.use('java.lang.String').$new('HSPatch Blocking Control'), Java.use('java.lang.CharSequence')),
+                    2); // IMPORTANCE_LOW — no sound
+                ch.setDescription(Java.use('java.lang.String').$new('Toggle ad/tracker blocking on or off'));
+                nm.createNotificationChannel(ch);
+
+                // Register BroadcastReceiver for toggle action
+                if (!toggleReceiverRegistered) {
+                    var BroadcastReceiver = Java.use('android.content.BroadcastReceiver');
+                    var ReceiverClass = Java.registerClass({
+                        name: 'hspatch.BlockToggleReceiver',
+                        superClass: BroadcastReceiver,
+                        methods: {
+                            onReceive: [{
+                                returnType: 'void',
+                                argumentTypes: ['android.content.Context', 'android.content.Intent'],
+                                implementation: function(c, i) {
+                                    try {
+                                        trafficMonitorEnabled = !trafficMonitorEnabled;
+                                        Log.i(netLogTag, '[TOGGLE] Blocking ' + (trafficMonitorEnabled ? 'ENABLED' : 'DISABLED') + ' via notification');
+                                        saveBlockingState(trafficMonitorEnabled);
+                                        updateBlockingNotification();
+                                        // Show toast
+                                        try {
+                                            var ctx2 = Java.use('android.app.ActivityThread').currentApplication();
+                                            var Toast = Java.use('android.widget.Toast');
+                                            var msg = trafficMonitorEnabled ? 'Blocking ON' : 'Blocking OFF';
+                                            Toast.makeText(ctx2, Java.cast(Java.use('java.lang.String').$new(msg), Java.use('java.lang.CharSequence')), 0).show();
+                                        } catch(et) {}
+                                    } catch(e) {
+                                        Log.e(netLogTag, '[TOGGLE] onReceive error: ' + e);
+                                    }
+                                }
+                            }]
+                        }
+                    });
+
+                    var filter = Java.use('android.content.IntentFilter').$new(
+                        Java.use('java.lang.String').$new('hspatch.TOGGLE_BLOCK'));
+                    var receiver = ReceiverClass.$new();
+
+                    // API 33+ requires RECEIVER_NOT_EXPORTED flag
+                    try {
+                        context.registerReceiver(receiver, filter, 4); // 4 = RECEIVER_NOT_EXPORTED
+                    } catch(e) {
+                        try {
+                            context.registerReceiver(receiver, filter);
+                        } catch(e2) {
+                            Log.e(netLogTag, '[TOGGLE] Cannot register receiver: ' + e2);
+                        }
+                    }
+                    toggleReceiverRegistered = true;
+                }
+
+                // Show initial notification
+                updateBlockingNotification();
+                Log.i(netLogTag, '[TOGGLE] In-app blocking toggle ready (notification)');
+            } catch(e) {
+                Log.e(netLogTag, '[TOGGLE] Setup error: ' + e);
+            }
+        }
 
         // Separate domain-only rules from path rules for smarter matching
         // Domain rules: no '/' → apply to DNS + URL hooks
@@ -1541,11 +1701,14 @@ setTimeout(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.22: URL-level content blocker active   [#]');
-        Log.i(netLogTag, '[*] Traffic monitor: ' + (trafficMonitorEnabled ? 'ENABLED' : 'DISABLED (toggle via traffic_monitor_disabled.txt)'));
+        Log.i(netLogTag, '[#] HSPatch v3.24: URL-level content blocker active   [#]');
+        Log.i(netLogTag, '[*] Blocking: ' + (trafficMonitorEnabled ? 'ENABLED' : 'DISABLED') + ' (toggle via notification)');
         Log.i(netLogTag, '[*] Block: ' + domainRuleCount + ' domains + ' + pathRuleCount + ' path patterns');
         Log.i(netLogTag, '[*] Rewrite rules: ' + rewriteRules.length);
         Log.i(netLogTag, '[*] API dump: ' + (apiDumpEnabled ? 'ENABLED' : 'Create api_dump_enabled.txt to enable'));
         Log.i(netLogTag, '======================================================');
+
+        // Set up in-app blocking toggle notification
+        setupBlockingToggleUI();
     });
 }, 0);
