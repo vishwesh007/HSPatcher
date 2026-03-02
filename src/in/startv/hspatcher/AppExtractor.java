@@ -61,9 +61,9 @@ public class AppExtractor {
             info.packageName = ai.packageName;
             info.label = ai.loadLabel(pm).toString();
             info.version = pi.versionName != null ? pi.versionName : "?";
-            info.sourceDir = ai.sourceDir;
-            info.splitSourceDirs = ai.splitSourceDirs;
-            info.isSplit = (ai.splitSourceDirs != null && ai.splitSourceDirs.length > 0);
+            info.sourceDir = ai.publicSourceDir;
+            info.splitSourceDirs = ai.splitPublicSourceDirs;
+            info.isSplit = (ai.splitPublicSourceDirs != null && ai.splitPublicSourceDirs.length > 0);
             info.isSystem = isSystem;
 
             try {
@@ -73,9 +73,9 @@ public class AppExtractor {
             }
 
             // Calculate total size
-            info.totalSize = new File(ai.sourceDir).length();
+            info.totalSize = new File(ai.publicSourceDir).length();
             if (info.isSplit) {
-                for (String split : ai.splitSourceDirs) {
+                for (String split : ai.splitPublicSourceDirs) {
                     info.totalSize += new File(split).length();
                 }
             }

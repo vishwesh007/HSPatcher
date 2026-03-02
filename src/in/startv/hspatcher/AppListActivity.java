@@ -32,6 +32,9 @@ public class AppListActivity extends Activity {
     public static final String EXTRA_APK_PATH = "extracted_apk_path";
     public static final String EXTRA_IS_SPLIT = "is_split";
     public static final String EXTRA_APP_LABEL = "app_label";
+    public static final String EXTRA_BACKUP_MODE = "backup_mode";
+    public static final String EXTRA_PACKAGE_NAME = "package_name";
+    public static final String EXTRA_SPLIT_DIRS = "split_dirs";
 
     private LinearLayout appListContainer;
     private EditText searchBox;
@@ -72,7 +75,8 @@ public class AppListActivity extends Activity {
         titleBar.addView(backBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         TextView title = new TextView(this);
-        title.setText("📱 Extract from Installed Apps");
+        boolean bkMode = getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false);
+        title.setText(bkMode ? "💾 Select App to Backup" : "📱 Extract from Installed Apps");
         title.setTextSize(20);
         title.setTextColor(0xFF00E676);
         titleBar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
@@ -271,6 +275,20 @@ public class AppListActivity extends Activity {
     }
 
     private void onAppSelected(AppExtractor.AppInfo app) {
+        // Backup mode: skip temp extraction, return original APK paths directly
+        if (getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false)) {
+            Intent resultIntent = new Intent();
+            resultIntent.putExtra(EXTRA_APK_PATH, app.sourceDir);
+            resultIntent.putExtra(EXTRA_IS_SPLIT, app.isSplit);
+            resultIntent.putExtra(EXTRA_APP_LABEL, app.label);
+            resultIntent.putExtra(EXTRA_PACKAGE_NAME, app.packageName);
+            if (app.splitSourceDirs != null) {
+                resultIntent.putExtra(EXTRA_SPLIT_DIRS, app.splitSourceDirs);
+            }
+            setResult(RESULT_OK, resultIntent);
+            finish();
+            return;
+        }
         // Show extracting dialog
         appListContainer.removeAllViews();
         searchBox.setEnabled(false);
