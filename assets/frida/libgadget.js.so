@@ -1,12 +1,13 @@
 /*
- * HSPatch Universal Frida Script v3.22
+ * HSPatch Universal Frida Script v3.28
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
  * - Piracy / License / Integrity Checks Removal
  * - Screenshot / Recording FLAG_SECURE Bypass
  * - Network Traffic Monitoring, Blocking & Modification
- * - URL-Level Content Blocker (ads/tracking path pattern matching)
+ * - URL Preparation-Time Content Blocker (URL.$init, URI.create, Uri.parse,
+ *   HttpUrl.parse/get, Retrofit.baseUrl, OkHttp3, Cronet, WebView, DNS)
  */
 
 setTimeout(function() {
@@ -15,7 +16,7 @@ setTimeout(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.22              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.28              [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -1518,27 +1519,80 @@ setTimeout(function() {
 
 
         // =========================================================
-        //  LAYER 3: JAVA HOOKS — BLOCK/REWRITE ENFORCEMENT
-        //  These apply your blocking_rules to Java HTTP libraries.
+        //  LAYER 3: JAVA HOOKS — URL PREPARATION-TIME ENFORCEMENT
+        //  Block/rewrite at URL construction (preparation) time,
+        //  BEFORE any connection is attempted. This is the earliest
+        //  and most effective interception point.
         //  Monitoring is handled by Layer 1+2 above.
         // =========================================================
 
-        // --- URL constructor + openConnection ---
+        // --- URL constructors — PRIMARY interception point ---
+        // Hooking URL.$init catches URLs at preparation time, before
+        // any connection or request object is created.
         try {
             var URL = Java.use('java.net.URL');
+
+            // URL(String spec) — most common constructor
             try {
-                var _urlInit = URL.$init.overload('java.lang.String');
-                _urlInit.implementation = function(spec) {
+                var _urlInit1 = URL.$init.overload('java.lang.String');
+                _urlInit1.implementation = function(spec) {
                     var s = spec ? spec.toString() : '';
                     if (s.length > 0) {
                         var bm = shouldBlock(s);
-                        if (bm !== null) { logBlocked('URL', 'INIT', s, bm); return _urlInit.call(this, 'http://127.0.0.1:1/blocked'); }
+                        if (bm !== null) { logBlocked('URL', '$init(String)', s, bm); return _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); }
                         var rw = applyRewrites(s);
-                        if (rw.changed) { logRewritten('URL', 'INIT', s, rw.url); return _urlInit.call(this, rw.url); }
+                        if (rw.changed) { logRewritten('URL', '$init(String)', s, rw.url); return _urlInit1.call(this, rw.url); }
                     }
-                    return _urlInit.call(this, spec);
+                    return _urlInit1.call(this, spec);
                 };
-            } catch (e) { }
+                Log.d(netLogTag, '[+] URL.$init(String) hooked');
+            } catch (e) { Log.d(netLogTag, '[-] URL.$init(String): ' + e); }
+
+            // URL(URL context, String spec) — relative URL resolution
+            try {
+                var _urlInit2 = URL.$init.overload('java.net.URL', 'java.lang.String');
+                _urlInit2.implementation = function(context, spec) {
+                    // Resolve the full URL by calling original, then check
+                    _urlInit2.call(this, context, spec);
+                    var full = this.toString();
+                    var bm = shouldBlock(full);
+                    if (bm !== null) { logBlocked('URL', '$init(URL,String)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
+                    var rw = applyRewrites(full);
+                    if (rw.changed) { logRewritten('URL', '$init(URL,String)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                };
+                Log.d(netLogTag, '[+] URL.$init(URL,String) hooked');
+            } catch (e) { Log.d(netLogTag, '[-] URL.$init(URL,String): ' + e); }
+
+            // URL(String protocol, String host, String file) — component constructor
+            try {
+                var _urlInit3 = URL.$init.overload('java.lang.String', 'java.lang.String', 'java.lang.String');
+                _urlInit3.implementation = function(protocol, host, file) {
+                    _urlInit3.call(this, protocol, host, file);
+                    var full = this.toString();
+                    var bm = shouldBlock(full);
+                    if (bm !== null) { logBlocked('URL', '$init(proto,host,file)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
+                    var rw = applyRewrites(full);
+                    if (rw.changed) { logRewritten('URL', '$init(proto,host,file)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                };
+                Log.d(netLogTag, '[+] URL.$init(proto,host,file) hooked');
+            } catch (e) { Log.d(netLogTag, '[-] URL.$init(proto,host,file): ' + e); }
+
+            // URL(String protocol, String host, int port, String file) — full constructor
+            try {
+                var _urlInit4 = URL.$init.overload('java.lang.String', 'java.lang.String', 'int', 'java.lang.String');
+                _urlInit4.implementation = function(protocol, host, port, file) {
+                    _urlInit4.call(this, protocol, host, port, file);
+                    var full = this.toString();
+                    var bm = shouldBlock(full);
+                    if (bm !== null) { logBlocked('URL', '$init(proto,host,port,file)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
+                    var rw = applyRewrites(full);
+                    if (rw.changed) { logRewritten('URL', '$init(proto,host,port,file)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                };
+                Log.d(netLogTag, '[+] URL.$init(proto,host,port,file) hooked');
+            } catch (e) { Log.d(netLogTag, '[-] URL.$init(proto,host,port,file): ' + e); }
+
+            // openConnection — secondary enforcement (catches any URL that
+            // bypassed $init hooks, e.g. created via native code)
             var _urlOpen0 = URL.openConnection.overload();
             _urlOpen0.implementation = function() {
                 var u = this.toString();
@@ -1559,7 +1613,43 @@ setTimeout(function() {
                     return _urlOpenProxy.call(this, proxy);
                 };
             } catch (e) { }
-        } catch (err) { }
+        } catch (err) { Log.d(netLogTag, '[-] URL hooks: ' + err); }
+
+        // --- java.net.URI.create — catches URI-based API calls ---
+        // Many modern Android libraries use URI.create() instead of new URL()
+        try {
+            var URI = Java.use('java.net.URI');
+            var _uriCreate = URI.create.overload('java.lang.String');
+            _uriCreate.implementation = function(str) {
+                var s = str ? str.toString() : '';
+                if (s.length > 0 && (s.indexOf('http://') === 0 || s.indexOf('https://') === 0)) {
+                    var bm = shouldBlock(s);
+                    if (bm !== null) { logBlocked('URI', 'create', s, bm); return _uriCreate.call(this, 'http://127.0.0.1:1/blocked'); }
+                    var rw = applyRewrites(s);
+                    if (rw.changed) { logRewritten('URI', 'create', s, rw.url); return _uriCreate.call(this, rw.url); }
+                }
+                return _uriCreate.call(this, str);
+            };
+            Log.d(netLogTag, '[+] URI.create hooked');
+        } catch (e) { Log.d(netLogTag, '[-] URI.create: ' + e); }
+
+        // --- android.net.Uri.parse — most common on Android ---
+        // Retrofit, Glide, Picasso, Volley, and most Android libs use Uri.parse()
+        try {
+            var AndroidUri = Java.use('android.net.Uri');
+            var _uriParse = AndroidUri.parse.overload('java.lang.String');
+            _uriParse.implementation = function(uriString) {
+                var s = uriString ? uriString.toString() : '';
+                if (s.length > 0 && (s.indexOf('http://') === 0 || s.indexOf('https://') === 0)) {
+                    var bm = shouldBlock(s);
+                    if (bm !== null) { logBlocked('Uri', 'parse', s, bm); return _uriParse.call(this, 'http://127.0.0.1:1/blocked'); }
+                    var rw = applyRewrites(s);
+                    if (rw.changed) { logRewritten('Uri', 'parse', s, rw.url); return _uriParse.call(this, rw.url); }
+                }
+                return _uriParse.call(this, uriString);
+            };
+            Log.d(netLogTag, '[+] android.net.Uri.parse hooked');
+        } catch (e) { Log.d(netLogTag, '[-] Uri.parse: ' + e); }
 
         // --- OkHttp3 newCall — block/rewrite ---
         try {
@@ -1584,6 +1674,56 @@ setTimeout(function() {
             };
         } catch (err) { }
 
+        // --- OkHttp3 HttpUrl.parse / HttpUrl.get — preparation-time hook ---
+        // Many apps build requests via HttpUrl.parse() or HttpUrl.get() before newCall
+        try {
+            var HttpUrl = Java.use('okhttp3.HttpUrl');
+            try {
+                var _httpUrlParse = HttpUrl.parse.overload('java.lang.String');
+                _httpUrlParse.implementation = function(url) {
+                    var s = url ? url.toString() : '';
+                    if (s.length > 0) {
+                        var bm = shouldBlock(s);
+                        if (bm !== null) { logBlocked('HttpUrl', 'parse', s, bm); return _httpUrlParse.call(this, 'http://127.0.0.1:1/blocked'); }
+                        var rw = applyRewrites(s);
+                        if (rw.changed) { logRewritten('HttpUrl', 'parse', s, rw.url); return _httpUrlParse.call(this, rw.url); }
+                    }
+                    return _httpUrlParse.call(this, url);
+                };
+                Log.d(netLogTag, '[+] OkHttp3 HttpUrl.parse hooked');
+            } catch (e) { }
+            try {
+                var _httpUrlGet = HttpUrl.get.overload('java.lang.String');
+                _httpUrlGet.implementation = function(url) {
+                    var s = url ? url.toString() : '';
+                    if (s.length > 0) {
+                        var bm = shouldBlock(s);
+                        if (bm !== null) { logBlocked('HttpUrl', 'get', s, bm); return _httpUrlGet.call(this, 'http://127.0.0.1:1/blocked'); }
+                        var rw = applyRewrites(s);
+                        if (rw.changed) { logRewritten('HttpUrl', 'get', s, rw.url); return _httpUrlGet.call(this, rw.url); }
+                    }
+                    return _httpUrlGet.call(this, url);
+                };
+                Log.d(netLogTag, '[+] OkHttp3 HttpUrl.get hooked');
+            } catch (e) { }
+        } catch (err) { Log.d(netLogTag, '[-] HttpUrl hooks: ' + err); }
+
+        // --- Retrofit2 baseUrl — preparation-time hook ---
+        // Retrofit.Builder.baseUrl() sets the root URL for all API calls
+        try {
+            var RetrofitBuilder = Java.use('retrofit2.Retrofit$Builder');
+            var _rfBaseUrl = RetrofitBuilder.baseUrl.overload('java.lang.String');
+            _rfBaseUrl.implementation = function(baseUrl) {
+                var s = baseUrl ? baseUrl.toString() : '';
+                if (s.length > 0) {
+                    var rw = applyRewrites(s);
+                    if (rw.changed) { logRewritten('Retrofit', 'baseUrl', s, rw.url); return _rfBaseUrl.call(this, rw.url); }
+                }
+                return _rfBaseUrl.call(this, baseUrl);
+            };
+            Log.d(netLogTag, '[+] Retrofit2 baseUrl hooked');
+        } catch (e) { Log.d(netLogTag, '[-] Retrofit baseUrl: ' + e); }
+
         // --- Cronet newUrlRequestBuilder — block/rewrite ---
         // Cronet is Chromium's native HTTP stack. Hotstar uses it for most API traffic.
         // It bypasses HttpURLConnection and OkHttp completely.
@@ -1597,7 +1737,6 @@ setTimeout(function() {
                 var bm = shouldBlock(u);
                 if (bm !== null) {
                     logBlocked('Cronet', 'REQUEST', u, bm);
-                    // Redirect to loopback — Cronet will fail with connection refused
                     return _cronetNewUrlReq.call(this, 'http://127.0.0.1:1/blocked', callback, executor);
                 }
                 var rw = applyRewrites(u);
@@ -1641,6 +1780,21 @@ setTimeout(function() {
                     _wvPost.call(this, url, data);
                 };
             } catch (e) { }
+            // WebView.loadDataWithBaseURL — intercept base URL for relative resource loads
+            try {
+                var _wvLoadData = WebView.loadDataWithBaseURL.overload(
+                    'java.lang.String', 'java.lang.String', 'java.lang.String', 'java.lang.String', 'java.lang.String');
+                _wvLoadData.implementation = function(baseUrl, data, mimeType, encoding, historyUrl) {
+                    if (baseUrl) {
+                        var b = baseUrl.toString();
+                        var bm = shouldBlock(b);
+                        if (bm !== null) { logBlocked('WebView', 'LOAD_DATA_BASE', b, bm); _wvLoadData.call(this, null, data, mimeType, encoding, historyUrl); return; }
+                        var rw = applyRewrites(b);
+                        if (rw.changed) { logRewritten('WebView', 'LOAD_DATA_BASE', b, rw.url); _wvLoadData.call(this, rw.url, data, mimeType, encoding, historyUrl); return; }
+                    }
+                    _wvLoadData.call(this, baseUrl, data, mimeType, encoding, historyUrl);
+                };
+            } catch (e) { }
         } catch (err) { }
 
         // --- HttpURLConnection — block before connect ---
@@ -1664,7 +1818,6 @@ setTimeout(function() {
             _inetGetByName.implementation = function(host) {
                 if (host) {
                     var h = host.toString();
-                    // DNS-safe block check (domain rules only)
                     var bm = shouldBlockDNS(h);
                     if (bm !== null) {
                         logBlocked('InetAddress', 'getByName', h, bm);
@@ -1693,7 +1846,7 @@ setTimeout(function() {
             } catch (e) { }
         } catch (err) { }
 
-        Log.i(netLogTag, '[*] Java block/rewrite hooks installed (Layer 3)');
+        Log.i(netLogTag, '[*] Java URL preparation hooks installed (Layer 3)');
         // Count domain vs path rules for summary
         var domainRuleCount = 0, pathRuleCount = 0;
         for (var ri = 0; ri < blockPatterns.length; ri++) {
@@ -1701,7 +1854,11 @@ setTimeout(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.24: URL-level content blocker active   [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.28: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
+        Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
+        Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
+        Log.i(netLogTag, '[*]        InetAddress, native DNS/connect/TLS');
         Log.i(netLogTag, '[*] Blocking: ' + (trafficMonitorEnabled ? 'ENABLED' : 'DISABLED') + ' (toggle via notification)');
         Log.i(netLogTag, '[*] Block: ' + domainRuleCount + ' domains + ' + pathRuleCount + ' path patterns');
         Log.i(netLogTag, '[*] Rewrite rules: ' + rewriteRules.length);

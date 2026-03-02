@@ -523,7 +523,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.24 — Starting one-click patch");
+        log("⚡ HSPatcher v3.28 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {
@@ -684,6 +684,11 @@ public class MainActivity extends Activity {
                     log("\u26d4 ABORTED: This APK is already patched by HSPatcher.");
                     log("   Please use the ORIGINAL (unmodified) APK file.");
                     log("   If you extracted this from an installed app, it was already patched.");
+                                } else if (e instanceof OutOfMemoryError) {
+                    log("\u274c OUT OF MEMORY: APK too large to patch on this device.");
+                    log("   The APK requires more RAM than available.");
+                    log("   Try closing other apps and retrying, or use a device with more RAM.");
+                    log("   Error: " + msg);
                 } else {
                     log("\u274c FATAL: " + e.getClass().getName() + ": " + msg);
                     for (StackTraceElement st : e.getStackTrace()) {
@@ -694,6 +699,8 @@ public class MainActivity extends Activity {
                     isPatching = false;
                     btnSelect.setEnabled(true);
                     btnPatch.setEnabled(true);
+                    progressBar.setVisibility(View.GONE);
+                    progressText.setVisibility(View.GONE);
                 });
             }
         }).start();

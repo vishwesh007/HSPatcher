@@ -1583,7 +1583,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.13";
+            String version = "3.28";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);
@@ -1618,16 +1618,24 @@ public class PatchEngine {
 
         if (name.endsWith(".dex") || name.endsWith(".so")) {
             // DEX and native libs MUST be stored uncompressed on Android 12+
-            // (INSTALL_FAILED_INVALID_APK: dex not uncompressed and aligned)
-            byte[] data = readAllBytes(new FileInputStream(file));
+            // Two-pass streaming: compute CRC32 first, then write — avoids OOM on large files
+            long fileLen = file.length();
             java.util.zip.CRC32 crc = new java.util.zip.CRC32();
-            crc.update(data);
+            byte[] buf = new byte[65536];
+            int len;
+            FileInputStream fis1 = new FileInputStream(file);
+            while ((len = fis1.read(buf)) > 0) crc.update(buf, 0, len);
+            fis1.close();
+
             e.setMethod(ZipEntry.STORED);
-            e.setSize(data.length);
-            e.setCompressedSize(data.length);
+            e.setSize(fileLen);
+            e.setCompressedSize(fileLen);
             e.setCrc(crc.getValue());
             zos.putNextEntry(e);
-            zos.write(data);
+
+            FileInputStream fis2 = new FileInputStream(file);
+            while ((len = fis2.read(buf)) > 0) zos.write(buf, 0, len);
+            fis2.close();
         } else {
             e.setMethod(ZipEntry.DEFLATED);
             zos.putNextEntry(e);
@@ -1698,23 +1706,19 @@ public class PatchEngine {
     }
 
     private void addZipEntry(ZipOutputStream zos, InputStream is, String name) throws Exception {
-        byte[] data = readAllBytes(is);
-        ZipEntry e = new ZipEntry(name);
-
-        if (name.endsWith(".so") || name.endsWith(".dex")) {
-            // Native libs and DEX must be stored uncompressed on Android 12+
-            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
-            crc.update(data);
-            e.setMethod(ZipEntry.STORED);
-            e.setSize(data.length);
-            e.setCompressedSize(data.length);
-            e.setCrc(crc.getValue());
-        } else {
-            e.setMethod(ZipEntry.DEFLATED);
+        // Write to temp file first to avoid holding large .so/.dex in memory
+        File tmp = File.createTempFile("hsp_ze_", ".tmp");
+        try {
+            FileOutputStream tmpOut = new FileOutputStream(tmp);
+            byte[] buf = new byte[65536];
+            int len;
+            while ((len = is.read(buf)) > 0) tmpOut.write(buf, 0, len);
+            tmpOut.close();
+            is.close();
+            addToZip(zos, name, tmp);
+        } finally {
+            tmp.delete();
         }
-        zos.putNextEntry(e);
-        zos.write(data);
-        zos.closeEntry();
     }
 
     // ======================== SMALI-LEVEL PATCHES (License hack + DexExtractor) ========================
@@ -1845,16 +1849,17 @@ public class PatchEngine {
             extractFileFromApk(apk, dexName, origDex);
 
             // Quick check: does this DEX contain any patchable patterns?
-            byte[] dexBytes = readAllBytes(new FileInputStream(origDex));
-            String dexStr = new String(dexBytes, "ISO-8859-1");
-            boolean hasLicensePatterns = dexStr.contains("Ljava/security/Signature;") ||
-                dexStr.contains("getInstallerPackageName") ||
-                dexStr.contains("LicenseValidator") ||
-                dexStr.contains("ILicenseResultListener");
+            // Stream-scan to avoid OOM on large DEX files (300MB+ APKs)
+            String[] scanPatterns = info.dexguardEncrypted
+                ? new String[]{"Ljava/security/Signature;", "getInstallerPackageName",
+                               "LicenseValidator", "ILicenseResultListener",
+                               "Ljava/lang/reflect/Method;"}
+                : new String[]{"Ljava/security/Signature;", "getInstallerPackageName",
+                               "LicenseValidator", "ILicenseResultListener"};
+            boolean[] found = streamContainsAny(origDex, scanPatterns);
+            boolean hasLicensePatterns = found[0] || found[1] || found[2] || found[3];
             boolean hasReflectPatterns = info.dexguardEncrypted &&
-                dexStr.contains("Ljava/lang/reflect/Method;");
-            dexBytes = null;
-            dexStr = null;
+                scanPatterns.length > 4 && found[4];
 
             if (!hasLicensePatterns && !hasReflectPatterns) {
                 origDex.delete();
@@ -2244,6 +2249,70 @@ public class PatchEngine {
         while ((len = is.read(buf)) > 0) bos.write(buf, 0, len);
         is.close();
         return bos.toByteArray();
+    }
+
+    /**
+     * Stream-scan a file for any of the given string patterns without loading it entirely into memory.
+     * Uses 64KB chunks with overlap to catch cross-boundary matches.
+     * Returns a boolean[] indicating which patterns were found.
+     */
+    private boolean[] streamContainsAny(File file, String... patterns) throws Exception {
+        boolean[] found = new boolean[patterns.length];
+        byte[][] patternBytes = new byte[patterns.length][];
+        int maxLen = 0;
+        for (int i = 0; i < patterns.length; i++) {
+            patternBytes[i] = patterns[i].getBytes("ISO-8859-1");
+            maxLen = Math.max(maxLen, patternBytes[i].length);
+        }
+
+        int bufSize = 64 * 1024;
+        byte[] buf = new byte[bufSize + maxLen];
+        int overlap = maxLen - 1;
+
+        BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file), bufSize);
+        int carryOver = 0;
+        boolean allFound = false;
+
+        try {
+            while (!allFound) {
+                int read = 0;
+                while (read < bufSize) {
+                    int r = bis.read(buf, carryOver + read, bufSize - read);
+                    if (r < 0) break;
+                    read += r;
+                }
+                if (read == 0 && carryOver == 0) break;
+
+                int searchLen = carryOver + read;
+
+                for (int p = 0; p < patterns.length; p++) {
+                    if (found[p]) continue;
+                    byte[] pat = patternBytes[p];
+                    for (int i = 0; i <= searchLen - pat.length; i++) {
+                        boolean match = true;
+                        for (int j = 0; j < pat.length; j++) {
+                            if (buf[i + j] != pat[j]) { match = false; break; }
+                        }
+                        if (match) { found[p] = true; break; }
+                    }
+                }
+
+                // Check if all patterns found (early exit)
+                allFound = true;
+                for (boolean f : found) { if (!f) { allFound = false; break; } }
+
+                // Keep overlap bytes for cross-boundary matches
+                if (read > 0 && searchLen > overlap) {
+                    System.arraycopy(buf, searchLen - overlap, buf, 0, overlap);
+                    carryOver = overlap;
+                } else {
+                    break;
+                }
+            }
+        } finally {
+            bis.close();
+        }
+        return found;
     }
 
     private String readFileStr(File f) throws IOException {
