@@ -1583,7 +1583,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.28";
+            String version = "3.31";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);

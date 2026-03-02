@@ -1,22 +1,27 @@
 /*
- * HSPatch Universal Frida Script v3.28
+ * HSPatch Universal Frida Script v3.31
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
  * - Piracy / License / Integrity Checks Removal
  * - Screenshot / Recording FLAG_SECURE Bypass
+ * - Crypto Exception Resilience (Cipher.doFinal BadPaddingException safety net)
  * - Network Traffic Monitoring, Blocking & Modification
  * - URL Preparation-Time Content Blocker (URL.$init, URI.create, Uri.parse,
  *   HttpUrl.parse/get, Retrofit.baseUrl, OkHttp3, Cronet, WebView, DNS)
+ *
+ * NOTE: Java.perform() is called synchronously (no setTimeout) to ensure
+ * hooks are installed BEFORE the app's Application.onCreate() runs.
+ * This prevents race conditions with native JNI code (e.g., Kochava
+ * Keys.kochavaProdToken -> Cipher.doFinal -> BadPaddingException -> ART abort).
  */
 
-setTimeout(function() {
-    Java.perform(function() {
-        var TAG = "HSPatch-Frida";
+Java.perform(function() {
+    var TAG = "HSPatch-Frida";
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.28              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.31              [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -688,6 +693,135 @@ setTimeout(function() {
         } catch (err) { }
 
         console.log('[*] Piracy/License/Root bypass hooks installed');
+
+
+        // =====================================================
+        // 3b. CRYPTO EXCEPTION RESILIENCE (Re-signing Safety Net)
+        //     When APK is re-signed, encrypted tokens/keys derived
+        //     from the original signing cert fail to decrypt.
+        //     Native JNI code calling Cipher.doFinal() may not handle
+        //     the exception, causing ART to abort ("No pending exception
+        //     expected"). Uses TWO layers:
+        //       Layer 1: Conscrypt OpenSSLCipher.engineDoFinal — catches
+        //                at the crypto provider BEFORE Cipher.doFinal
+        //       Layer 2: javax.crypto.Cipher.doFinal (all overloads)
+        //     Ref: Coursera Keys.kochavaProdToken() crash, common in
+        //     analytics SDKs (Kochava, Adjust, AppsFlyer).
+        // =====================================================
+
+        var _cryptoFixCount = 0;
+
+        // Broad exception matcher — uses toString for maximum compatibility
+        function _isCryptoException(e) {
+            var s = '' + e;
+            return s.indexOf('BadPadding') !== -1 ||
+                   s.indexOf('IllegalBlockSize') !== -1 ||
+                   s.indexOf('AEADBadTag') !== -1 ||
+                   s.indexOf('BAD_DECRYPT') !== -1 ||
+                   s.indexOf('OPENSSL_internal') !== -1;
+        }
+
+        // --- Layer 1: Conscrypt provider (catches exception at source) ---
+        try {
+            var OpenSSLCipher = Java.use('com.android.org.conscrypt.OpenSSLCipher');
+            var _origEngineDoFinal = OpenSSLCipher.engineDoFinal.overload('[B', 'int', 'int');
+            _origEngineDoFinal.implementation = function(input, off, len) {
+                try {
+                    return _origEngineDoFinal.call(this, input, off, len);
+                } catch(e) {
+                    if (_isCryptoException(e)) {
+                        Log.w(TAG, '[!] CRYPTO-L1: Caught ' + e + ' in OpenSSLCipher.engineDoFinal — returning empty (re-sign safe)');
+                        return Java.array('byte', []);
+                    }
+                    throw e;
+                }
+            };
+            _cryptoFixCount++;
+            Log.d(TAG, '[+] CRYPTO: OpenSSLCipher.engineDoFinal hooked (Layer 1)');
+        } catch(e) {
+            Log.d(TAG, '[-] CRYPTO: OpenSSLCipher.engineDoFinal hook failed: ' + e);
+        }
+
+        // --- Layer 2: javax.crypto.Cipher.doFinal (all overloads) ---
+        try {
+            var Cipher = Java.use('javax.crypto.Cipher');
+
+            // doFinal() — no-arg
+            try {
+                var _origDoFinal0 = Cipher.doFinal.overload();
+                _origDoFinal0.implementation = function() {
+                    try {
+                        return _origDoFinal0.call(this);
+                    } catch(e) {
+                        if (_isCryptoException(e)) {
+                            Log.w(TAG, '[!] CRYPTO-L2: Caught ' + e + ' in Cipher.doFinal() — returning empty');
+                            return Java.array('byte', []);
+                        }
+                        throw e;
+                    }
+                };
+                _cryptoFixCount++;
+                Log.d(TAG, '[+] CRYPTO: Cipher.doFinal() hooked (Layer 2)');
+            } catch(e) { Log.d(TAG, '[-] CRYPTO: Cipher.doFinal() hook failed: ' + e); }
+
+            // doFinal(byte[]) — most common form
+            try {
+                var _origDoFinal1 = Cipher.doFinal.overload('[B');
+                _origDoFinal1.implementation = function(input) {
+                    try {
+                        return _origDoFinal1.call(this, input);
+                    } catch(e) {
+                        if (_isCryptoException(e)) {
+                            Log.w(TAG, '[!] CRYPTO-L2: Caught ' + e + ' in Cipher.doFinal(byte[]) — returning empty');
+                            return Java.array('byte', []);
+                        }
+                        throw e;
+                    }
+                };
+                _cryptoFixCount++;
+                Log.d(TAG, '[+] CRYPTO: Cipher.doFinal(byte[]) hooked (Layer 2)');
+            } catch(e) { Log.d(TAG, '[-] CRYPTO: Cipher.doFinal(byte[]) hook failed: ' + e); }
+
+            // doFinal(byte[], int, int) — offset+length variant
+            try {
+                var _origDoFinal3 = Cipher.doFinal.overload('[B', 'int', 'int');
+                _origDoFinal3.implementation = function(input, off, len) {
+                    try {
+                        return _origDoFinal3.call(this, input, off, len);
+                    } catch(e) {
+                        if (_isCryptoException(e)) {
+                            Log.w(TAG, '[!] CRYPTO-L2: Caught ' + e + ' in Cipher.doFinal(byte[],int,int) — returning empty');
+                            return Java.array('byte', []);
+                        }
+                        throw e;
+                    }
+                };
+                _cryptoFixCount++;
+                Log.d(TAG, '[+] CRYPTO: Cipher.doFinal(byte[],int,int) hooked (Layer 2)');
+            } catch(e) { Log.d(TAG, '[-] CRYPTO: Cipher.doFinal(byte[],int,int) hook failed: ' + e); }
+
+            // doFinal(byte[], int) — output buffer variant
+            try {
+                var _origDoFinal2 = Cipher.doFinal.overload('[B', 'int');
+                _origDoFinal2.implementation = function(output, outOff) {
+                    try {
+                        return _origDoFinal2.call(this, output, outOff);
+                    } catch(e) {
+                        if (_isCryptoException(e)) {
+                            Log.w(TAG, '[!] CRYPTO-L2: Caught ' + e + ' in Cipher.doFinal(byte[],int) — returning 0');
+                            return 0;
+                        }
+                        throw e;
+                    }
+                };
+                _cryptoFixCount++;
+                Log.d(TAG, '[+] CRYPTO: Cipher.doFinal(byte[],int) hooked (Layer 2)');
+            } catch(e) { Log.d(TAG, '[-] CRYPTO: Cipher.doFinal(byte[],int) hook failed: ' + e); }
+
+            Log.i(TAG, '[*] Crypto resilience: ' + _cryptoFixCount + ' hooks installed (L1 provider + L2 Cipher)');
+        } catch(e) {
+            Log.e(TAG, '[-] Crypto resilience hook failed: ' + e);
+        }
 
 
         // =====================================================
@@ -1868,4 +2002,3 @@ setTimeout(function() {
         // Set up in-app blocking toggle notification
         setupBlockingToggleUI();
     });
-}, 0);
