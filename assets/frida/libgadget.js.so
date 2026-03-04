@@ -1,5 +1,5 @@
 /*
- * HSPatch Universal Frida Script v3.31
+ * HSPatch Universal Frida Script v3.32
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -21,8 +21,37 @@ Java.perform(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.31              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.32              [#]');
         console.log('======================================================');
+
+
+        // =====================================================
+        // 0. CA CERTIFICATE DUMP (from embedded assets)
+        //    Dumps assets/user_ca.crt to /data/local/tmp/
+        // =====================================================
+        try {
+            var context = Java.use('android.app.ActivityThread').currentApplication().getApplicationContext();
+            var assetMgr = context.getAssets();
+            try {
+                var is = assetMgr.open('user_ca.crt');
+                var File = Java.use('java.io.File');
+                var FileOutputStream = Java.use('java.io.FileOutputStream');
+                var outPath = '/data/local/tmp/user_ca.crt';
+                var fos = FileOutputStream.$new(outPath);
+                var buf = Java.array('byte', new Array(4096).fill(0));
+                var n;
+                while ((n = is.read(buf)) !== -1) {
+                    fos.write(buf, 0, n);
+                }
+                fos.close();
+                is.close();
+                console.log('[+] CA cert dumped to ' + outPath);
+            } catch (assetErr) {
+                console.log('[*] No embedded CA cert (assets/user_ca.crt not found)');
+            }
+        } catch (ctxErr) {
+            console.log('[!] Could not dump CA cert: ' + ctxErr);
+        }
 
         // =====================================================
         // 1. SSL CERTIFICATE PINNING BYPASS (Universal)
@@ -1988,7 +2017,7 @@ Java.perform(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.28: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.32: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');

@@ -1,5 +1,17 @@
 # HSPatcher Changelog
 
+## v3.32 — 2026-02-26: CA Certificate Management + MITM Proxy Support
+
+### Summary
+- **CA Certificate import**: New "CA CERT" button in the tools row lets users import a `.crt` / `.pem` / `.der` certificate file from device storage.
+- **Persistent cert storage**: Imported certificate is stored in app-internal storage (`user_ca.crt`) and survives app restarts. Button turns green when a cert is loaded.
+- **Cert delete option**: Long-press the CA CERT button to remove the stored certificate.
+- **Automatic cert embedding**: When patching an APK, the stored CA cert is automatically embedded as `assets/user_ca.crt` inside the target APK.
+- **Frida cert dump**: The Frida script now dumps `assets/user_ca.crt` to `/data/local/tmp/user_ca.crt` at app startup, making it available for MITM proxy tools (Reqable, mitmproxy, etc.).
+- **Version bump**: 3.31 → 3.32 across manifest, patch engine marker, and Frida script.
+
+---
+
 ## v3.13 — 2026-02-25: URL-Safe Rewrite Rules + Socket Log Rewrites
 
 ### Summary

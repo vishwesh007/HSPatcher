@@ -212,11 +212,24 @@
             android:layout_width="0dp"
             android:layout_height="44dp"
             android:layout_weight="1"
-            android:text="💾 BACKUP APP"
+            android:text="💾 BACKUP"
             android:textColor="#FFFFFFFF"
-            android:textSize="11sp"
+            android:textSize="10sp"
             android:textStyle="bold"
             android:background="#FF5C6BC0"
+            android:layout_marginEnd="4dp" />
+
+        <Button
+            android:id="@+id/btn_cert"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:text="📜 CA CERT"
+            android:textColor="#FFFFFFFF"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:background="#FF795548"
+            android:layout_marginStart="4dp"
             android:layout_marginEnd="4dp" />
 
         <Button
@@ -224,9 +237,9 @@
             android:layout_width="0dp"
             android:layout_height="44dp"
             android:layout_weight="1"
-            android:text="🔐 APK SIGNER"
+            android:text="🔐 SIGNER"
             android:textColor="#FFFFFFFF"
-            android:textSize="11sp"
+            android:textSize="10sp"
             android:textStyle="bold"
             android:background="#FF448AFF"
             android:layout_marginStart="4dp" />

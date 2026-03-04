@@ -51,6 +51,7 @@ public class PatchEngine {
     private final File sigkillDir; // optional: SignatureKiller native libs directory
     private final File workDir;
     private final Callback cb;
+    private byte[] caCertData;  // optional: user CA cert for MITM proxy
 
     public PatchEngine(File inputApk, File extraZip, File fridaZip, File sigkillDir, File workDir, Callback cb) {
         this.inputApk = inputApk;
@@ -59,6 +60,11 @@ public class PatchEngine {
         this.sigkillDir = sigkillDir;
         this.workDir = workDir;
         this.cb = cb;
+    }
+
+    /** Set optional CA certificate data to embed in patched APK. */
+    public void setCaCert(byte[] cert) {
+        this.caCertData = cert;
     }
 
     /**
@@ -1583,7 +1589,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.31";
+            String version = "3.32";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);
@@ -1593,6 +1599,20 @@ public class PatchEngine {
             log("   📌 HSPatch marker written (v" + version + ")");
         } catch (Exception e) {
             log("   ⚠️ Marker write failed: " + e.getMessage());
+        }
+
+        // Embed user CA certificate if provided
+        if (caCertData != null && caCertData.length > 0) {
+            try {
+                ZipEntry certEntry = new ZipEntry("assets/user_ca.crt");
+                certEntry.setMethod(ZipEntry.DEFLATED);
+                zos.putNextEntry(certEntry);
+                zos.write(caCertData);
+                zos.closeEntry();
+                log("   🔐 User CA certificate embedded (" + caCertData.length + " bytes)");
+            } catch (Exception e) {
+                log("   ⚠️ CA cert embed failed: " + e.getMessage());
+            }
         }
 
         zos.close();

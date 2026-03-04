@@ -20,6 +20,7 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.content.SharedPreferences;
 
 import java.io.*;
 import java.text.SimpleDateFormat;
@@ -36,9 +37,10 @@ public class MainActivity extends Activity {
     private static final int INSTALL_PERM = 1006;
     private static final int UNINSTALL_REQUEST = 1007;
     private static final int BACKUP_APP = 1008;
+    private static final int PICK_CERT = 1009;
 
     private Button btnSelect, btnPatch, btnInstall, btnExtract, btnUninstall;
-    private Button btnBackup, btnSigner;
+    private Button btnBackup, btnSigner, btnCert;
     private TextView logOutput, apkName, apkSize, progressText, versionText;
     private ScrollView logScroll;
     private ProgressBar progressBar;
@@ -96,6 +98,10 @@ public class MainActivity extends Activity {
 
         btnBackup.setOnClickListener(v -> onBackupClick());
         btnSigner.setOnClickListener(v -> onSignerClick());
+
+        btnCert = findViewById(R.id.btn_cert);
+        btnCert.setOnClickListener(v -> onCertClick());
+        updateCertButton();
 
         requestStoragePermission();
 
@@ -272,6 +278,9 @@ public class MainActivity extends Activity {
             if (path != null) {
                 handleBackupResult(path, isSplit, label);
             }
+        } else if (requestCode == PICK_CERT && resultCode == RESULT_OK && data != null) {
+            Uri uri = data.getData();
+            if (uri != null) importCaCert(uri);
         } else if (requestCode == INSTALL_PERM) {
             if (Build.VERSION.SDK_INT >= 26 && getPackageManager().canRequestPackageInstalls()) {
                 log("✅ Install from unknown sources enabled");
@@ -523,7 +532,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.28 — Starting one-click patch");
+        log("⚡ HSPatcher v3.32 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {
@@ -614,6 +623,14 @@ public class MainActivity extends Activity {
                         public void onProgress(int pct, String step) { updateProgress(pct, step); }
                     }
                 );
+
+                // Inject stored CA certificate if available
+                File certFile = getCaCertFile();
+                if (certFile.exists()) {
+                    byte[] certData = readFileBytes(certFile);
+                    engine.setCaCert(certData);
+                    log("📜 CA certificate will be embedded (" + certData.length + " bytes)");
+                }
 
                 File result = engine.patch();
 
@@ -1161,4 +1178,150 @@ public class MainActivity extends Activity {
             progressText.setText(step);
         });
     }
+
+    // ======================== CA CERTIFICATE MANAGEMENT ========================
+
+    private static final String PREFS_NAME = "hspatcher_prefs";
+    private static final String PREF_CERT_NAME = "ca_cert_name";
+
+    private File getCaCertFile() {
+        return new File(getFilesDir(), "user_ca.crt");
+    }
+
+    private boolean hasCaCert() {
+        return getCaCertFile().exists() && getCaCertFile().length() > 0;
+    }
+
+    private void updateCertButton() {
+        if (hasCaCert()) {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            String name = prefs.getString(PREF_CERT_NAME, "CA cert");
+            btnCert.setText("\u2705 " + name);
+            btnCert.setBackgroundColor(0xFF2E7D32); // dark green
+            btnCert.setTextColor(0xFFFFFFFF);
+        } else {
+            btnCert.setText("📜 CA CERT");
+            btnCert.setBackgroundColor(0xFF795548); // brown
+            btnCert.setTextColor(0xFFFFFFFF);
+        }
+    }
+
+    private void onCertClick() {
+        if (hasCaCert()) {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            String certName = prefs.getString(PREF_CERT_NAME, "unknown");
+            long certSize = getCaCertFile().length();
+
+            new AlertDialog.Builder(this)
+                .setTitle("📜 CA Certificate")
+                .setMessage("Stored certificate:\n\n"
+                    + "\u2022 " + certName + "\n"
+                    + "\u2022 " + certSize + " bytes\n\n"
+                    + "This certificate will be embedded into\n"
+                    + "every patched APK for MITM proxy support.\n\n"
+                    + "What would you like to do?")
+                .setPositiveButton("Replace", (d, w) -> pickCertFile())
+                .setNegativeButton("Delete", (d, w) -> {
+                    deleteCaCert();
+                    Toast.makeText(this, "CA certificate deleted", Toast.LENGTH_SHORT).show();
+                })
+                .setNeutralButton("Close", null)
+                .show();
+        } else {
+            new AlertDialog.Builder(this)
+                .setTitle("📜 Import CA Certificate")
+                .setMessage("Import a proxy CA certificate (.crt / .pem / .cer / .der)\n\n"
+                    + "The certificate will be:\n"
+                    + "\u2022 Stored once in HSPatcher\n"
+                    + "\u2022 Embedded in every patched APK\n"
+                    + "\u2022 Dumped to /data/local/tmp/ at runtime\n"
+                    + "\u2022 Trusted by the Frida SSL bypass\n\n"
+                    + "Supports: Reqable, Charles, mitmproxy, Burp Suite")
+                .setPositiveButton("Import", (d, w) -> pickCertFile())
+                .setNegativeButton("Cancel", null)
+                .show();
+        }
+    }
+
+    private void pickCertFile() {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("*/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        try {
+            startActivityForResult(
+                Intent.createChooser(intent, "Select CA Certificate"),
+                PICK_CERT);
+        } catch (Exception e) {
+            log("\u274c Could not open file picker: " + e.getMessage());
+        }
+    }
+
+    private void importCaCert(Uri uri) {
+        new Thread(() -> {
+            try {
+                // Read cert data
+                InputStream is = getContentResolver().openInputStream(uri);
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int len;
+                while ((len = is.read(buf)) > 0) bos.write(buf, 0, len);
+                is.close();
+                byte[] certData = bos.toByteArray();
+
+                if (certData.length < 10 || certData.length > 1048576) {
+                    log("\u274c Invalid certificate file (size: " + certData.length + ")");
+                    return;
+                }
+
+                // Save to internal storage
+                FileOutputStream fos = new FileOutputStream(getCaCertFile());
+                fos.write(certData);
+                fos.close();
+
+                // Extract filename
+                String name = uri.getLastPathSegment();
+                if (name == null) name = "user_ca.crt";
+                if (name.contains("/")) name = name.substring(name.lastIndexOf('/') + 1);
+                if (name.contains(":")) name = name.substring(name.lastIndexOf(':') + 1);
+
+                // Store cert name in prefs
+                SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                prefs.edit().putString(PREF_CERT_NAME, name).apply();
+
+                final String fName = name;
+                final int fSize = certData.length;
+                mainHandler.post(() -> {
+                    updateCertButton();
+                    log("\u2705 CA certificate imported: " + fName + " (" + fSize + " bytes)");
+                    log("   Will be embedded in all patched APKs.");
+                    Toast.makeText(this, "CA cert imported: " + fName, Toast.LENGTH_SHORT).show();
+                });
+            } catch (Exception e) {
+                mainHandler.post(() -> {
+                    log("\u274c Failed to import certificate: " + e.getMessage());
+                    Toast.makeText(this, "Import failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+            }
+        }).start();
+    }
+
+    private void deleteCaCert() {
+        File certFile = getCaCertFile();
+        if (certFile.exists()) certFile.delete();
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        prefs.edit().remove(PREF_CERT_NAME).apply();
+        updateCertButton();
+        log("🗑 CA certificate deleted");
+    }
+
+    private byte[] readFileBytes(File f) throws Exception {
+        FileInputStream fis = new FileInputStream(f);
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int len;
+        while ((len = fis.read(buf)) > 0) bos.write(buf, 0, len);
+        fis.close();
+        return bos.toByteArray();
+    }
+
 }
