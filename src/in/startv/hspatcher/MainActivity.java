@@ -532,7 +532,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.32 — Starting one-click patch");
+        log("⚡ HSPatcher v3.33 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {
@@ -541,6 +541,7 @@ public class MainActivity extends Activity {
 
                 // ========= APKS MERGE STEP (if split bundle) =========
                 File apkToProcess = selectedApk;
+                File bundleBaseApk = null;
                 if (isSplitBundle) {
                     log("\n🔀 SPLIT BUNDLE DETECTED — Merging first...");
                     log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -558,6 +559,14 @@ public class MainActivity extends Activity {
                         }
                     });
                     merger.merge(selectedApk, mergedApk, mergeWork);
+
+                    // Extract base.apk from bundle for signature extraction
+                    // (merged APK is unsigned; we need the original signature)
+                    bundleBaseApk = ApksMerger.extractBaseApk(selectedApk, mergeWork);
+                    if (bundleBaseApk != null) {
+                        log("🔑 Extracted base.apk from bundle for signature");
+                    }
+
                     apkToProcess = mergedApk;
 
                     // Update selectedApk reference so downstream uses merged APK
@@ -630,6 +639,11 @@ public class MainActivity extends Activity {
                     byte[] certData = readFileBytes(certFile);
                     engine.setCaCert(certData);
                     log("📜 CA certificate will be embedded (" + certData.length + " bytes)");
+                }
+
+                // For split bundles, tell engine to extract signature from original base.apk
+                if (isSplitBundle && bundleBaseApk != null && bundleBaseApk.exists()) {
+                    engine.setOriginalApkForSignature(bundleBaseApk);
                 }
 
                 File result = engine.patch();

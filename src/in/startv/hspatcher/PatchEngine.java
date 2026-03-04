@@ -52,6 +52,7 @@ public class PatchEngine {
     private final File workDir;
     private final Callback cb;
     private byte[] caCertData;  // optional: user CA cert for MITM proxy
+    private File originalApkForSignature; // original APK (or base.apk from bundle) for signature extraction
 
     public PatchEngine(File inputApk, File extraZip, File fridaZip, File sigkillDir, File workDir, Callback cb) {
         this.inputApk = inputApk;
@@ -61,6 +62,9 @@ public class PatchEngine {
         this.workDir = workDir;
         this.cb = cb;
     }
+
+    /** Set the original APK to extract signature from (for split bundles, this is base.apk). */
+    public void setOriginalApkForSignature(File apk) { this.originalApkForSignature = apk; }
 
     /** Set optional CA certificate data to embed in patched APK. */
     public void setCaCert(byte[] cert) {
@@ -1589,7 +1593,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.32";
+            String version = "3.33";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);
@@ -1942,8 +1946,43 @@ public class PatchEngine {
      * This is used by SignatureKiller to spoof the original signature at runtime.
      */
     private String extractOriginalSignature(File apk) {
+        // Strategy: try multiple sources for the signing certificate
+        // 1. If originalApkForSignature is set (split bundle → base.apk), try that first
+        // 2. Try v1 JAR signature (META-INF/*.RSA)
+        // 3. Try v2/v3 APK Signing Block via Google apksig library
+
+        File[] candidates;
+        if (originalApkForSignature != null && originalApkForSignature.exists()
+                && !originalApkForSignature.equals(apk)) {
+            candidates = new File[] { originalApkForSignature, apk };
+            log("   🔍 Trying signature from original APK first: " + originalApkForSignature.getName());
+        } else {
+            candidates = new File[] { apk };
+        }
+
+        for (File candidate : candidates) {
+            // --- Try v1 (JAR) signature ---
+            String result = extractV1Signature(candidate);
+            if (result != null) {
+                log("   🔑 Extracted v1 (JAR) signature from " + candidate.getName());
+                return result;
+            }
+
+            // --- Try v2/v3 (APK Signing Block) via apksig ---
+            result = extractV2V3Signature(candidate);
+            if (result != null) {
+                log("   🔑 Extracted v2/v3 signature from " + candidate.getName());
+                return result;
+            }
+        }
+
+        log("   ⚠️ No signing certificate found in any candidate APK");
+        return null;
+    }
+
+    /** Extract v1 (JAR) signing certificate from META-INF. */
+    private String extractV1Signature(File apk) {
         try {
-            // Read the cert from META-INF/*.RSA/DSA/EC using JarFile verification
             JarFile jar = new JarFile(apk, true);
             JarEntry entry = jar.getJarEntry("AndroidManifest.xml");
             if (entry == null) entry = jar.getJarEntry("classes.dex");
@@ -1966,7 +2005,45 @@ public class PatchEngine {
             byte[] certDer = certs[0].getEncoded();
             return Base64.encodeToString(certDer, Base64.NO_WRAP);
         } catch (Exception e) {
-            log("   ⚠️ Signature extraction failed: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** Extract v2/v3 signing certificate from APK Signing Block using Google apksig. */
+    private String extractV2V3Signature(File apk) {
+        try {
+            com.android.apksig.ApkVerifier.Builder builder =
+                new com.android.apksig.ApkVerifier.Builder(apk);
+            com.android.apksig.ApkVerifier.Result result = builder.build().verify();
+
+            // Try v3 signers first (newest), then v2, then v1
+            java.util.List<? extends Object> signers = null;
+            if (!result.getV3SchemeSigners().isEmpty()) {
+                for (com.android.apksig.ApkVerifier.Result.V3SchemeSignerInfo si : result.getV3SchemeSigners()) {
+                    java.security.cert.X509Certificate cert = si.getCertificate();
+                    if (cert != null) {
+                        return Base64.encodeToString(cert.getEncoded(), Base64.NO_WRAP);
+                    }
+                }
+            }
+            if (!result.getV2SchemeSigners().isEmpty()) {
+                for (com.android.apksig.ApkVerifier.Result.V2SchemeSignerInfo si : result.getV2SchemeSigners()) {
+                    java.security.cert.X509Certificate cert = si.getCertificate();
+                    if (cert != null) {
+                        return Base64.encodeToString(cert.getEncoded(), Base64.NO_WRAP);
+                    }
+                }
+            }
+            if (!result.getV1SchemeSigners().isEmpty()) {
+                for (com.android.apksig.ApkVerifier.Result.V1SchemeSignerInfo si : result.getV1SchemeSigners()) {
+                    java.security.cert.X509Certificate cert = si.getCertificate();
+                    if (cert != null) {
+                        return Base64.encodeToString(cert.getEncoded(), Base64.NO_WRAP);
+                    }
+                }
+            }
+            return null;
+        } catch (Exception e) {
             return null;
         }
     }

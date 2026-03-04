@@ -1,5 +1,22 @@
 # HSPatcher Changelog
 
+## v3.33 — 2026-02-27: .apks Signature Fix + Advanced Hooking-Based Blocking
+
+### Summary
+- **Split APK (.apks) signature extraction**: Fixed signature detection for `.apks` bundle files. The engine now extracts `base.apk` from the bundle and reads its signature before the merge step destroys it. Multi-strategy approach: tries v1 (JAR), then v2/v3 (APK Signing Block via `apksig` library).
+- **Layer 4 — Advanced Hooking-Based Blocking**: New execution-level blocking layer that complements the existing Layer 3 (URL preparation-time) hooks:
+  - **OkHttp Interceptor injection**: Dynamically injects a blocking interceptor into `OkHttpClient.Builder.build()`, catching requests at the HTTP pipeline level even if URL construction hooks were bypassed. Returns a `204 No Content` response for blocked URLs.
+  - **ExoPlayer DataSpec blocking**: Hooks `DataSpec` constructors (ExoPlayer2 + AndroidX Media3) to block ad/tracker media segment URLs.
+  - **MediaPlayer URL blocking**: Hooks `MediaPlayer.setDataSource()` overloads to block ad media URLs.
+  - **Volley RequestQueue blocking**: Hooks `RequestQueue.add()` to cancel blocked requests.
+  - **Glide GlideUrl blocking**: Hooks `GlideUrl` constructor to redirect blocked image/tracking pixel URLs.
+  - **TLS SNI blocking (native)**: Hooks `SSL_set_tlsext_host_name` to block connections by hostname at the TLS handshake level.
+  - **RealCall fallback**: If interceptor injection fails (obfuscated OkHttp), falls back to hooking `RealCall.execute()`.
+- **Layer 3 preserved as legacy**: Existing URL preparation-time hooks remain active for defense-in-depth.
+- **Version bump**: 3.32 → 3.33 across manifest, patch engine marker, and Frida script.
+
+---
+
 ## v3.32 — 2026-02-26: CA Certificate Management + MITM Proxy Support
 
 ### Summary

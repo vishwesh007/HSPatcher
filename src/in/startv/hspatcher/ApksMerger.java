@@ -84,6 +84,54 @@ public class ApksMerger {
     }
 
     /**
+     * Extract the base APK from a split bundle for signature extraction.
+     * The base.apk inside the bundle has the original signing certificate.
+     *
+     * @param bundleFile the .apks/.xapk/.apkm bundle
+     * @param workDir temp directory to extract into
+     * @return the extracted base.apk file, or null if not found
+     */
+    public static File extractBaseApk(File bundleFile, File workDir) {
+        try (ZipFile zf = new ZipFile(bundleFile)) {
+            Enumeration<? extends ZipEntry> entries = zf.entries();
+            // Priority: look for "base.apk" first, then any .apk file
+            ZipEntry baseEntry = null;
+            ZipEntry fallbackEntry = null;
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                if (entry.isDirectory()) continue;
+                String name = entry.getName().toLowerCase(Locale.US);
+                String simpleName = name;
+                if (simpleName.contains("/")) {
+                    simpleName = simpleName.substring(simpleName.lastIndexOf('/') + 1);
+                }
+                if (simpleName.equals("base.apk")) {
+                    baseEntry = entry;
+                    break;
+                }
+                if (simpleName.endsWith(".apk") && fallbackEntry == null) {
+                    fallbackEntry = entry;
+                }
+            }
+            ZipEntry target = (baseEntry != null) ? baseEntry : fallbackEntry;
+            if (target == null) return null;
+
+            File outFile = new File(workDir, "original_base.apk");
+            try (InputStream is = zf.getInputStream(target);
+                 FileOutputStream fos = new FileOutputStream(outFile)) {
+                byte[] buf = new byte[65536];
+                int len;
+                while ((len = is.read(buf)) > 0) {
+                    fos.write(buf, 0, len);
+                }
+            }
+            return outFile;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * Merge a split APK bundle into a single APK file.
      *
      * @param bundleFile the .apks/.xapk/.apkm file (ZIP of APKs)

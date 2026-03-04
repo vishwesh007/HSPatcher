@@ -1,5 +1,5 @@
 /*
- * HSPatch Universal Frida Script v3.32
+ * HSPatch Universal Frida Script v3.33
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -21,7 +21,7 @@ Java.perform(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.32              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.33              [#]');
         console.log('======================================================');
 
 
@@ -901,6 +901,8 @@ Java.perform(function() {
         //             Sees decrypted HTTPS payload (HTTP headers, bodies)
         //   Layer 3 — Java hooks (OkHttp, URL, WebView)
         //             For block/rewrite rule enforcement at application level
+        //   Layer 4 — Advanced hooks (OkHttp interceptor injection, ExoPlayer,
+        //             Volley, Glide, TLS SNI) — deep execution-level blocking
         // =====================================================
 
         var netLogTag = "HSPatch-Net";
@@ -2010,6 +2012,279 @@ Java.perform(function() {
         } catch (err) { }
 
         Log.i(netLogTag, '[*] Java URL preparation hooks installed (Layer 3)');
+
+        // =========================================================
+        //  LAYER 4: ADVANCED HOOKING-BASED BLOCKING
+        //  Deep interception at HTTP client execution level.
+        //  Works because SSL pinning is already bypassed.
+        //  This catches requests that may bypass URL construction hooks.
+        //  Kept alongside Layer 3 (legacy) for defense in depth.
+        // =========================================================
+
+        var advBlockTag = 'HSPatch-AdvBlock';
+        var advBlockCount = 0;
+
+        // --- 4a. OkHttp Interceptor Injection ---
+        // Dynamically inject a blocking interceptor into OkHttpClient instances.
+        // This runs INSIDE the OkHttp pipeline after SSL is established,
+        // catching everything even if URL.$init hooks were bypassed.
+        try {
+            var OkHttpClientBuilder = Java.use('okhttp3.OkHttpClient$Builder');
+
+            // Register an interceptor class that checks URLs at execution time
+            var Interceptor = Java.use('okhttp3.Interceptor');
+            var Chain = Java.use('okhttp3.Interceptor$Chain');
+            var Response = Java.use('okhttp3.Response');
+            var ResponseBody = Java.use('okhttp3.ResponseBody');
+            var Protocol = Java.use('okhttp3.Protocol');
+            var MediaType = Java.use('okhttp3.MediaType');
+
+            var BlockInterceptor = Java.registerClass({
+                name: 'hspatch.BlockingInterceptor',
+                implements: [Interceptor],
+                methods: {
+                    intercept: [{
+                        returnType: 'okhttp3.Response',
+                        argumentTypes: ['okhttp3.Interceptor$Chain'],
+                        implementation: function(chain) {
+                            var request = chain.request();
+                            var url = request.url().toString();
+                            var bm = shouldBlock(url);
+                            if (bm !== null) {
+                                logBlocked('OkHttp-Interceptor', request.method(), url, bm);
+                                advBlockCount++;
+                                // Return empty 204 No Content response via Builder (stable API)
+                                var ResponseBuilder = Java.use('okhttp3.Response$Builder');
+                                return ResponseBuilder.$new()
+                                    .request(request)
+                                    .protocol(Protocol.HTTP_1_1.value)
+                                    .code(204)
+                                    .message(Java.use('java.lang.String').$new('Blocked by HSPatch'))
+                                    .body(ResponseBody.create(
+                                        MediaType.parse('text/plain'),
+                                        Java.use('java.lang.String').$new('')
+                                    ))
+                                    .build();
+                            }
+                            // Not blocked — proceed normally
+                            return chain.proceed(request);
+                        }
+                    }]
+                }
+            });
+
+            // Hook OkHttpClient.Builder.build() to inject our interceptor
+            var _builderBuild = OkHttpClientBuilder.build;
+            _builderBuild.implementation = function() {
+                try {
+                    // Add our blocking interceptor as a network interceptor
+                    this.addInterceptor(BlockInterceptor.$new());
+                } catch (e) {
+                    // If interceptor injection fails (e.g. obfuscated OkHttp), proceed silently
+                }
+                return _builderBuild.call(this);
+            };
+            Log.i(advBlockTag, '[+] OkHttp interceptor injection active');
+        } catch (e) {
+            // OkHttp may not be present (or may be heavily obfuscated)
+            // Fall back — Response constructor approach
+            try {
+                // Try simpler approach: hook RealCall.execute/enqueue
+                var RealCall = Java.use('okhttp3.internal.connection.RealCall');
+                if (!RealCall) RealCall = Java.use('okhttp3.RealCall');
+
+                var _rcExecute = RealCall.execute;
+                _rcExecute.implementation = function() {
+                    var url = this.request().url().toString();
+                    var bm = shouldBlock(url);
+                    if (bm !== null) {
+                        logBlocked('RealCall', 'EXECUTE', url, bm);
+                        advBlockCount++;
+                        throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + bm);
+                    }
+                    return _rcExecute.call(this);
+                };
+                Log.i(advBlockTag, '[+] RealCall.execute() hooked (fallback)');
+            } catch (e2) {
+                Log.d(advBlockTag, '[-] OkHttp advanced hooks unavailable: ' + e2);
+            }
+        }
+
+        // --- 4b. ExoPlayer / MediaPlayer URL blocking ---
+        // Block ad/tracker URLs in video player pipelines
+        // ExoPlayer is commonly used by streaming apps (Hotstar, etc.)
+        try {
+            // ExoPlayer DataSource blocking — catches media segment URLs
+            var DataSpec = null;
+            var dataSpecClasses = [
+                'com.google.android.exoplayer2.upstream.DataSpec',
+                'androidx.media3.datasource.DataSpec',
+                'com.google.android.exoplayer.upstream.DataSpec'
+            ];
+            for (var dsi = 0; dsi < dataSpecClasses.length; dsi++) {
+                try { DataSpec = Java.use(dataSpecClasses[dsi]); break; } catch(e) {}
+            }
+
+            if (DataSpec) {
+                // Hook the uri field via DataSpec constructors
+                try {
+                    var _ds1 = DataSpec.$init.overload('android.net.Uri');
+                    _ds1.implementation = function(uri) {
+                        var u = uri ? uri.toString() : '';
+                        var bm = shouldBlock(u);
+                        if (bm !== null) {
+                            logBlocked('ExoPlayer', 'DataSpec', u, bm);
+                            advBlockCount++;
+                            return _ds1.call(this, Java.use('android.net.Uri').parse('http://127.0.0.1:1/blocked'));
+                        }
+                        return _ds1.call(this, uri);
+                    };
+                    Log.i(advBlockTag, '[+] ExoPlayer DataSpec(Uri) hooked');
+                } catch (e) {}
+
+                try {
+                    var _ds2 = DataSpec.$init.overload('android.net.Uri', 'long', 'long');
+                    _ds2.implementation = function(uri, pos, len) {
+                        var u = uri ? uri.toString() : '';
+                        var bm = shouldBlock(u);
+                        if (bm !== null) {
+                            logBlocked('ExoPlayer', 'DataSpec', u, bm);
+                            advBlockCount++;
+                            return _ds2.call(this, Java.use('android.net.Uri').parse('http://127.0.0.1:1/blocked'), pos, len);
+                        }
+                        return _ds2.call(this, uri, pos, len);
+                    };
+                } catch (e) {}
+            }
+
+            // MediaPlayer.setDataSource blocking
+            try {
+                var MediaPlayer = Java.use('android.media.MediaPlayer');
+                var _mpSetDs = MediaPlayer.setDataSource.overload('java.lang.String');
+                _mpSetDs.implementation = function(path) {
+                    var bm = shouldBlock(path);
+                    if (bm !== null) {
+                        logBlocked('MediaPlayer', 'setDataSource', path, bm);
+                        advBlockCount++;
+                        throw Java.use('java.io.IOException').$new('HSPatch: blocked media URL: ' + bm);
+                    }
+                    return _mpSetDs.call(this, path);
+                };
+                Log.i(advBlockTag, '[+] MediaPlayer.setDataSource hooked');
+            } catch (e) {}
+
+            // MediaPlayer.setDataSource(Context, Uri) blocking
+            try {
+                var MediaPlayer2 = Java.use('android.media.MediaPlayer');
+                var _mpSetDs2 = MediaPlayer2.setDataSource.overload('android.content.Context', 'android.net.Uri');
+                _mpSetDs2.implementation = function(ctx, uri) {
+                    var u = uri ? uri.toString() : '';
+                    var bm = shouldBlock(u);
+                    if (bm !== null) {
+                        logBlocked('MediaPlayer', 'setDataSource(Uri)', u, bm);
+                        advBlockCount++;
+                        throw Java.use('java.io.IOException').$new('HSPatch: blocked media URL: ' + bm);
+                    }
+                    return _mpSetDs2.call(this, ctx, uri);
+                };
+            } catch (e) {}
+
+        } catch (err) {
+            Log.d(advBlockTag, '[-] ExoPlayer/MediaPlayer hooks: ' + err);
+        }
+
+        // --- 4c. Volley RequestQueue blocking ---
+        try {
+            var RequestQueue = Java.use('com.android.volley.RequestQueue');
+            var _rqAdd = RequestQueue.add.overload('com.android.volley.Request');
+            _rqAdd.implementation = function(request) {
+                try {
+                    var url = request.getUrl();
+                    if (url) {
+                        var bm = shouldBlock(url);
+                        if (bm !== null) {
+                            logBlocked('Volley', request.getMethod() + '', url, bm);
+                            advBlockCount++;
+                            request.cancel();
+                            return request;
+                        }
+                    }
+                } catch (e) {}
+                return _rqAdd.call(this, request);
+            };
+            Log.i(advBlockTag, '[+] Volley RequestQueue.add hooked');
+        } catch (e) {
+            Log.d(advBlockTag, '[-] Volley: ' + e);
+        }
+
+        // --- 4d. Glide/Picasso image URL blocking ---
+        // Block tracking pixels and ad images loaded through image libraries
+        try {
+            var Glide = Java.use('com.bumptech.glide.Glide');
+            var GlideWith = Glide['with'].overload('android.app.Activity');
+            // Can't easily intercept Glide's load chain, but we can hook
+            // GlideUrl which wraps all URLs
+            try {
+                var GlideUrl = Java.use('com.bumptech.glide.load.model.GlideUrl');
+                var _glideUrlInit = GlideUrl.$init.overload('java.lang.String');
+                _glideUrlInit.implementation = function(url) {
+                    var bm = shouldBlock(url);
+                    if (bm !== null) {
+                        logBlocked('Glide', 'GlideUrl', url, bm);
+                        advBlockCount++;
+                        return _glideUrlInit.call(this, 'http://127.0.0.1:1/blocked');
+                    }
+                    return _glideUrlInit.call(this, url);
+                };
+                Log.i(advBlockTag, '[+] Glide GlideUrl hooked');
+            } catch (e) {}
+        } catch (e) {
+            Log.d(advBlockTag, '[-] Glide: ' + e);
+        }
+
+        // --- 4e. Native connect() blocking for blocked IPs ---
+        // Block at the native socket level if DNS resolution was bypassed
+        // (e.g., app has hardcoded IPs or uses its own DNS resolver)
+        // This is handled by Layer 1 connect() with DNS blocking.
+        // Layer 4 adds: blocking based on the TLS SNI (Server Name Indication)
+        try {
+            // Hook SSL_set_tlsext_host_name to catch SNI-based blocking
+            var sslLib = null;
+            try { sslLib = Process.getModuleByName('libssl.so'); } catch(e) {}
+            if (sslLib) {
+                var sslSetTlsextHostName = sslLib.getExportByName('SSL_set_tlsext_host_name');
+                if (sslSetTlsextHostName) {
+                    Interceptor.attach(sslSetTlsextHostName, {
+                        onEnter: function(args) {
+                            var hostname = args[1].readCString();
+                            if (hostname) {
+                                var bm = shouldBlockDNS(hostname);
+                                if (bm !== null) {
+                                    nativeLog('[BLOCKED] TLS SNI: ' + hostname + ' (rule: ' + bm + ')');
+                                    advBlockCount++;
+                                    // Replace hostname with localhost to fail the connection
+                                    args[1].writeUtf8String('localhost');
+                                }
+                            }
+                        }
+                    });
+                    nativeLog('[+] SSL_set_tlsext_host_name hooked (SNI blocking)');
+                }
+            }
+        } catch (e) {
+            nativeLog('[-] SNI hook: ' + e);
+        }
+
+        Log.i(advBlockTag, '======================================================');
+        Log.i(advBlockTag, '[#] HSPatch v3.33: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
+        Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
+        Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
+        Log.i(advBlockTag, '[*]   Volley RequestQueue.add blocking');
+        Log.i(advBlockTag, '[*]   Glide GlideUrl blocking');
+        Log.i(advBlockTag, '[*]   TLS SNI-based hostname blocking (native)');
+        Log.i(advBlockTag, '======================================================');
+
         // Count domain vs path rules for summary
         var domainRuleCount = 0, pathRuleCount = 0;
         for (var ri = 0; ri < blockPatterns.length; ri++) {
@@ -2017,11 +2292,12 @@ Java.perform(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.32: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.33: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
         Log.i(netLogTag, '[*]        InetAddress, native DNS/connect/TLS');
+        Log.i(netLogTag, '[*] Layer 4: OkHttp interceptor, ExoPlayer, Volley, Glide, TLS SNI');
         Log.i(netLogTag, '[*] Blocking: ' + (trafficMonitorEnabled ? 'ENABLED' : 'DISABLED') + ' (toggle via notification)');
         Log.i(netLogTag, '[*] Block: ' + domainRuleCount + ' domains + ' + pathRuleCount + ' path patterns');
         Log.i(netLogTag, '[*] Rewrite rules: ' + rewriteRules.length);
