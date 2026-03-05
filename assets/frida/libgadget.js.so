@@ -1,5 +1,5 @@
 /*
- * HSPatch Universal Frida Script v3.34
+ * HSPatch Universal Frida Script v3.35
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -21,7 +21,7 @@ Java.perform(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.34              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.35              [#]');
         console.log('======================================================');
 
 
@@ -157,6 +157,25 @@ Java.perform(function() {
             }
             Log.d(TAG, '[+] Conscrypt sockets: ' + _csHooked + '/3 hooked');
 
+            // Additional Conscrypt hooks: AbstractConscryptSocket, ConscryptEngine, Platform
+            var _extraConscryptClasses = [
+                'com.android.org.conscrypt.AbstractConscryptSocket',
+                'com.android.org.conscrypt.ConscryptEngine',
+                'com.android.org.conscrypt.Platform',
+                'com.android.org.conscrypt.NativeSsl'
+            ];
+            for (var eci = 0; eci < _extraConscryptClasses.length; eci++) {
+                try {
+                    var EC = Java.use(_extraConscryptClasses[eci]);
+                    try { EC.verifyCertificateChain.overloads.forEach(function(ov) {
+                        ov.implementation = function() {};
+                    }); Log.d(TAG, '[+] ' + _extraConscryptClasses[eci] + '.verifyCertificateChain hooked'); } catch(e) {}
+                    try { EC.checkServerTrusted.overloads.forEach(function(ov) {
+                        ov.implementation = function() { return Java.use('java.util.Collections').emptyList(); };
+                    }); Log.d(TAG, '[+] ' + _extraConscryptClasses[eci] + '.checkServerTrusted hooked'); } catch(e) {}
+                } catch(e) {}
+            }
+
             // (e) Conscrypt CertPinManager + CertificateTransparency
             try { var CPM = Java.use('com.android.org.conscrypt.CertPinManager');
                 try { CPM.isChainValid.implementation = function() { return true; }; } catch(e) {}
@@ -177,6 +196,26 @@ Java.perform(function() {
                 try { CP.check.overload('java.lang.String', 'java.security.cert.Certificate').implementation = function() {}; } catch(e) {}
                 try { CP.check.overload('java.lang.String', '[Ljava.security.cert.Certificate;').implementation = function() {}; } catch(e) {}
                 try { CP['check$okhttp'].implementation = function() {}; } catch(e) {}
+            } catch(e) {}
+
+            // (g2) Cronet CronetEngine.Builder — bypass QUIC + PKP
+            try {
+                var CronetBuilder = Java.use('org.chromium.net.CronetEngine$Builder');
+                CronetBuilder.build.implementation = function() {
+                    try { this.enablePublicKeyPinningBypassForLocalTrustAnchors(true); } catch(e) {}
+                    try { this.enableQuic(false); } catch(e) {}
+                    return this.build();
+                };
+                Log.d(TAG, '[+] CronetEngine.Builder.build hooked (PKP bypass + QUIC off)');
+            } catch(e) {}
+            try {
+                var ExpBuilder = Java.use('org.chromium.net.ExperimentalCronetEngine$Builder');
+                ExpBuilder.build.implementation = function() {
+                    try { this.enablePublicKeyPinningBypassForLocalTrustAnchors(true); } catch(e) {}
+                    try { this.enableQuic(false); } catch(e) {}
+                    return this.build();
+                };
+                Log.d(TAG, '[+] ExperimentalCronetEngine.Builder.build hooked');
             } catch(e) {}
 
             // (h) Android vendored OkHttp v2 — hostname verifier
@@ -355,14 +394,53 @@ Java.perform(function() {
                 });
             }, 5000);
 
-            // Also hook SSLPeerUnverifiedException
+            // Enhanced SSLPeerUnverifiedException + dynamic CertificatePinner discovery
             try {
                 var SSLPeerUnverified = Java.use('javax.net.ssl.SSLPeerUnverifiedException');
+                var _pinnerPatched = false;
                 SSLPeerUnverified.$init.overload('java.lang.String').implementation = function(msg) {
-                    Log.i(TAG, '[!] SSLPeerUnverifiedException SUPPRESSED: ' + msg);
+                    var truncMsg = msg ? (msg.length > 100 ? msg.substring(0, 100) + '...' : msg) : '';
+                    Log.i(TAG, '[!] SSLPeerUnverifiedException SUPPRESSED: ' + truncMsg);
+
+                    // Dynamic CertificatePinner discovery: on first pinning failure,
+                    // walk the stack to find the obfuscated pinner class & hook it.
+                    if (!_pinnerPatched && msg && msg.indexOf('pinning') !== -1) {
+                        try {
+                            var stack = Java.use('java.lang.Thread').currentThread().getStackTrace();
+                            for (var si = 0; si < stack.length && si < 25; si++) {
+                                var cls = stack[si].getClassName();
+                                var method = stack[si].getMethodName();
+                                if (cls.startsWith('java.') || cls.startsWith('javax.') ||
+                                    cls.startsWith('dalvik.') || cls.indexOf('hspatch') !== -1) continue;
+
+                                // The direct caller of new SSLPeerUnverifiedException is the pinner
+                                try {
+                                    var PinnerCls = Java.use(cls);
+                                    var targetMethod = PinnerCls[method];
+                                    if (targetMethod && targetMethod.overloads) {
+                                        var hooked = false;
+                                        targetMethod.overloads.forEach(function(ov) {
+                                            if (ov.returnType.className === 'void') {
+                                                ov.implementation = function() {};
+                                                hooked = true;
+                                            }
+                                        });
+                                        if (hooked) {
+                                            _pinnerPatched = true;
+                                            Log.i(TAG, '[PIN] PATCHED obfuscated CertificatePinner: ' + cls + '.' + method + '()');
+                                            break;
+                                        }
+                                    }
+                                } catch(hookE) {}
+                            }
+                        } catch(stackE) {
+                            Log.w(TAG, '[PIN] Stack analysis error: ' + stackE);
+                        }
+                    }
                     this.$init(msg);
                 };
             } catch(ePeer) {}
+
 
             // ── NET_201 Runtime Suppression ──────────────────────
             // Hook JSONObject to intercept NET_201 error config lookups at runtime.
@@ -2352,7 +2430,7 @@ Java.perform(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.34: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.35: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2368,7 +2446,7 @@ Java.perform(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.34: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.35: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
