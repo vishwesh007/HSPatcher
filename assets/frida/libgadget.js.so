@@ -1,5 +1,5 @@
 /*
- * HSPatch Universal Frida Script v3.33
+ * HSPatch Universal Frida Script v3.34
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -21,7 +21,7 @@ Java.perform(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.33              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.34              [#]');
         console.log('======================================================');
 
 
@@ -363,6 +363,82 @@ Java.perform(function() {
                     this.$init(msg);
                 };
             } catch(ePeer) {}
+
+            // ── NET_201 Runtime Suppression ──────────────────────
+            // Hook JSONObject to intercept NET_201 error config lookups at runtime.
+            // This catches any code path that reads the security error config,
+            // even if the JSON file patching missed it.
+            try {
+                var JSONObject = Java.use('org.json.JSONObject');
+
+                // Hook getString to intercept security error string lookups
+                var _getString = JSONObject.getString;
+                _getString.implementation = function(key) {
+                    var result = _getString.call(this, key);
+                    // Intercept security error title/message strings
+                    if (result === 'common-v2__network_security_error_title') {
+                        Log.i(TAG, '[!] NET_201: title key intercepted → generic');
+                        return 'common-v2__network_error_title';
+                    }
+                    if (result === 'common-v2__network_security_error_message' ||
+                        result === 'common-v2__network_security_error_message_jv') {
+                        Log.i(TAG, '[!] NET_201: message key intercepted → generic');
+                        return 'common-v2__network_unavailable_message';
+                    }
+                    return result;
+                };
+
+                // Also hook optString (non-throwing variant)
+                var optOverloads = JSONObject.optString.overloads;
+                for (var oi = 0; oi < optOverloads.length; oi++) {
+                    (function(overload) {
+                        var origImpl = overload;
+                        overload.implementation = function() {
+                            var result = origImpl.apply(this, arguments);
+                            if (result === 'common-v2__network_security_error_title') {
+                                return 'common-v2__network_error_title';
+                            }
+                            if (result === 'common-v2__network_security_error_message' ||
+                                result === 'common-v2__network_security_error_message_jv') {
+                                return 'common-v2__network_unavailable_message';
+                            }
+                            return result;
+                        };
+                    })(optOverloads[oi]);
+                }
+                Log.i(TAG, '[+] NET_201 JSONObject runtime suppression active');
+            } catch(eNet201) {
+                Log.w(TAG, '[-] NET_201 JSONObject hook: ' + eNet201);
+            }
+
+            // Hook AlertDialog.Builder to suppress security error dialogs
+            try {
+                var AlertDialogBuilder = Java.use('android.app.AlertDialog$Builder');
+                var _setTitle = AlertDialogBuilder.setTitle.overload('java.lang.CharSequence');
+                _setTitle.implementation = function(title) {
+                    var t = title ? title.toString() : '';
+                    if (t === 'Security error' || t.indexOf('security error') !== -1 ||
+                        t.indexOf('Security Error') !== -1) {
+                        Log.i(TAG, '[!] Security error dialog SUPPRESSED (title: ' + t + ')');
+                        return _setTitle.call(this, 'Connection issue');
+                    }
+                    return _setTitle.call(this, title);
+                };
+
+                var _setMessage = AlertDialogBuilder.setMessage.overload('java.lang.CharSequence');
+                _setMessage.implementation = function(msg) {
+                    var m = msg ? msg.toString() : '';
+                    if (m.indexOf('interfering with your secure connection') !== -1 ||
+                        m.indexOf('security') !== -1 && m.indexOf('connection') !== -1) {
+                        Log.i(TAG, '[!] Security error message SUPPRESSED');
+                        return _setMessage.call(this, 'Please check your network and retry.');
+                    }
+                    return _setMessage.call(this, msg);
+                };
+                Log.i(TAG, '[+] AlertDialog security error suppression active');
+            } catch(eDialog) {
+                Log.d(TAG, '[-] AlertDialog hook: ' + eDialog);
+            }
         }
 
         // =====================================================
@@ -2276,7 +2352,7 @@ Java.perform(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.33: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.34: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2292,7 +2368,7 @@ Java.perform(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.33: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.34: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
