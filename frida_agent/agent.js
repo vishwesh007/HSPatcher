@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.40
+ * HSPatch Universal Frida Script v3.41
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -29,7 +29,7 @@ Java.performNow(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.40              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.41              [#]');
         console.log('======================================================');
 
 
@@ -540,21 +540,16 @@ Java.performNow(function() {
         var SSL_VERIFY_NONE = 0;
         var _nativeSslHooked = 0;
 
-        // Helper: find a function address by name - tries exports first, then symbols table
+        // Helper: find a function address by exported name only.
+        // NOTE: enumerateSymbols() removed — it causes SIGSEGV (null FILE*
+        // in __fseeko64) on certain modules (libwebviewchromium.so, etc.)
+        // when Frida reads ELF symbol tables from /proc/self/maps.
         function findSSLFunction(mod, fnName) {
-            var addr = mod.findExportByName(fnName);
-            if (addr) return addr;
-            // For statically-linked BoringSSL (e.g. libwebviewchromium.so),
-            // symbols are NOT exported. Use enumerateSymbols() to find them.
             try {
-                var syms = mod.enumerateSymbols();
-                for (var si = 0; si < syms.length; si++) {
-                    if (syms[si].name === fnName) {
-                        return syms[si].address;
-                    }
-                }
-            } catch(e) {}
-            return null;
+                return mod.findExportByName(fnName);
+            } catch(e) {
+                return null;
+            }
         }
 
         function patchNativeSSLVerify(libName) {
@@ -685,92 +680,45 @@ Java.performNow(function() {
 
         // Try immediate hook on known BoringSSL/Cronet library names
         // libwebviewchromium.so is the system WebView (Chromium) with statically-linked BoringSSL
-        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so', 'libwebviewchromium.so'];
+        // NOTE: libwebviewchromium.so removed — BoringSSL is statically linked
+        // (not exported) and scanning its massive symbol table causes SIGSEGV.
+        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so'];
         for (var nsi = 0; nsi < _nativeSslLibs.length; nsi++) {
             _nativeSslHooked += patchNativeSSLVerify(_nativeSslLibs[nsi]);
         }
 
-        // Also scan ALL loaded modules for SSL exports (catches statically-linked BoringSSL in any lib)
-        try {
-            var allMods = Process.enumerateModules();
-            for (var ami = 0; ami < allMods.length; ami++) {
-                var amName = allMods[ami].name;
-                // Skip already-tried libs and system/framework libs
-                if (_nativeSslLibs.indexOf(amName) !== -1) continue;
-                if (amName.indexOf('frida') !== -1 || amName.indexOf('gadget') !== -1) continue;
-                if (amName.indexOf('libc.so') !== -1 || amName.indexOf('libm.so') !== -1) continue;
-                // Try to find SSL exports - if any exist, hook them
-                try {
-                    var testMod = Process.getModuleByName(amName);
-                    var hasSSL = findSSLFunction(testMod, 'SSL_CTX_set_custom_verify') ||
-                                 findSSLFunction(testMod, 'SSL_set_custom_verify') ||
-                                 findSSLFunction(testMod, 'SSL_CTX_set_verify') ||
-                                 findSSLFunction(testMod, 'SSL_set_verify') ||
-                                 findSSLFunction(testMod, 'SSL_new');
-                    if (hasSSL) {
-                        var ap = patchNativeSSLVerify(amName);
-                        if (ap > 0) {
-                            _nativeSslHooked += ap;
-                            console.log('[+] Found SSL in unexpected lib: ' + amName + ' (' + ap + ' hooks)');
-                        }
-                    }
-                } catch(scanE) {}
-            }
-        } catch(enumE) {
-            console.log('[-] Module enumeration failed: ' + enumE);
-        }
+        // NOTE: broad "scan ALL modules" loop REMOVED in v3.41.
+        // Calling findExportByName/enumerateSymbols on every loaded module
+        // caused SIGSEGV in Frida's ELF reader (__fseeko64 null FILE*).
+        // The named libs above cover all real-world SSL scenarios.
 
-        // Watch for ALL late-loaded libs - scan each one for SSL exports
+        // Watch for late-loaded SSL libs by name only (safe — no broad scan)
         try {
             var _patchedModules = {};
             Process.attachModuleObserver({
                 onAdded: function(mod) {
                     var name = mod.name;
-                    if (_patchedModules[name]) return; // Already patched
+                    if (_patchedModules[name]) return;
+                    // Only check libs whose name suggests SSL/Cronet
+                    if (name.indexOf('ssl') === -1 && name.indexOf('cronet') === -1 &&
+                        name.indexOf('boringssl') === -1) return;
                     if (name.indexOf('frida') !== -1 || name.indexOf('gadget') !== -1) return;
-                    // Check if this module has SSL exports or symbols
                     try {
-                        var hasSslExport = findSSLFunction(mod, 'SSL_CTX_set_custom_verify') ||
-                                          findSSLFunction(mod, 'SSL_set_custom_verify') ||
-                                          findSSLFunction(mod, 'SSL_CTX_set_verify') ||
-                                          findSSLFunction(mod, 'SSL_set_verify') ||
-                                          findSSLFunction(mod, 'SSL_new') ||
-                                          findSSLFunction(mod, 'SSL_do_handshake');
-                        if (hasSslExport) {
-                            _patchedModules[name] = true;
-                            var p = patchNativeSSLVerify(name);
-                            if (p > 0) {
-                                _nativeSslHooked += p;
-                                console.log('[+] Late-loaded SSL lib patched: ' + name + ' (' + p + ' hooks)');
-                            }
+                        _patchedModules[name] = true;
+                        var p = patchNativeSSLVerify(name);
+                        if (p > 0) {
+                            _nativeSslHooked += p;
+                            console.log('[+] Late-loaded SSL lib patched: ' + name + ' (' + p + ' hooks)');
                         }
                     } catch(lateE) {}
                 }
             });
         } catch (e) {
-            // Fallback: retry after 3s for older Frida without attachModuleObserver
+            // Fallback: retry named libs after 3s for older Frida without attachModuleObserver
             setTimeout(function() {
                 for (var nsi2 = 0; nsi2 < _nativeSslLibs.length; nsi2++) {
                     _nativeSslHooked += patchNativeSSLVerify(_nativeSslLibs[nsi2]);
                 }
-                // Also try a broad scan again
-                try {
-                    var lateMods = Process.enumerateModules();
-                    for (var lmi = 0; lmi < lateMods.length; lmi++) {
-                        var lmName = lateMods[lmi].name;
-                        if (_nativeSslLibs.indexOf(lmName) !== -1) continue;
-                        try {
-                            var lm = Process.getModuleByName(lmName);
-                            if (findSSLFunction(lm, 'SSL_CTX_set_verify') || findSSLFunction(lm, 'SSL_new')) {
-                                var lp = patchNativeSSLVerify(lmName);
-                                if (lp > 0) {
-                                    _nativeSslHooked += lp;
-                                    console.log('[+] Delayed scan found SSL in: ' + lmName);
-                                }
-                            }
-                        } catch(dscanE) {}
-                    }
-                } catch(deE) {}
                 if (_nativeSslHooked > 0) console.log('[+] Delayed native SSL hooks: ' + _nativeSslHooked);
             }, 3000);
         }
@@ -2438,7 +2386,7 @@ Java.performNow(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.40: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.41: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2454,7 +2402,7 @@ Java.performNow(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.40: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.41: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');

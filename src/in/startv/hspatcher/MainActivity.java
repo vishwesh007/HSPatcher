@@ -532,7 +532,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.40 — Starting one-click patch");
+        log("⚡ HSPatcher v3.41 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {
