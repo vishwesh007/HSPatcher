@@ -73,8 +73,6 @@
     :check_signing_info
     # Replace signingInfo signatures (Android P+, API 28)
     const/16 v1, 0x1c
-    invoke-static {}, Landroid/os/Build$VERSION;->SDK_INT:I
-    # Can't call SDK_INT as method; use sget instead
     sget v2, Landroid/os/Build$VERSION;->SDK_INT:I
     if-lt v2, v1, :skip_replace
 

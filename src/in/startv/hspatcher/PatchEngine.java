@@ -781,6 +781,8 @@ public class PatchEngine {
         extracted++;
         generateBootProvider(tmpDir);
         extracted++;
+        generateGadgetThread(tmpDir);
+        extracted++;
 
         DexBuilder db = new DexBuilder(Opcodes.forApi(35));
         List<File> smaliFiles = new ArrayList<>();
@@ -881,15 +883,18 @@ public class PatchEngine {
             sb.append("    :after_sigkill\n\n");
         }
 
-        // Load Frida gadget (optional — silently skipped if not embedded)
-        sb.append("    # === Load Frida Gadget (if embedded) ===\n");
+        // Load Frida gadget on background thread — fire-and-forget
+        // Frida 17 JNI_OnLoad blocks indefinitely (event loop stays alive),
+        // so we MUST NOT join/wait. Hooks install within ~1s on the bg thread.
+        sb.append("    # === Load Frida Gadget on background thread (fire-and-forget) ===\n");
         sb.append("    :try_gadget\n");
-        sb.append("    const-string v0, \"gadget\"\n");
-        sb.append("    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n");
+        sb.append("    new-instance v0, Lin/startv/hotstar/HSPatchGadgetThread;\n");
+        sb.append("    invoke-direct {v0}, Lin/startv/hotstar/HSPatchGadgetThread;-><init>()V\n");
+        sb.append("    invoke-virtual {v0}, Ljava/lang/Thread;->start()V\n");
         sb.append("    :try_gadget_end\n");
         sb.append("    .catch Ljava/lang/Throwable; {:try_gadget .. :try_gadget_end} :catch_gadget\n");
         sb.append("    const-string v0, \"HSPatch\"\n");
-        sb.append("    const-string v1, \"  \\u2705 frida gadget loaded\"\n");
+        sb.append("    const-string v1, \"  \\u2705 frida gadget thread started\"\n");
         sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n");
         sb.append("    goto :after_gadget\n");
         sb.append("    :catch_gadget\n");
@@ -1005,6 +1010,61 @@ public class PatchEngine {
 
         writeFileStr(f, sb.toString());
         log("   Generated HSPatchBootProvider.smali (ContentProvider bootstrap)");
+    }
+
+    private void generateGadgetThread(File smaliRoot) throws IOException {
+        File dir = new File(smaliRoot, "smali/in/startv/hotstar");
+        if (!dir.exists()) dir.mkdirs();
+        File f = new File(dir, "HSPatchGadgetThread.smali");
+        if (f.exists()) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append(".class public Lin/startv/hotstar/HSPatchGadgetThread;\n");
+        sb.append(".super Ljava/lang/Thread;\n\n");
+        sb.append("# Loads Frida gadget on a background thread to prevent ANR.\n");
+        sb.append("# Frida 17 JNI_OnLoad blocks indefinitely after script execution\n");
+        sb.append("# due to internal event loop. Hooks install within ~1s but nativeLoad\n");
+        sb.append("# never returns. This thread absorbs the blocking.\n\n");
+        // Constructor
+        sb.append(".method public constructor <init>()V\n");
+        sb.append("    .locals 1\n");
+        sb.append("    const-string v0, \"HSPatch-Gadget\"\n");
+        sb.append("    invoke-direct {p0, v0}, Ljava/lang/Thread;-><init>(Ljava/lang/String;)V\n");
+        sb.append("    return-void\n");
+        sb.append(".end method\n\n");
+        // run()
+        sb.append(".method public run()V\n");
+        sb.append("    .locals 2\n\n");
+        sb.append("    # Sleep 3s to let main thread finish its own loadLibrary calls.\n");
+        sb.append("    # System.loadLibrary holds a Java-level lock in Runtime;\n");
+        sb.append("    # our gadget JNI_OnLoad never returns, so loading too early\n");
+        sb.append("    # would deadlock any subsequent loadLibrary on main thread.\n");
+        sb.append("    const-wide/16 v0, 0xBB8\n");
+        sb.append("    :try_sleep\n");
+        sb.append("    invoke-static {v0, v1}, Ljava/lang/Thread;->sleep(J)V\n");
+        sb.append("    :try_sleep_end\n");
+        sb.append("    .catch Ljava/lang/InterruptedException; {:try_sleep .. :try_sleep_end} :catch_sleep\n");
+        sb.append("    goto :after_sleep\n");
+        sb.append("    :catch_sleep\n");
+        sb.append("    move-exception v0\n");
+        sb.append("    :after_sleep\n\n");
+        sb.append("    :try_load\n");
+        sb.append("    const-string v0, \"gadget\"\n");
+        sb.append("    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n");
+        sb.append("    :try_load_end\n");
+        sb.append("    .catch Ljava/lang/Throwable; {:try_load .. :try_load_end} :catch_load\n");
+        sb.append("    const-string v0, \"HSPatch\"\n");
+        sb.append("    const-string v1, \"  \\u2705 frida gadget loaded (bg thread complete)\"\n");
+        sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n");
+        sb.append("    return-void\n\n");
+        sb.append("    :catch_load\n");
+        sb.append("    move-exception v0\n");
+        sb.append("    const-string v0, \"HSPatch\"\n");
+        sb.append("    const-string v1, \"  \\u26a0\\ufe0f frida gadget load failed (bg thread)\"\n");
+        sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I\n");
+        sb.append("    return-void\n");
+        sb.append(".end method\n");
+        writeFileStr(f, sb.toString());
+        log("   Generated HSPatchGadgetThread.smali (background gadget loader)");
     }
 
     // ======================== STEP 3: PATCH HOOK DEX ========================
@@ -1593,7 +1653,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.38";
+            String version = "3.40";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);
