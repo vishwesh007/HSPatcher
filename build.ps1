@@ -153,6 +153,25 @@ if (Test-Path $assetsDir) {
         }
     }
 
+    # Compile Frida agent with frida-java-bridge (Frida 17+ requirement)
+    # Uses esbuild for flat JS output (no 📦 bundle format) - compatible with all Frida gadget versions
+    $fridaAgentDir = Join-Path $PROJECT "frida_agent"
+    $fridaAgentSrc = Join-Path $fridaAgentDir "agent.js"
+    $fridaCompiledOut = Join-Path $fridaAgentDir "compiled_agent.js"
+    if (Test-Path $fridaAgentSrc) {
+        Write-Host "  Compiling Frida agent (bundling Java bridge via esbuild)..."
+        Push-Location $fridaAgentDir
+        & npx esbuild agent.js --bundle --outfile=compiled_agent.js --format=iife --target=es2020 --minify --platform=neutral --alias:buffer=@frida/buffer --alias:base64-js=@frida/base64-js --alias:ieee754=@frida/ieee754 2>&1
+        Pop-Location
+        if (Test-Path $fridaCompiledOut) {
+            Copy-Item $fridaCompiledOut (Join-Path $PROJECT "assets\frida\libgadget.js.so") -Force
+            $compiledSize = [math]::Round((Get-Item $fridaCompiledOut).Length / 1024)
+            Write-Host "  Frida agent compiled: ${compiledSize}K (Java bridge bundled, flat JS)" -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: esbuild failed, using existing script" -ForegroundColor Yellow
+        }
+    }
+
     # Create Frida gadgets zip from local gadget files
     $gadgetArm64 = Join-Path (Split-Path $PROJECT) "decompiled\lib\arm64-v8a\libgadget.so"
     $gadgetArm   = Join-Path (Split-Path $PROJECT) "decompiled\lib\armeabi-v7a\libgadget.so"
