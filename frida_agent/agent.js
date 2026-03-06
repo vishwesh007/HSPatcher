@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.41
+ * HSPatch Universal Frida Script v3.42
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -29,7 +29,7 @@ Java.performNow(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.41              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.42              [#]');
         console.log('======================================================');
 
 
@@ -254,103 +254,10 @@ Java.performNow(function() {
             //       find the obfuscated class dynamically (name changes per release).
             // =====================================================
 
-            // Delayed attempt: find the error-mapping class after classes are loaded
-            function attemptErrorMapperHook() {
-                Java.perform(function() {
-                    try {
-                        // Use Java.enumerateMethods to find the class dynamically
-                        // Pattern: class with method a(IOException) in a 2-char package
-                        var candidates = [];
-                        try {
-                            // Search for methods named 'a' in short-package classes
-                            // that take IOException and return an enum-like type
-                            var results = Java.enumerateMethods('*!a/s');
-                            for (var ri = 0; ri < results.length; ri++) {
-                                var group = results[ri];
-                                for (var ci = 0; ci < group.classes.length; ci++) {
-                                    var cls = group.classes[ci];
-                                    var name = cls.name;
-                                    // Look for 2-segment names like Nh.k, Ab.c, etc.
-                                    if (/^[A-Z][a-z]\.[a-z]$/.test(name)) {
-                                        for (var mi = 0; mi < cls.methods.length; mi++) {
-                                            var sig = cls.methods[mi];
-                                            if (sig.indexOf('IOException') !== -1) {
-                                                candidates.push(name);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } catch(eEnum) {
-                            Log.w(TAG, '[-] enumerateMethods failed: ' + eEnum);
-                        }
-
-                        if (candidates.length > 0) {
-                            Log.i(TAG, '[+] Error mapper candidates: ' + JSON.stringify(candidates));
-                            for (var ci2 = 0; ci2 < candidates.length; ci2++) {
-                                try {
-                                    var candidateName = candidates[ci2];
-                                    // Find the right classloader
-                                    var factory = null;
-                                    Java.enumerateClassLoaders({
-                                        onMatch: function(loader) {
-                                            try {
-                                                loader.loadClass(candidateName);
-                                                factory = Java.ClassFactory.get(loader);
-                                            } catch(e) {}
-                                        },
-                                        onComplete: function() {}
-                                    });
-
-                                    if (!factory) continue;
-
-                                    var MapperClass = factory.use(candidateName);
-                                    var methods = MapperClass.a.overloads;
-                                    for (var oi = 0; oi < methods.length; oi++) {
-                                        var argTypes = methods[oi].argumentTypes;
-                                        if (argTypes.length === 1) {
-                                            var argClass = argTypes[0].className;
-                                            if (argClass === 'java.io.IOException' || argClass === 'java.lang.Exception') {
-                                                var retType = methods[oi].returnType.className;
-                                                // Get the enum's generic-error field
-                                                var EnumClass = factory.use(retType);
-                                                var genericValue = null;
-                                                // Try common field names for NET_104 (generic error)
-                                                try { genericValue = EnumClass.f.value; } catch(e) {}
-                                                if (!genericValue) {
-                                                    try { genericValue = EnumClass.b.value; } catch(e) {}
-                                                }
-
-                                                if (genericValue) {
-                                                    var SSLExc = Java.use('javax.net.ssl.SSLException').class;
-                                                    (function(method, gv, cn) {
-                                                        method.implementation = function(exc) {
-                                                            if (SSLExc.isInstance(exc)) {
-                                                                Log.i(TAG, '[!] SSL error reclassified via ' + cn + ': ' + exc.getMessage());
-                                                                return gv;
-                                                            }
-                                                            return method.call(this, exc);
-                                                        };
-                                                        Log.i(TAG, '[+] ' + cn + '.a(IOException) hooked → generic error');
-                                                    })(methods[oi], genericValue, candidateName);
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch(eCand) {
-                                    Log.w(TAG, '[-] Candidate ' + candidates[ci2] + ' failed: ' + eCand);
-                                }
-                            }
-                        } else {
-                            Log.d(TAG, '[-] No error mapper class found (JSON config patch handles this)');
-                        }
-                    } catch(eMapper) {
-                        Log.w(TAG, '[-] Error mapper hook failed: ' + eMapper + ' (JSON patch handles this)');
-                    }
-                });
-            }
-            // Attempt after 8 seconds when more classes are loaded
-            setTimeout(attemptErrorMapperHook, 8000);
+            // v3.42: REMOVED attemptErrorMapperHook() — it called
+            // Java.enumerateMethods('*!a/s') which scans ALL methods in ALL classes,
+            // taking seconds and causing startup lag/ANR. The NET_201/security error
+            // is fully handled by PatchEngine's JSON config patching at APK level.
 
             // Suppress SSLHandshakeException at Java level
             try {
@@ -361,46 +268,10 @@ Java.performNow(function() {
                 };
             } catch(eSSL) {}
 
-            // Hook Cronet's UrlRequest.Callback.onFailed to suppress SSL errors
-            function hookCronetCallbacks() {
-                var hookedCount = 0;
-                try {
-                    Java.enumerateLoadedClasses({
-                        onMatch: function(className) {
-                            if (className.indexOf('UrlRequest') !== -1 && className.indexOf('Callback') !== -1) {
-                                try {
-                                    var cls = Java.use(className);
-                                    if (cls.onFailed) {
-                                        cls.onFailed.implementation = function(request, info, error) {
-                                            var errMsg = error ? error.toString() : 'null';
-                                            if (errMsg.indexOf('SSL') !== -1 || errMsg.indexOf('ERR_CERT') !== -1 ||
-                                                errMsg.indexOf('ERR_SSL') !== -1 || errMsg.indexOf('handshake') !== -1 ||
-                                                errMsg.indexOf('CERT_') !== -1) {
-                                                Log.i(TAG, '[!] Cronet onFailed SUPPRESSED: ' + errMsg);
-                                                return; // Suppress SSL errors
-                                            }
-                                            this.onFailed(request, info, error);
-                                        };
-                                        hookedCount++;
-                                        console.log('[+] Cronet callback hooked: ' + className);
-                                    }
-                                } catch(cbE) {}
-                            }
-                        },
-                        onComplete: function() {}
-                    });
-                } catch(eCronet) {}
-                return hookedCount;
-            }
-            hookCronetCallbacks();
-
-            // Re-hook Cronet callbacks after 5s (catches late-loaded classes)
-            setTimeout(function() {
-                Java.perform(function() {
-                    var cnt = hookCronetCallbacks();
-                    if (cnt > 0) Log.i(TAG, '[+] Delayed Cronet callback hooks: ' + cnt);
-                });
-            }, 5000);
+            // v3.42: REMOVED hookCronetCallbacks() with enumerateLoadedClasses —
+            // iterating ALL loaded classes is extremely expensive (~5000+ classes).
+            // SSL errors are already suppressed at TrustManager/BoringSSL level.
+            // Any remaining Cronet SSL errors are non-fatal after SSL bypass.
 
             // Enhanced SSLPeerUnverifiedException + dynamic CertificatePinner discovery
             try {
@@ -451,51 +322,10 @@ Java.performNow(function() {
 
 
             // ── NET_201 Runtime Suppression ──────────────────────
-            // Hook JSONObject to intercept NET_201 error config lookups at runtime.
-            // This catches any code path that reads the security error config,
-            // even if the JSON file patching missed it.
-            try {
-                var JSONObject = Java.use('org.json.JSONObject');
-
-                // Hook getString to intercept security error string lookups
-                var _getString = JSONObject.getString;
-                _getString.implementation = function(key) {
-                    var result = _getString.call(this, key);
-                    // Intercept security error title/message strings
-                    if (result === 'common-v2__network_security_error_title') {
-                        Log.i(TAG, '[!] NET_201: title key intercepted → generic');
-                        return 'common-v2__network_error_title';
-                    }
-                    if (result === 'common-v2__network_security_error_message' ||
-                        result === 'common-v2__network_security_error_message_jv') {
-                        Log.i(TAG, '[!] NET_201: message key intercepted → generic');
-                        return 'common-v2__network_unavailable_message';
-                    }
-                    return result;
-                };
-
-                // Also hook optString (non-throwing variant)
-                var optOverloads = JSONObject.optString.overloads;
-                for (var oi = 0; oi < optOverloads.length; oi++) {
-                    (function(overload) {
-                        var origImpl = overload;
-                        overload.implementation = function() {
-                            var result = origImpl.apply(this, arguments);
-                            if (result === 'common-v2__network_security_error_title') {
-                                return 'common-v2__network_error_title';
-                            }
-                            if (result === 'common-v2__network_security_error_message' ||
-                                result === 'common-v2__network_security_error_message_jv') {
-                                return 'common-v2__network_unavailable_message';
-                            }
-                            return result;
-                        };
-                    })(optOverloads[oi]);
-                }
-                Log.i(TAG, '[+] NET_201 JSONObject runtime suppression active');
-            } catch(eNet201) {
-                Log.w(TAG, '[-] NET_201 JSONObject hook: ' + eNet201);
-            }
+            // v3.42: REMOVED JSONObject.getString/optString hooks — they ran on
+            // EVERY JSON string read in the entire app (thousands per API response),
+            // causing severe performance overhead. NET_201 is handled at APK level
+            // by PatchEngine JSON file patching, which is permanent and zero-cost.
 
             // Hook AlertDialog.Builder to suppress security error dialogs
             try {
@@ -802,20 +632,18 @@ Java.performNow(function() {
             };
         } catch (err) { }
 
-        // Root detection - hide known root paths
+        // Root detection - hide known root paths (v3.42: O(1) Set lookup)
         try {
             var File = Java.use('java.io.File');
             var origExists = File.exists;
+            var _rootPathSet = {};
+            ['/system/app/Superuser.apk', '/system/xbin/su', '/system/bin/su',
+             '/sbin/su', '/data/local/xbin/su', '/data/local/bin/su',
+             '/su/bin/su', '/data/adb/magisk'].forEach(function(p) { _rootPathSet[p] = true; });
             File.exists.implementation = function() {
                 var path = this.getAbsolutePath();
-                var rootPaths = ['/system/app/Superuser.apk', '/system/xbin/su', '/system/bin/su',
-                    '/sbin/su', '/data/local/xbin/su', '/data/local/bin/su',
-                    '/su/bin/su', '/data/adb/magisk'];
-                for (var i = 0; i < rootPaths.length; i++) {
-                    if (path === rootPaths[i]) {
-                        console.log('[+] ROOT: Hiding path: ' + path);
-                        return false;
-                    }
+                if (_rootPathSet[path]) {
+                    return false;
                 }
                 return origExists.call(this);
             };
@@ -1167,7 +995,7 @@ Java.performNow(function() {
                     }
                 });
                 scheduleRuleReload();
-            }, 5000);
+            }, 120000); // v3.42: 120s instead of 5s to reduce GC pressure
         }
         loadBlockingRules();
         scheduleRuleReload();
@@ -1396,11 +1224,8 @@ Java.performNow(function() {
         //  No Java library, native SDK, or JNI code can bypass them.
         // =========================================================
 
-        // fd → destination map for correlating send/recv with connections
-        var _fdMap = {};
-        // Throttle: don't spam logcat for every send/recv on the same fd
-        var _fdLoggedSend = {};
-        var _fdLoggedRecv = {};
+        // v3.42: _fdMap, _fdLoggedSend, _fdLoggedRecv REMOVED — no longer
+        // needed after removing send/recv/write/read/close hooks
 
         // Parse struct sockaddr → { family, ip, port }
         function parseSockaddr(addrPtr, addrLen) {
@@ -1456,30 +1281,19 @@ Java.performNow(function() {
         }
 
         // === connect(fd, addr, addrlen) — EVERY outbound TCP/UDP connection ===
+        // v3.42: onEnter-only (no onLeave) saves ~5μs per call per Frida docs
         try {
             var _connectPtr = Process.getModuleByName('libc.so').getExportByName('connect');
             Interceptor.attach(_connectPtr, {
                 onEnter: function(args) {
-                    this.fd = args[0].toInt32();
-                    this.sa = parseSockaddr(args[1], args[2].toInt32());
-                },
-                onLeave: function(retval) {
-                    if (this.sa === null) return;
-                    var dest = this.sa.ip + ':' + this.sa.port;
-                    _fdMap[this.fd] = dest;
-                    _fdLoggedSend[this.fd] = 0;
-                    _fdLoggedRecv[this.fd] = 0;
-
-                    // Skip loopback noise
-                    if (this.sa.ip === '127.0.0.1' || this.sa.ip === '0:0:0:0:0:0:0:1') return;
-
-                    var ret = retval.toInt32();
-                    var status = (ret === 0 || ret === -1) ? '' : ' err=' + ret;
-                    // -1 with EINPROGRESS is normal for non-blocking sockets
-
-                    console.log('[NET] CONNECT fd=' + this.fd + ' -> ' + dest + status);
-                    nativeLog('[NET] CONNECT fd=' + this.fd + ' -> ' + dest + status);
-                    apiDumpEvent('NATIVE', 'CONNECT', 'fd=' + this.fd + ' ' + this.sa.family + ' ' + dest + status);
+                    var sa = parseSockaddr(args[1], args[2].toInt32());
+                    if (sa === null) return;
+                    if (sa.ip === '127.0.0.1' || sa.ip === '0:0:0:0:0:0:0:1') return;
+                    var fd = args[0].toInt32();
+                    var dest = sa.ip + ':' + sa.port;
+                    console.log('[NET] CONNECT fd=' + fd + ' -> ' + dest);
+                    nativeLog('[NET] CONNECT fd=' + fd + ' -> ' + dest);
+                    apiDumpEvent('NATIVE', 'CONNECT', 'fd=' + fd + ' ' + sa.family + ' ' + dest);
                 }
             });
             nativeLog('[+] Native connect() hooked');
@@ -1512,174 +1326,22 @@ Java.performNow(function() {
             nativeLog('[+] Native getaddrinfo() hooked');
         } catch (e) { nativeLog('[-] getaddrinfo hook: ' + e); }
 
-        // === send(fd, buf, len, flags) — outbound data on sockets ===
-        try {
-            var _sendPtr = Process.getModuleByName('libc.so').getExportByName('send');
-            Interceptor.attach(_sendPtr, {
-                onEnter: function(args) {
-                    this.fd = args[0].toInt32();
-                    this.buf = args[1];
-                    this.len = args[2].toInt32();
-                },
-                onLeave: function(retval) {
-                    var sent = retval.toInt32();
-                    if (sent <= 0) return;
-                    var dest = _fdMap[this.fd];
-                    if (!dest) return; // Not a tracked socket (local/IPC)
+        // v3.42: REMOVED send()/sendto()/recvfrom() hooks — monitoring-only,
+        // not blocking. They intercepted every socket data transfer causing lag.
+        // Blocking is handled by getaddrinfo() (DNS) + Java URL hooks + TLS SNI.
 
-                    // Log first occurrence per fd, then only every 50th to reduce spam
-                    if (!_fdLoggedSend[this.fd]) _fdLoggedSend[this.fd] = 0;
-                    _fdLoggedSend[this.fd]++;
-                    if (_fdLoggedSend[this.fd] === 1 || _fdLoggedSend[this.fd] % 50 === 0) {
-                        var peek = peekBuf(this.buf, this.len, 128);
-                        console.log('[NET] >> SEND fd=' + this.fd + ' ' + dest + ' ' + sent + 'B' + (peek.length > 0 ? ' [' + peek.substring(0, 80) + ']' : ''));
-                    }
-                    apiDumpEvent('NATIVE', 'SEND', dest + ' ' + sent + 'B fd=' + this.fd);
-                    if (apiDumpEnabled && this.len > 0) {
-                        var p = peekBuf(this.buf, this.len, 512);
-                        if (p.length > 0) apiDumpWrite('  >> ' + p);
-                    }
-                }
-            });
-            console.log('[+] Native send() hooked');
-        } catch (e) { console.log('[-] send hook: ' + e); }
-
-        // === sendto(fd, buf, len, flags, dest_addr, addrlen) — UDP + unconnected sends ===
-        try {
-            var _sendtoPtr = Process.getModuleByName('libc.so').getExportByName('sendto');
-            Interceptor.attach(_sendtoPtr, {
-                onEnter: function(args) {
-                    this.fd = args[0].toInt32();
-                    this.buf = args[1];
-                    this.len = args[2].toInt32();
-                    // arg[4] = dest sockaddr (for UDP)
-                    if (!args[4].isNull()) {
-                        this.dest = parseSockaddr(args[4], args[5].toInt32());
-                    } else {
-                        this.dest = null;
-                    }
-                },
-                onLeave: function(retval) {
-                    var sent = retval.toInt32();
-                    if (sent <= 0) return;
-                    var dest = this.dest ? (this.dest.ip + ':' + this.dest.port) : (_fdMap[this.fd] || null);
-                    if (!dest) return;
-                    if (dest.indexOf('127.0.0.1') === 0) return;
-
-                    console.log('[NET] >> SENDTO fd=' + this.fd + ' ' + dest + ' ' + sent + 'B');
-                    apiDumpEvent('NATIVE', 'SENDTO', dest + ' ' + sent + 'B fd=' + this.fd);
-                    if (apiDumpEnabled && this.len > 0) {
-                        var p = peekBuf(this.buf, this.len, 512);
-                        if (p.length > 0) apiDumpWrite('  >> ' + p);
-                    }
-                }
-            });
-            console.log('[+] Native sendto() hooked');
-        } catch (e) { console.log('[-] sendto hook: ' + e); }
-
-        // === recvfrom(fd, buf, len, flags, src_addr, addrlen) — incoming data ===
-        try {
-            var _recvfromPtr = Process.getModuleByName('libc.so').getExportByName('recvfrom');
-            Interceptor.attach(_recvfromPtr, {
-                onEnter: function(args) {
-                    this.fd = args[0].toInt32();
-                    this.buf = args[1];
-                    this.len = args[2].toInt32();
-                },
-                onLeave: function(retval) {
-                    var recvd = retval.toInt32();
-                    if (recvd <= 0) return;
-                    var src = _fdMap[this.fd];
-                    if (!src) return;
-
-                    if (!_fdLoggedRecv[this.fd]) _fdLoggedRecv[this.fd] = 0;
-                    _fdLoggedRecv[this.fd]++;
-                    if (_fdLoggedRecv[this.fd] === 1 || _fdLoggedRecv[this.fd] % 50 === 0) {
-                        console.log('[NET] << RECV fd=' + this.fd + ' ' + src + ' ' + recvd + 'B');
-                    }
-                    apiDumpEvent('NATIVE', 'RECV', src + ' ' + recvd + 'B fd=' + this.fd);
-                    if (apiDumpEnabled && recvd > 0) {
-                        var p = peekBuf(this.buf, recvd, 512);
-                        if (p.length > 0) apiDumpWrite('  << ' + p);
-                    }
-                }
-            });
-            console.log('[+] Native recvfrom() hooked');
-        } catch (e) { console.log('[-] recvfrom hook: ' + e); }
-
-        // === write(fd, buf, count) — catches HTTP libs that use write() on sockets ===
-        try {
-            var _writePtr = Process.getModuleByName('libc.so').getExportByName('write');
-            Interceptor.attach(_writePtr, {
-                onEnter: function(args) {
-                    this.fd = args[0].toInt32();
-                    this.buf = args[1];
-                    this.count = args[2].toInt32();
-                },
-                onLeave: function(retval) {
-                    var written = retval.toInt32();
-                    if (written <= 0) return;
-                    // Only log if this fd is a known network socket (from connect)
-                    var dest = _fdMap[this.fd];
-                    if (!dest) return;
-
-                    apiDumpEvent('NATIVE', 'WRITE', dest + ' ' + written + 'B fd=' + this.fd);
-                    if (apiDumpEnabled && this.count > 0) {
-                        var p = peekBuf(this.buf, this.count, 512);
-                        if (p.length > 0) apiDumpWrite('  w> ' + p);
-                    }
-                }
-            });
-            console.log('[+] Native write() hooked (socket-filtered)');
-        } catch (e) { console.log('[-] write hook: ' + e); }
-
-        // === read(fd, buf, count) — catches responses on sockets ===
-        try {
-            var _readPtr = Process.getModuleByName('libc.so').getExportByName('read');
-            Interceptor.attach(_readPtr, {
-                onEnter: function(args) {
-                    this.fd = args[0].toInt32();
-                    this.buf = args[1];
-                },
-                onLeave: function(retval) {
-                    var rd = retval.toInt32();
-                    if (rd <= 0) return;
-                    var src = _fdMap[this.fd];
-                    if (!src) return;
-
-                    apiDumpEvent('NATIVE', 'READ', src + ' ' + rd + 'B fd=' + this.fd);
-                    if (apiDumpEnabled && rd > 0) {
-                        var p = peekBuf(this.buf, rd, 512);
-                        if (p.length > 0) apiDumpWrite('  r< ' + p);
-                    }
-                }
-            });
-            console.log('[+] Native read() hooked (socket-filtered)');
-        } catch (e) { console.log('[-] read hook: ' + e); }
-
-        // === close(fd) — cleanup fd tracking ===
-        try {
-            var _closePtr = Process.getModuleByName('libc.so').getExportByName('close');
-            Interceptor.attach(_closePtr, {
-                onEnter: function(args) {
-                    var fd = args[0].toInt32();
-                    if (_fdMap[fd]) {
-                        delete _fdMap[fd];
-                        delete _fdLoggedSend[fd];
-                        delete _fdLoggedRecv[fd];
-                    }
-                }
-            });
-        } catch (e) { }
+        // v3.42: REMOVED write()/read()/close() hooks — they intercepted EVERY
+        // I/O syscall (file, pipe, binder, UI rendering, etc.) causing severe lag
+        // and ANR. Network monitoring is handled by SSL_write + connect + getaddrinfo.
 
         console.log('[*] Native libc network hooks installed (Layer 1)');
 
 
         // =========================================================
         //  LAYER 2: NATIVE TLS HOOKS — SEE DECRYPTED HTTPS DATA
-        //  Hooks SSL_write/SSL_read from BoringSSL (libssl.so)
-        //  This lets us see actual HTTP request/response HEADERS
-        //  through TLS. Works for ANY HTTP library.
+        //  Hooks SSL_write from BoringSSL (libssl.so)
+        //  v3.42: SSL_read removed (hot during streaming, monitoring-only)
+        //  SSL_write lets us see outgoing HTTP request headers.
         // =========================================================
 
         function tryAttachSSL(libName) {
@@ -1725,37 +1387,10 @@ Java.performNow(function() {
                 }
             } catch (e) { }
 
-            // SSL_read(SSL*, buf, num) → see incoming HTTPS plaintext
-            try {
-                var sslReadPtr = sslMod.getExportByName('SSL_read');
-                if (sslReadPtr) {
-                    Interceptor.attach(sslReadPtr, {
-                        onEnter: function(args) {
-                            this.ssl = args[0];
-                            this.buf = args[1];
-                            this.num = args[2].toInt32();
-                        },
-                        onLeave: function(retval) {
-                            var rd = retval.toInt32();
-                            if (rd <= 0) return;
-                            var peek = peekBuf(this.buf, rd, 384);
-                            if (peek.length === 0) return;
-
-                            // HTTP response detection
-                            var isResponse = /^HTTP\/[12]/.test(peek);
-                            if (isResponse) {
-                                var firstLine = peek.split('\\r\\n')[0] || peek.split('\\n')[0] || peek.substring(0, 120);
-                                console.log('[NET] << TLS-IN: ' + firstLine);
-                                apiDumpEvent('TLS', 'RESPONSE', firstLine);
-                            }
-                            if (apiDumpEnabled) {
-                                apiDumpWrite('  TLS<< ' + peek.substring(0, 512));
-                            }
-                        }
-                    });
-                    console.log('[+] SSL_read hooked from ' + libName);
-                }
-            } catch (e) { }
+            // v3.42: REMOVED SSL_read hook — monitoring-only (response viewing).
+            // During video streaming, SSL_read is called thousands of times/sec
+            // for downloading video chunks. ~11μs overhead per call = severe lag.
+            // SSL_write (kept above) provides sufficient request visibility.
 
             return true;
         }
@@ -2386,7 +2021,7 @@ Java.performNow(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.41: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.42: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2402,7 +2037,7 @@ Java.performNow(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.41: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.42: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
