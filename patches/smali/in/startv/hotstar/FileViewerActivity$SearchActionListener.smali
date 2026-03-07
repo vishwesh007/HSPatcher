@@ -1,85 +1,148 @@
-.class public Lin/startv/hotstar/FileViewerActivity$SearchActionListener;
+.class Lin/startv/hotstar/FileViewerActivity$SearchActionListener;
 .super Ljava/lang/Object;
 .source "FileViewerActivity.java"
 
+# interfaces
 .implements Landroid/view/View$OnClickListener;
 
+
+# annotations
 .annotation system Ldalvik/annotation/EnclosingClass;
     value = Lin/startv/hotstar/FileViewerActivity;
 .end annotation
 
 .annotation system Ldalvik/annotation/InnerClass;
-    accessFlags = 0x9
+    accessFlags = 0x0
     name = "SearchActionListener"
 .end annotation
 
-.field public outer:Lin/startv/hotstar/FileViewerActivity;
+
+# instance fields
 .field public action:I
 
-.method public constructor <init>(Lin/startv/hotstar/FileViewerActivity;I)V
+.field activity:Lin/startv/hotstar/FileViewerActivity;
+
+.field final synthetic this$0:Lin/startv/hotstar/FileViewerActivity;
+
+
+# direct methods
+.method constructor <init>(Lin/startv/hotstar/FileViewerActivity;Lin/startv/hotstar/FileViewerActivity;I)V
     .locals 0
+    .annotation system Ldalvik/annotation/MethodParameters;
+        accessFlags = {
+            0x8010,
+            0x0,
+            0x0
+        }
+        names = {
+            null,
+            null,
+            null
+        }
+    .end annotation
+
+    .line 1008
+    iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->this$0:Lin/startv/hotstar/FileViewerActivity;
+
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-    iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->outer:Lin/startv/hotstar/FileViewerActivity;
-    iput p2, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->action:I
+
+    .line 1009
+    iput-object p2, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    .line 1010
+    iput p3, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->action:I
+
+    .line 1011
     return-void
 .end method
 
+
+# virtual methods
 .method public onClick(Landroid/view/View;)V
-    .locals 3
-    iget-object v0, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->outer:Lin/startv/hotstar/FileViewerActivity;
-    iget v1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->action:I
+    .locals 0
 
-    # action 0 = toggle search
-    if-nez v1, :not_0
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->toggleSearch()V
+    .line 1014
+    iget p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->action:I
+
+    packed-switch p1, :pswitch_data_0
+
+    goto :goto_0
+
+    .line 1022
+    :pswitch_0
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->zoomOut()V
+
+    goto :goto_0
+
+    .line 1021
+    :pswitch_1
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->zoomIn()V
+
+    goto :goto_0
+
+    .line 1020
+    :pswitch_2
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->toggleSearch()V
+
+    goto :goto_0
+
+    .line 1019
+    :pswitch_3
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->doReplaceAll()V
+
+    goto :goto_0
+
+    .line 1018
+    :pswitch_4
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->doReplace()V
+
+    goto :goto_0
+
+    .line 1017
+    :pswitch_5
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->findPrev()V
+
+    goto :goto_0
+
+    .line 1016
+    :pswitch_6
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->findNext()V
+
+    goto :goto_0
+
+    .line 1015
+    :pswitch_7
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SearchActionListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->toggleSearch()V
+
+    .line 1024
+    :goto_0
     return-void
 
-    # action 1 = find next
-    :not_0
-    const/4 v2, 0x1
-    if-ne v1, v2, :not_1
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->findNext()V
-    return-void
-
-    # action 2 = find prev
-    :not_1
-    const/4 v2, 0x2
-    if-ne v1, v2, :not_2
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->findPrev()V
-    return-void
-
-    # action 3 = replace
-    :not_2
-    const/4 v2, 0x3
-    if-ne v1, v2, :not_3
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->doReplace()V
-    return-void
-
-    # action 4 = replace all
-    :not_3
-    const/4 v2, 0x4
-    if-ne v1, v2, :not_4
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->doReplaceAll()V
-    return-void
-
-    # action 5 = close search
-    :not_4
-    const/4 v2, 0x5
-    if-ne v1, v2, :not_5
-    iget-object v0, v0, Lin/startv/hotstar/FileViewerActivity;->searchContainer:Landroid/widget/LinearLayout;
-    const/16 v1, 0x8
-    invoke-virtual {v0, v1}, Landroid/view/View;->setVisibility(I)V
-    return-void
-
-    # action 6 = zoom in
-    :not_5
-    const/4 v2, 0x6
-    if-ne v1, v2, :not_6
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->zoomIn()V
-    return-void
-
-    # action 7 = zoom out
-    :not_6
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->zoomOut()V
-    return-void
+    :pswitch_data_0
+    .packed-switch 0x0
+        :pswitch_7
+        :pswitch_6
+        :pswitch_5
+        :pswitch_4
+        :pswitch_3
+        :pswitch_2
+        :pswitch_1
+        :pswitch_0
+    .end packed-switch
 .end method

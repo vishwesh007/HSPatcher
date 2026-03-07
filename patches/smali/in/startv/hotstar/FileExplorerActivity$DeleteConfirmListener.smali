@@ -1,57 +1,182 @@
-.class public Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;
+.class Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;
 .super Ljava/lang/Object;
 .source "FileExplorerActivity.java"
 
+# interfaces
 .implements Landroid/content/DialogInterface$OnClickListener;
 
+
+# annotations
 .annotation system Ldalvik/annotation/EnclosingClass;
     value = Lin/startv/hotstar/FileExplorerActivity;
 .end annotation
 
 .annotation system Ldalvik/annotation/InnerClass;
-    accessFlags = 0x9
+    accessFlags = 0x0
     name = "DeleteConfirmListener"
 .end annotation
 
-.field public outer:Lin/startv/hotstar/FileExplorerActivity;
-.field public filePath:Ljava/lang/String;
 
-.method public constructor <init>(Lin/startv/hotstar/FileExplorerActivity;Ljava/lang/String;)V
+# instance fields
+.field activity:Lin/startv/hotstar/FileExplorerActivity;
+
+.field path:Ljava/lang/String;
+
+.field final synthetic this$0:Lin/startv/hotstar/FileExplorerActivity;
+
+
+# direct methods
+.method constructor <init>(Lin/startv/hotstar/FileExplorerActivity;Lin/startv/hotstar/FileExplorerActivity;Ljava/lang/String;)V
     .locals 0
+    .annotation system Ldalvik/annotation/MethodParameters;
+        accessFlags = {
+            0x8010,
+            0x0,
+            0x0
+        }
+        names = {
+            null,
+            null,
+            null
+        }
+    .end annotation
+
+    .line 880
+    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->this$0:Lin/startv/hotstar/FileExplorerActivity;
+
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->outer:Lin/startv/hotstar/FileExplorerActivity;
-    iput-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->filePath:Ljava/lang/String;
+
+    iput-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
+    iput-object p3, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->path:Ljava/lang/String;
+
     return-void
 .end method
 
+.method private deleteRecursive(Ljava/io/File;)Z
+    .locals 5
+
+    .line 898
+    invoke-virtual {p1}, Ljava/io/File;->listFiles()[Ljava/io/File;
+
+    move-result-object v0
+
+    .line 899
+    if-eqz v0, :cond_1
+
+    .line 900
+    array-length v1, v0
+
+    const/4 v2, 0x0
+
+    :goto_0
+    if-ge v2, v1, :cond_1
+
+    aget-object v3, v0, v2
+
+    .line 901
+    invoke-virtual {v3}, Ljava/io/File;->isDirectory()Z
+
+    move-result v4
+
+    if-eqz v4, :cond_0
+
+    invoke-direct {p0, v3}, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->deleteRecursive(Ljava/io/File;)Z
+
+    goto :goto_1
+
+    .line 902
+    :cond_0
+    invoke-virtual {v3}, Ljava/io/File;->delete()Z
+
+    .line 900
+    :goto_1
+    add-int/lit8 v2, v2, 0x1
+
+    goto :goto_0
+
+    .line 905
+    :cond_1
+    invoke-virtual {p1}, Ljava/io/File;->delete()Z
+
+    move-result p1
+
+    return p1
+.end method
+
+
+# virtual methods
 .method public onClick(Landroid/content/DialogInterface;I)V
-    .locals 4
+    .locals 1
 
-    iget-object v0, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->outer:Lin/startv/hotstar/FileExplorerActivity;
-    iget-object v1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->filePath:Ljava/lang/String;
+    .line 882
+    new-instance p1, Ljava/io/File;
 
-    # Use shell rm -rf for recursive delete
-    new-instance v2, Ljava/lang/StringBuilder;
-    invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v3, "rm -rf '"
-    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v2, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v3, "'"
-    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-    move-result-object v2
+    iget-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->path:Ljava/lang/String;
 
-    invoke-static {v2}, Lin/startv/hotstar/ProfileManager;->shellExec(Ljava/lang/String;)V
+    invoke-direct {p1, p2}, Ljava/io/File;-><init>(Ljava/lang/String;)V
 
-    const-string v2, "\ud83d\uddd1\ufe0f Deleted"
-    const/4 v3, 0x0
-    invoke-static {v0, v2, v3}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
-    move-result-object v2
-    invoke-virtual {v2}, Landroid/widget/Toast;->show()V
+    .line 884
+    invoke-virtual {p1}, Ljava/io/File;->isDirectory()Z
 
-    # Refresh current directory
-    iget-object v2, v0, Lin/startv/hotstar/FileExplorerActivity;->currentPath:Ljava/lang/String;
-    invoke-virtual {v0, v2}, Lin/startv/hotstar/FileExplorerActivity;->navigateTo(Ljava/lang/String;)V
+    move-result p2
 
+    if-eqz p2, :cond_0
+
+    .line 885
+    invoke-direct {p0, p1}, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->deleteRecursive(Ljava/io/File;)Z
+
+    move-result p1
+
+    goto :goto_0
+
+    .line 887
+    :cond_0
+    invoke-virtual {p1}, Ljava/io/File;->delete()Z
+
+    move-result p1
+
+    .line 889
+    :goto_0
+    const/4 p2, 0x0
+
+    if-eqz p1, :cond_1
+
+    .line 890
+    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
+    const-string v0, "Deleted"
+
+    invoke-static {p1, v0, p2}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
+
+    move-result-object p1
+
+    invoke-virtual {p1}, Landroid/widget/Toast;->show()V
+
+    .line 891
+    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
+    iget-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
+    iget-object p2, p2, Lin/startv/hotstar/FileExplorerActivity;->currentPath:Ljava/lang/String;
+
+    invoke-virtual {p1, p2}, Lin/startv/hotstar/FileExplorerActivity;->navigateTo(Ljava/lang/String;)V
+
+    goto :goto_1
+
+    .line 893
+    :cond_1
+    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
+    const-string v0, "Delete failed"
+
+    invoke-static {p1, v0, p2}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
+
+    move-result-object p1
+
+    invoke-virtual {p1}, Landroid/widget/Toast;->show()V
+
+    .line 895
+    :goto_1
     return-void
 .end method

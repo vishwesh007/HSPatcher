@@ -1,30 +1,61 @@
-.class public Lin/startv/hotstar/FileExplorerActivity$BackClickListener;
+.class Lin/startv/hotstar/FileExplorerActivity$BackClickListener;
 .super Ljava/lang/Object;
 .source "FileExplorerActivity.java"
 
+# interfaces
 .implements Landroid/view/View$OnClickListener;
 
+
+# annotations
 .annotation system Ldalvik/annotation/EnclosingClass;
     value = Lin/startv/hotstar/FileExplorerActivity;
 .end annotation
 
 .annotation system Ldalvik/annotation/InnerClass;
-    accessFlags = 0x9
+    accessFlags = 0x0
     name = "BackClickListener"
 .end annotation
 
-.field public outer:Lin/startv/hotstar/FileExplorerActivity;
 
-.method public constructor <init>(Lin/startv/hotstar/FileExplorerActivity;)V
+# instance fields
+.field activity:Lin/startv/hotstar/FileExplorerActivity;
+
+.field final synthetic this$0:Lin/startv/hotstar/FileExplorerActivity;
+
+
+# direct methods
+.method constructor <init>(Lin/startv/hotstar/FileExplorerActivity;Lin/startv/hotstar/FileExplorerActivity;)V
     .locals 0
+    .annotation system Ldalvik/annotation/MethodParameters;
+        accessFlags = {
+            0x8010,
+            0x0
+        }
+        names = {
+            null,
+            null
+        }
+    .end annotation
+
+    .line 748
+    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$BackClickListener;->this$0:Lin/startv/hotstar/FileExplorerActivity;
+
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$BackClickListener;->outer:Lin/startv/hotstar/FileExplorerActivity;
+
+    iput-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$BackClickListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
     return-void
 .end method
 
+
+# virtual methods
 .method public onClick(Landroid/view/View;)V
-    .locals 1
-    iget-object v0, p0, Lin/startv/hotstar/FileExplorerActivity$BackClickListener;->outer:Lin/startv/hotstar/FileExplorerActivity;
-    invoke-virtual {v0}, Landroid/app/Activity;->onBackPressed()V
+    .locals 0
+
+    .line 749
+    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$BackClickListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileExplorerActivity;->finish()V
+
     return-void
 .end method

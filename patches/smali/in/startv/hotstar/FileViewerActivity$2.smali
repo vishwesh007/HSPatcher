@@ -33,7 +33,7 @@
         }
     .end annotation
 
-    .line 833
+    .line 877
     iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$2;->this$0:Lin/startv/hotstar/FileViewerActivity;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -44,13 +44,51 @@
 
 # virtual methods
 .method public run()V
-    .locals 1
+    .locals 3
 
-    .line 836
+    .line 881
+    :try_start_0
     iget-object v0, p0, Lin/startv/hotstar/FileViewerActivity$2;->this$0:Lin/startv/hotstar/FileViewerActivity;
 
     invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->applySyntaxHighlighting()V
+    :try_end_0
+    .catch Ljava/lang/Exception; {:try_start_0 .. :try_end_0} :catch_0
 
-    .line 837
+    .line 884
+    goto :goto_0
+
+    .line 882
+    :catch_0
+    move-exception v0
+
+    .line 883
+    invoke-virtual {v0}, Ljava/lang/Exception;->getMessage()Ljava/lang/String;
+
+    move-result-object v0
+
+    new-instance v1, Ljava/lang/StringBuilder;
+
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+
+    const-string v2, "Initial highlight error: "
+
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    move-result-object v1
+
+    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    move-result-object v0
+
+    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+
+    move-result-object v0
+
+    const-string v1, "HSPatch"
+
+    invoke-static {v1, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    .line 885
+    :goto_0
     return-void
 .end method

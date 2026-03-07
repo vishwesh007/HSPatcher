@@ -1,15 +1,18 @@
-.class public Lin/startv/hotstar/FileExplorerActivity$FileComparator;
+.class Lin/startv/hotstar/FileExplorerActivity$FileComparator;
 .super Ljava/lang/Object;
 .source "FileExplorerActivity.java"
 
+# interfaces
 .implements Ljava/util/Comparator;
 
+
+# annotations
 .annotation system Ldalvik/annotation/EnclosingClass;
     value = Lin/startv/hotstar/FileExplorerActivity;
 .end annotation
 
 .annotation system Ldalvik/annotation/InnerClass;
-    accessFlags = 0x9
+    accessFlags = 0x8
     name = "FileComparator"
 .end annotation
 
@@ -22,52 +25,95 @@
     }
 .end annotation
 
-.method public constructor <init>()V
+
+# direct methods
+.method constructor <init>()V
     .locals 0
+
+    .line 910
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
     return-void
 .end method
 
-# compare(File, File) - directories first, then alphabetical (case insensitive)
-.method public compare(Ljava/lang/Object;Ljava/lang/Object;)I
-    .locals 4
-    check-cast p1, Ljava/io/File;
-    check-cast p2, Ljava/io/File;
 
-    # Check if both are directories or both are files
+# virtual methods
+.method public compare(Ljava/io/File;Ljava/io/File;)I
+    .locals 1
+
+    .line 912
     invoke-virtual {p1}, Ljava/io/File;->isDirectory()Z
+
     move-result v0
+
+    if-eqz v0, :cond_0
 
     invoke-virtual {p2}, Ljava/io/File;->isDirectory()Z
-    move-result v1
 
-    # If a is dir and b is not, a comes first (-1)
-    if-eqz v0, :a_not_dir
-    if-nez v1, :both_same_type
-    const/4 v0, -0x1
-    return v0
+    move-result v0
 
-    :a_not_dir
-    # If a is not dir and b is dir, b comes first (1)
-    if-eqz v1, :both_same_type
-    const/4 v0, 0x1
-    return v0
+    if-nez v0, :cond_0
 
-    :both_same_type
-    # Both same type - compare names case insensitive
+    const/4 p1, -0x1
+
+    return p1
+
+    .line 913
+    :cond_0
+    invoke-virtual {p1}, Ljava/io/File;->isDirectory()Z
+
+    move-result v0
+
+    if-nez v0, :cond_1
+
+    invoke-virtual {p2}, Ljava/io/File;->isDirectory()Z
+
+    move-result v0
+
+    if-eqz v0, :cond_1
+
+    const/4 p1, 0x1
+
+    return p1
+
+    .line 914
+    :cond_1
     invoke-virtual {p1}, Ljava/io/File;->getName()Ljava/lang/String;
-    move-result-object v2
 
-    invoke-virtual {v2}, Ljava/lang/String;->toLowerCase()Ljava/lang/String;
-    move-result-object v2
+    move-result-object p1
 
     invoke-virtual {p2}, Ljava/io/File;->getName()Ljava/lang/String;
-    move-result-object v3
 
-    invoke-virtual {v3}, Ljava/lang/String;->toLowerCase()Ljava/lang/String;
-    move-result-object v3
+    move-result-object p2
 
-    invoke-virtual {v2, v3}, Ljava/lang/String;->compareTo(Ljava/lang/String;)I
-    move-result v0
-    return v0
+    invoke-virtual {p1, p2}, Ljava/lang/String;->compareToIgnoreCase(Ljava/lang/String;)I
+
+    move-result p1
+
+    return p1
+.end method
+
+.method public bridge synthetic compare(Ljava/lang/Object;Ljava/lang/Object;)I
+    .locals 0
+    .annotation system Ldalvik/annotation/MethodParameters;
+        accessFlags = {
+            0x1000,
+            0x1000
+        }
+        names = {
+            null,
+            null
+        }
+    .end annotation
+
+    .line 910
+    check-cast p1, Ljava/io/File;
+
+    check-cast p2, Ljava/io/File;
+
+    invoke-virtual {p0, p1, p2}, Lin/startv/hotstar/FileExplorerActivity$FileComparator;->compare(Ljava/io/File;Ljava/io/File;)I
+
+    move-result p1
+
+    return p1
 .end method

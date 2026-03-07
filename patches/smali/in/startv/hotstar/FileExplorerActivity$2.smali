@@ -33,7 +33,7 @@
         }
     .end annotation
 
-    .line 623
+    .line 674
     iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$2;->this$0:Lin/startv/hotstar/FileExplorerActivity;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -46,7 +46,7 @@
 .method public onClick(Landroid/content/DialogInterface;I)V
     .locals 1
 
-    .line 626
+    .line 677
     iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$2;->this$0:Lin/startv/hotstar/FileExplorerActivity;
 
     const/4 v0, 0x1
@@ -61,6 +61,6 @@
     :goto_0
     invoke-virtual {p1, v0}, Lin/startv/hotstar/FileExplorerActivity;->showNameInputDialog(Z)V
 
-    .line 627
+    .line 678
     return-void
 .end method

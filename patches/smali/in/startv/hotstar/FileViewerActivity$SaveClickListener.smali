@@ -1,43 +1,62 @@
-.class public Lin/startv/hotstar/FileViewerActivity$SaveClickListener;
+.class Lin/startv/hotstar/FileViewerActivity$SaveClickListener;
 .super Ljava/lang/Object;
 .source "FileViewerActivity.java"
 
+# interfaces
 .implements Landroid/view/View$OnClickListener;
 
+
+# annotations
 .annotation system Ldalvik/annotation/EnclosingClass;
     value = Lin/startv/hotstar/FileViewerActivity;
 .end annotation
 
 .annotation system Ldalvik/annotation/InnerClass;
-    accessFlags = 0x9
+    accessFlags = 0x0
     name = "SaveClickListener"
 .end annotation
 
-.field public outer:Lin/startv/hotstar/FileViewerActivity;
 
-.method public constructor <init>(Lin/startv/hotstar/FileViewerActivity;)V
+# instance fields
+.field activity:Lin/startv/hotstar/FileViewerActivity;
+
+.field final synthetic this$0:Lin/startv/hotstar/FileViewerActivity;
+
+
+# direct methods
+.method constructor <init>(Lin/startv/hotstar/FileViewerActivity;Lin/startv/hotstar/FileViewerActivity;)V
     .locals 0
+    .annotation system Ldalvik/annotation/MethodParameters;
+        accessFlags = {
+            0x8010,
+            0x0
+        }
+        names = {
+            null,
+            null
+        }
+    .end annotation
+
+    .line 962
+    iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SaveClickListener;->this$0:Lin/startv/hotstar/FileViewerActivity;
+
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-    iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SaveClickListener;->outer:Lin/startv/hotstar/FileViewerActivity;
+
+    iput-object p2, p0, Lin/startv/hotstar/FileViewerActivity$SaveClickListener;->activity:Lin/startv/hotstar/FileViewerActivity;
+
     return-void
 .end method
 
+
+# virtual methods
 .method public onClick(Landroid/view/View;)V
-    .locals 2
-    iget-object v0, p0, Lin/startv/hotstar/FileViewerActivity$SaveClickListener;->outer:Lin/startv/hotstar/FileViewerActivity;
+    .locals 0
 
-    # Check if binary
-    iget-boolean v1, v0, Lin/startv/hotstar/FileViewerActivity;->isBinary:Z
-    if-eqz v1, :can_save
+    .line 964
+    iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$SaveClickListener;->activity:Lin/startv/hotstar/FileViewerActivity;
 
-    const-string v1, "Cannot save binary files"
-    const/4 v2, 0x0
-    invoke-static {v0, v1, v2}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
-    move-result-object v1
-    invoke-virtual {v1}, Landroid/widget/Toast;->show()V
-    return-void
+    invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->saveFile()V
 
-    :can_save
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->saveFile()V
+    .line 965
     return-void
 .end method

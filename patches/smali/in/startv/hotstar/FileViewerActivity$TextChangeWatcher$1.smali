@@ -33,7 +33,7 @@
         }
     .end annotation
 
-    .line 924
+    .line 993
     iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher$1;->this$1:Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -46,13 +46,13 @@
 .method public run()V
     .locals 1
 
-    .line 927
+    .line 996
     iget-object v0, p0, Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher$1;->this$1:Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher;
 
     iget-object v0, v0, Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher;->activity:Lin/startv/hotstar/FileViewerActivity;
 
     invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->applySyntaxHighlighting()V
 
-    .line 928
+    .line 997
     return-void
 .end method

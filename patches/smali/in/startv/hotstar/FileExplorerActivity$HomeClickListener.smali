@@ -1,35 +1,71 @@
-.class public Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;
+.class Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;
 .super Ljava/lang/Object;
 .source "FileExplorerActivity.java"
 
+# interfaces
 .implements Landroid/view/View$OnClickListener;
 
+
+# annotations
 .annotation system Ldalvik/annotation/EnclosingClass;
     value = Lin/startv/hotstar/FileExplorerActivity;
 .end annotation
 
 .annotation system Ldalvik/annotation/InnerClass;
-    accessFlags = 0x9
+    accessFlags = 0x0
     name = "HomeClickListener"
 .end annotation
 
-.field public outer:Lin/startv/hotstar/FileExplorerActivity;
 
-.method public constructor <init>(Lin/startv/hotstar/FileExplorerActivity;)V
+# instance fields
+.field activity:Lin/startv/hotstar/FileExplorerActivity;
+
+.field final synthetic this$0:Lin/startv/hotstar/FileExplorerActivity;
+
+
+# direct methods
+.method constructor <init>(Lin/startv/hotstar/FileExplorerActivity;Lin/startv/hotstar/FileExplorerActivity;)V
     .locals 0
+    .annotation system Ldalvik/annotation/MethodParameters;
+        accessFlags = {
+            0x8010,
+            0x0
+        }
+        names = {
+            null,
+            null
+        }
+    .end annotation
+
+    .line 763
+    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->this$0:Lin/startv/hotstar/FileExplorerActivity;
+
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
-    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->outer:Lin/startv/hotstar/FileExplorerActivity;
+
+    iput-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
     return-void
 .end method
 
-.method public onClick(Landroid/view/View;)V
-    .locals 2
-    iget-object v0, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->outer:Lin/startv/hotstar/FileExplorerActivity;
 
-    # Navigate to app data dir
-    invoke-virtual {v0}, Landroid/content/Context;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;
-    move-result-object v1
-    iget-object v1, v1, Landroid/content/pm/ApplicationInfo;->dataDir:Ljava/lang/String;
-    invoke-virtual {v0, v1}, Lin/startv/hotstar/FileExplorerActivity;->navigateTo(Ljava/lang/String;)V
+# virtual methods
+.method public onClick(Landroid/view/View;)V
+    .locals 1
+
+    .line 765
+    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
+    invoke-virtual {p1}, Lin/startv/hotstar/FileExplorerActivity;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;
+
+    move-result-object p1
+
+    iget-object p1, p1, Landroid/content/pm/ApplicationInfo;->dataDir:Ljava/lang/String;
+
+    .line 766
+    iget-object v0, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
+
+    invoke-virtual {v0, p1}, Lin/startv/hotstar/FileExplorerActivity;->navigateTo(Ljava/lang/String;)V
+
+    .line 767
     return-void
 .end method
