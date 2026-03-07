@@ -251,6 +251,44 @@
     return-object v0
 .end method
 
+# Helper: Create muted supporting text
+.method private createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    .locals 3
+
+    new-instance v0, Landroid/widget/TextView;
+    invoke-direct {v0, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    invoke-virtual {v0, p1}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const/high16 v1, 0x41400000    # 12.0f
+    invoke-virtual {v0, v1}, Landroid/widget/TextView;->setTextSize(F)V
+    const v1, -0x6d6d6e
+    invoke-virtual {v0, v1}, Landroid/widget/TextView;->setTextColor(I)V
+    const/16 v1, 0x4
+    const/4 v2, 0x0
+    invoke-virtual {v0, v1, v2, v1, v1}, Landroid/view/View;->setPadding(IIII)V
+
+    return-object v0
+.end method
+
+# Helper: Create nested subgroup labels inside section cards
+.method private createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    .locals 3
+
+    new-instance v0, Landroid/widget/TextView;
+    invoke-direct {v0, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    invoke-virtual {v0, p1}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const/high16 v1, 0x41500000    # 13.0f
+    invoke-virtual {v0, v1}, Landroid/widget/TextView;->setTextSize(F)V
+    const v1, -0xbb5578
+    invoke-virtual {v0, v1}, Landroid/widget/TextView;->setTextColor(I)V
+    sget-object v1, Landroid/graphics/Typeface;->DEFAULT_BOLD:Landroid/graphics/Typeface;
+    invoke-virtual {v0, v1}, Landroid/widget/TextView;->setTypeface(Landroid/graphics/Typeface;)V
+    const/4 v1, 0x4
+    const/16 v2, 0xc
+    invoke-virtual {v0, v1, v2, v1, v1}, Landroid/view/View;->setPadding(IIII)V
+
+    return-object v0
+.end method
+
 .method public refreshLog()V
     .locals 2
 
@@ -412,6 +450,44 @@
     invoke-virtual {v2, v3, v4, v5, v6}, Landroid/view/View;->setPadding(IIII)V
     invoke-virtual {v1, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
+    # ===== QUICK MAP / HIERARCHY OVERVIEW =====
+    const-string v7, "\ud83e\udded  Panel Structure"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionHeader(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v1, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
+    move-result-object v10
+
+    const-string v7, "Observe"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Log Viewers \u2022 Log Controls \u2022 Quick Log Output"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    const-string v7, "Configure"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Blocking Rules \u2022 Network Filtering \u2022 Manage Hosts"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    const-string v7, "Profiles & Files"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Profile Manager \u2022 File Explorer \u2022 Device Tools"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    invoke-virtual {v1, v10}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
     # ============================================================
     # SECTION 1: LOG VIEWERS (opens LogViewerActivity)
     # ============================================================
@@ -422,6 +498,15 @@
 
     invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
     move-result-object v10
+
+    const-string v7, "Captured outputs"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Open dedicated viewers for each log stream."
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     # Request Logs
     const-string v7, "\ud83c\udf10 Request Logs"
@@ -487,6 +572,11 @@
 
     invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
     move-result-object v10
+
+    const-string v7, "Rewrite rules"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     # Rules hint
     new-instance v2, Landroid/widget/TextView;
@@ -574,6 +664,15 @@
     invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
     move-result-object v10
 
+    const-string v7, "Inline controls"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Quick actions for the embedded log preview below."
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
     # Clear All Logs
     const-string v7, "\ud83d\uddd1\ufe0f Clear All Logs"
     const v8, -0x340000
@@ -618,6 +717,15 @@
     invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
     move-result-object v10
 
+    const-string v7, "Profile lifecycle"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Create, load, reset or remove local profiles."
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
     # Save Profile
     const-string v7, "\ud83d\udcbe Save Profile"
     const v8, -0xcc4a1a
@@ -658,6 +766,15 @@
     invoke-virtual {v2, v3}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
     invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
+    const-string v7, "Import / export"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Move all profiles in or out using archive files."
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
     # Export Profiles
     const-string v7, "\ud83d\udce4 Export All Profiles"
     const v8, -0x996634
@@ -690,6 +807,15 @@
 
     invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
     move-result-object v10
+
+    const-string v7, "Quick path tools"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Inspect paths directly or switch into the dedicated file explorer."
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     # Path input
     new-instance v2, Landroid/widget/EditText;
@@ -785,6 +911,15 @@
 
     invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
     move-result-object v10
+
+    const-string v7, "Runtime tools"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Check runtime state and manage device identity behavior."
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     # Frida Status
     const-string v7, "\ud83d\udd0d Frida Status Check"
@@ -906,6 +1041,15 @@
 
     invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
     move-result-object v10
+
+    const-string v7, "Filtering engine"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    const-string v7, "Enable filtering, choose behavior, then edit host rules."
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionSummary(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     # --- Network Filtering Toggle (Switch) ---
     new-instance v2, Landroid/widget/LinearLayout;
@@ -1076,6 +1220,11 @@
     invoke-virtual {v4, v5, v5, v5, v5}, Landroid/widget/LinearLayout$LayoutParams;->setMargins(IIII)V
     invoke-virtual {v3, v4}, Landroid/view/View;->setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V
     invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    const-string v7, "Host rules"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSubsectionLabel(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
     invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     # Manage Hosts button
