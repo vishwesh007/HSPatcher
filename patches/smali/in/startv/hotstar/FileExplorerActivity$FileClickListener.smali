@@ -25,18 +25,48 @@
 .end method
 
 .method public onClick(Landroid/view/View;)V
-    .locals 3
+    .locals 4
 
     iget-object v0, p0, Lin/startv/hotstar/FileExplorerActivity$FileClickListener;->outer:Lin/startv/hotstar/FileExplorerActivity;
     iget-object v1, p0, Lin/startv/hotstar/FileExplorerActivity$FileClickListener;->filePath:Ljava/lang/String;
 
-    # Launch FileViewerActivity with the path
+    # Check if file is a database file (.db, .sqlite, .sqlite3)
+    invoke-virtual {v1}, Ljava/lang/String;->toLowerCase()Ljava/lang/String;
+    move-result-object v2
+
+    const-string v3, ".db"
+    invoke-virtual {v2, v3}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
+    move-result v3
+    if-nez v3, :open_db
+
+    const-string v3, ".sqlite"
+    invoke-virtual {v2, v3}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
+    move-result v3
+    if-nez v3, :open_db
+
+    const-string v3, ".sqlite3"
+    invoke-virtual {v2, v3}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
+    move-result v3
+    if-nez v3, :open_db
+
+    # Not a DB file - launch FileViewerActivity
     new-instance v2, Landroid/content/Intent;
     const-class v3, Lin/startv/hotstar/FileViewerActivity;
     invoke-direct {v2, v0, v3}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
     const-string v3, "path"
     invoke-virtual {v2, v3, v1}, Landroid/content/Intent;->putExtra(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;
     invoke-virtual {v0, v2}, Landroid/app/Activity;->startActivity(Landroid/content/Intent;)V
+    goto :done
 
+    # DB file - launch DbViewerActivity
+    :open_db
+    new-instance v2, Landroid/content/Intent;
+    const-class v3, Lin/startv/hotstar/DbViewerActivity;
+    invoke-direct {v2, v0, v3}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
+    const-string v3, "path"
+    invoke-virtual {v2, v3, v1}, Landroid/content/Intent;->putExtra(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;
+    invoke-virtual {v0, v2}, Landroid/app/Activity;->startActivity(Landroid/content/Intent;)V
+
+    :done
     return-void
 .end method

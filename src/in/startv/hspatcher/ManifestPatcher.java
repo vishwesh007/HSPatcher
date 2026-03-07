@@ -46,7 +46,8 @@ public class ManifestPatcher {
         "in.startv.hotstar.FileExplorerActivity",
         "in.startv.hotstar.FileViewerActivity",
         "in.startv.hotstar.LogViewerActivity",
-        "in.startv.hotstar.NetworkMonitorActivity"
+        "in.startv.hotstar.HostFilterActivity",
+        "in.startv.hotstar.DbViewerActivity"
     };
 
     /** HSPatch ContentProvider for reliable bootstrap. */

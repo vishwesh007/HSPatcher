@@ -14,6 +14,9 @@
 .field public streamButton:Landroid/widget/Button;
 .field public logScrollView:Landroid/widget/ScrollView;
 .field public pathInput:Landroid/widget/EditText;
+.field public filterModeContainer:Landroid/widget/LinearLayout;
+.field public btnOnlyBlock:Landroid/widget/TextView;
+.field public btnOnlyAllow:Landroid/widget/TextView;
 
 
 # direct methods
@@ -891,20 +894,201 @@
     invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
     invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
-    # Network Monitor Button
-    const-string v7, "\ud83c\udf10 Network Monitor"
-    const v8, -0xff6634    # blue
+    invoke-virtual {v1, v10}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    # ============================================================
+    # SECTION 6B: NETWORK FILTERING
+    # ============================================================
+    const-string v7, "\ud83d\udee1\ufe0f  Network Filtering"
+    invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionHeader(Ljava/lang/String;)Landroid/widget/TextView;
+    move-result-object v2
+    invoke-virtual {v1, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    invoke-direct {p0}, Lin/startv/hotstar/DebugPanelActivity;->createSectionCard()Landroid/widget/LinearLayout;
+    move-result-object v10
+
+    # --- Network Filtering Toggle (Switch) ---
+    new-instance v2, Landroid/widget/LinearLayout;
+    invoke-direct {v2, p0}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V
+    const/4 v3, 0x0
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setOrientation(I)V
+    const/16 v3, 0x10
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setGravity(I)V
+    const/16 v3, 0x8
+    const/16 v4, 0xc
+    invoke-virtual {v2, v3, v4, v3, v4}, Landroid/view/View;->setPadding(IIII)V
+
+    new-instance v3, Landroid/widget/TextView;
+    invoke-direct {v3, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    const-string v4, "\ud83d\udee1 Network Filtering"
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const/high16 v4, 0x41600000
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextSize(F)V
+    const/4 v4, -0x1
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextColor(I)V
+
+    new-instance v4, Landroid/widget/LinearLayout$LayoutParams;
+    const/4 v5, 0x0
+    const/4 v6, -0x2
+    const/high16 v7, 0x3f800000
+    invoke-direct {v4, v5, v6, v7}, Landroid/widget/LinearLayout$LayoutParams;-><init>(IIF)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    new-instance v3, Landroid/widget/Switch;
+    invoke-direct {v3, p0}, Landroid/widget/Switch;-><init>(Landroid/content/Context;)V
+    sget-boolean v4, Lin/startv/hotstar/HSPatchConfig;->networkFilterEnabled:Z
+    invoke-virtual {v3, v4}, Landroid/widget/CompoundButton;->setChecked(Z)V
+
+    new-instance v4, Lin/startv/hotstar/DebugPanelActivity$NetworkFilterToggleListener;
+    invoke-direct {v4, p0}, Lin/startv/hotstar/DebugPanelActivity$NetworkFilterToggleListener;-><init>(Lin/startv/hotstar/DebugPanelActivity;)V
+    invoke-virtual {v3, v4}, Landroid/widget/CompoundButton;->setOnCheckedChangeListener(Landroid/widget/CompoundButton$OnCheckedChangeListener;)V
+
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    # --- Filter Mode container (shows Only Block / Only Allow) ---
+    new-instance v2, Landroid/widget/LinearLayout;
+    invoke-direct {v2, p0}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V
+    const/4 v3, 0x0
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setOrientation(I)V
+    const/16 v3, 0x11
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setGravity(I)V
+    const/16 v3, 0x8
+    const/16 v4, 0x4
+    invoke-virtual {v2, v3, v4, v3, v4}, Landroid/view/View;->setPadding(IIII)V
+    iput-object v2, p0, Lin/startv/hotstar/DebugPanelActivity;->filterModeContainer:Landroid/widget/LinearLayout;
+
+    # Show/hide based on filter enabled
+    sget-boolean v3, Lin/startv/hotstar/HSPatchConfig;->networkFilterEnabled:Z
+    if-nez v3, :show_filter_mode
+    const/16 v3, 0x8
+    invoke-virtual {v2, v3}, Landroid/view/View;->setVisibility(I)V
+    goto :after_filter_vis
+    :show_filter_mode
+    const/4 v3, 0x0
+    invoke-virtual {v2, v3}, Landroid/view/View;->setVisibility(I)V
+    :after_filter_vis
+
+    # Mode label
+    new-instance v3, Landroid/widget/TextView;
+    invoke-direct {v3, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    const-string v4, "Mode: "
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const/high16 v4, 0x41400000
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextSize(F)V
+    const v4, -0x6d6d6e
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextColor(I)V
+    const/16 v4, 0x8
+    const/4 v5, 0x0
+    invoke-virtual {v3, v4, v5, v4, v5}, Landroid/view/View;->setPadding(IIII)V
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    # "Only Block" button
+    new-instance v3, Landroid/widget/TextView;
+    invoke-direct {v3, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    const-string v4, " \ud83d\udeab Only Block "
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const/high16 v4, 0x41500000
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextSize(F)V
+    const/4 v4, -0x1
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextColor(I)V
+    const/16 v4, 0x11
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setGravity(I)V
+
+    new-instance v4, Landroid/graphics/drawable/GradientDrawable;
+    invoke-direct {v4}, Landroid/graphics/drawable/GradientDrawable;-><init>()V
+    sget v5, Lin/startv/hotstar/HSPatchConfig;->networkFilterMode:I
+    if-nez v5, :block_btn_inactive
+    const v5, -0xbbaa01
+    invoke-virtual {v4, v5}, Landroid/graphics/drawable/GradientDrawable;->setColor(I)V
+    goto :block_btn_styled
+    :block_btn_inactive
+    const v5, -0xc8c3bd
+    invoke-virtual {v4, v5}, Landroid/graphics/drawable/GradientDrawable;->setColor(I)V
+    :block_btn_styled
+    const/high16 v5, 0x41000000
+    invoke-virtual {v4, v5}, Landroid/graphics/drawable/GradientDrawable;->setCornerRadius(F)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+
+    const/16 v4, 0x10
+    const/16 v5, 0x6
+    invoke-virtual {v3, v4, v5, v4, v5}, Landroid/view/View;->setPadding(IIII)V
+    iput-object v3, p0, Lin/startv/hotstar/DebugPanelActivity;->btnOnlyBlock:Landroid/widget/TextView;
+
+    new-instance v4, Lin/startv/hotstar/DebugPanelActivity$FilterModeListener;
+    const/4 v5, 0x0
+    invoke-direct {v4, p0, v5}, Lin/startv/hotstar/DebugPanelActivity$FilterModeListener;-><init>(Lin/startv/hotstar/DebugPanelActivity;I)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    new-instance v4, Landroid/widget/LinearLayout$LayoutParams;
+    const/4 v5, -0x2
+    const/4 v6, -0x2
+    invoke-direct {v4, v5, v6}, Landroid/widget/LinearLayout$LayoutParams;-><init>(II)V
+    const/16 v5, 0x4
+    invoke-virtual {v4, v5, v5, v5, v5}, Landroid/widget/LinearLayout$LayoutParams;->setMargins(IIII)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    # "Only Allow" button
+    new-instance v3, Landroid/widget/TextView;
+    invoke-direct {v3, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    const-string v4, " \u2705 Only Allow "
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const/high16 v4, 0x41500000
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextSize(F)V
+    const/4 v4, -0x1
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextColor(I)V
+    const/16 v4, 0x11
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setGravity(I)V
+
+    new-instance v4, Landroid/graphics/drawable/GradientDrawable;
+    invoke-direct {v4}, Landroid/graphics/drawable/GradientDrawable;-><init>()V
+    sget v5, Lin/startv/hotstar/HSPatchConfig;->networkFilterMode:I
+    const/4 v6, 0x1
+    if-ne v5, v6, :allow_btn_inactive
+    const v5, -0xbb4400
+    invoke-virtual {v4, v5}, Landroid/graphics/drawable/GradientDrawable;->setColor(I)V
+    goto :allow_btn_styled
+    :allow_btn_inactive
+    const v5, -0xc8c3bd
+    invoke-virtual {v4, v5}, Landroid/graphics/drawable/GradientDrawable;->setColor(I)V
+    :allow_btn_styled
+    const/high16 v5, 0x41000000
+    invoke-virtual {v4, v5}, Landroid/graphics/drawable/GradientDrawable;->setCornerRadius(F)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+
+    const/16 v4, 0x10
+    const/16 v5, 0x6
+    invoke-virtual {v3, v4, v5, v4, v5}, Landroid/view/View;->setPadding(IIII)V
+    iput-object v3, p0, Lin/startv/hotstar/DebugPanelActivity;->btnOnlyAllow:Landroid/widget/TextView;
+
+    new-instance v4, Lin/startv/hotstar/DebugPanelActivity$FilterModeListener;
+    const/4 v5, 0x1
+    invoke-direct {v4, p0, v5}, Lin/startv/hotstar/DebugPanelActivity$FilterModeListener;-><init>(Lin/startv/hotstar/DebugPanelActivity;I)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    new-instance v4, Landroid/widget/LinearLayout$LayoutParams;
+    const/4 v5, -0x2
+    const/4 v6, -0x2
+    invoke-direct {v4, v5, v6}, Landroid/widget/LinearLayout$LayoutParams;-><init>(II)V
+    const/16 v5, 0x4
+    invoke-virtual {v4, v5, v5, v5, v5}, Landroid/widget/LinearLayout$LayoutParams;->setMargins(IIII)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    # Manage Hosts button
+    const-string v7, "\ud83d\udcdd Manage Hosts"
+    const v8, -0xff6634
     invoke-direct {p0, v7, v8}, Lin/startv/hotstar/DebugPanelActivity;->createButton(Ljava/lang/String;I)Landroid/widget/Button;
     move-result-object v2
-    new-instance v3, Lin/startv/hotstar/DebugPanelActivity$NetworkMonitorListener;
-    invoke-direct {v3, p0}, Lin/startv/hotstar/DebugPanelActivity$NetworkMonitorListener;-><init>(Lin/startv/hotstar/DebugPanelActivity;)V
+    new-instance v3, Lin/startv/hotstar/DebugPanelActivity$ManageHostsListener;
+    invoke-direct {v3, p0}, Lin/startv/hotstar/DebugPanelActivity$ManageHostsListener;-><init>(Lin/startv/hotstar/DebugPanelActivity;)V
     invoke-virtual {v2, v3}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
     invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     invoke-virtual {v1, v10}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
-
-    # ============================================================
-    # SECTION 7: INLINE LOG OUTPUT (kept for quick view)
     # ============================================================
     const-string v7, "\ud83d\udcdd  Quick Log Output"
     invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionHeader(Ljava/lang/String;)Landroid/widget/TextView;
@@ -989,5 +1173,51 @@
     :skip_stop
 
     invoke-super {p0}, Landroid/app/Activity;->onDestroy()V
+    return-void
+.end method
+
+
+# ===== Handle file picker result for profile import =====
+.method protected onActivityResult(IILandroid/content/Intent;)V
+    .locals 4
+
+    invoke-super {p0, p1, p2, p3}, Landroid/app/Activity;->onActivityResult(IILandroid/content/Intent;)V
+
+    # Check requestCode == 42 (profile import)
+    const/16 v0, 0x2a
+    if-ne p1, v0, :done
+
+    # Check resultCode == RESULT_OK (-1)
+    const/4 v0, -0x1
+    if-ne p2, v0, :done
+
+    # Check data != null
+    if-eqz p3, :done
+
+    # Get URI from intent
+    invoke-virtual {p3}, Landroid/content/Intent;->getData()Landroid/net/Uri;
+    move-result-object v0
+    if-eqz v0, :done
+
+    # Call importAllProfilesFromUri
+    invoke-static {p0, v0}, Lin/startv/hotstar/ProfileManager;->importAllProfilesFromUri(Landroid/content/Context;Landroid/net/Uri;)Ljava/lang/String;
+    move-result-object v1
+
+    # Show result in AlertDialog
+    new-instance v2, Landroid/app/AlertDialog$Builder;
+    invoke-direct {v2, p0}, Landroid/app/AlertDialog$Builder;-><init>(Landroid/content/Context;)V
+
+    const-string v0, "\ud83d\udce5 Import Result"
+    invoke-virtual {v2, v0}, Landroid/app/AlertDialog$Builder;->setTitle(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;
+
+    invoke-virtual {v2, v1}, Landroid/app/AlertDialog$Builder;->setMessage(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;
+
+    const-string v0, "OK"
+    const/4 v1, 0x0
+    invoke-virtual {v2, v0, v1}, Landroid/app/AlertDialog$Builder;->setPositiveButton(Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;
+
+    invoke-virtual {v2}, Landroid/app/AlertDialog$Builder;->show()Landroid/app/AlertDialog;
+
+    :done
     return-void
 .end method

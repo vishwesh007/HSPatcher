@@ -32,28 +32,60 @@
 
 # virtual methods
 .method public onClick(Landroid/view/View;)V
-    .locals 3
+    .locals 5
 
     iget-object v0, p0, Lin/startv/hotstar/DebugPanelActivity$ProfileImportListener;->outer:Lin/startv/hotstar/DebugPanelActivity;
 
-    # Import all profiles
-    invoke-static {v0}, Lin/startv/hotstar/ProfileManager;->importAllProfiles(Landroid/content/Context;)Ljava/lang/String;
-    move-result-object v1
+    :try_start
+    # Launch SAF file picker (no storage permission needed)
+    new-instance v1, Landroid/content/Intent;
+    const-string v2, "android.intent.action.OPEN_DOCUMENT"
+    invoke-direct {v1, v2}, Landroid/content/Intent;-><init>(Ljava/lang/String;)V
 
-    # Show result in AlertDialog
-    new-instance v2, Landroid/app/AlertDialog$Builder;
-    invoke-direct {v2, v0}, Landroid/app/AlertDialog$Builder;-><init>(Landroid/content/Context;)V
+    # Add CATEGORY_OPENABLE
+    const-string v2, "android.intent.category.OPENABLE"
+    invoke-virtual {v1, v2}, Landroid/content/Intent;->addCategory(Ljava/lang/String;)Landroid/content/Intent;
 
-    const-string v0, "\ud83d\udce5 Import Result"
-    invoke-virtual {v2, v0}, Landroid/app/AlertDialog$Builder;->setTitle(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;
+    # setType("*/*") — broadest filter, refined by EXTRA_MIME_TYPES
+    const-string v2, "*/*"
+    invoke-virtual {v1, v2}, Landroid/content/Intent;->setType(Ljava/lang/String;)Landroid/content/Intent;
 
-    invoke-virtual {v2, v1}, Landroid/app/AlertDialog$Builder;->setMessage(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;
+    # Set MIME type filters: zip + gzip + octet-stream (catches renamed zips)
+    const/4 v2, 0x4
+    new-array v2, v2, [Ljava/lang/String;
+    const/4 v3, 0x0
+    const-string v4, "application/zip"
+    aput-object v4, v2, v3
+    const/4 v3, 0x1
+    const-string v4, "application/gzip"
+    aput-object v4, v2, v3
+    const/4 v3, 0x2
+    const-string v4, "application/x-gzip"
+    aput-object v4, v2, v3
+    const/4 v3, 0x3
+    const-string v4, "application/octet-stream"
+    aput-object v4, v2, v3
 
-    const-string v0, "OK"
-    const/4 v1, 0x0
-    invoke-virtual {v2, v0, v1}, Landroid/app/AlertDialog$Builder;->setPositiveButton(Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;
+    const-string v3, "android.intent.extra.MIME_TYPES"
+    invoke-virtual {v1, v3, v2}, Landroid/content/Intent;->putExtra(Ljava/lang/String;[Ljava/lang/String;)Landroid/content/Intent;
 
-    invoke-virtual {v2}, Landroid/app/AlertDialog$Builder;->show()Landroid/app/AlertDialog;
+    # REQUEST_CODE = 42 (0x2A) for profile import
+    const/16 v2, 0x2a
+    invoke-virtual {v0, v1, v2}, Landroid/app/Activity;->startActivityForResult(Landroid/content/Intent;I)V
+    :try_end
+    .catch Ljava/lang/Exception; {:try_start .. :try_end} :catch
 
+    goto :done
+
+    :catch
+    move-exception v1
+    # Fallback: no file manager available
+    const-string v2, "No file manager found.\nPlease install a file manager app."
+    const/4 v3, 0x1
+    invoke-static {v0, v2, v3}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
+    move-result-object v2
+    invoke-virtual {v2}, Landroid/widget/Toast;->show()V
+
+    :done
     return-void
 .end method

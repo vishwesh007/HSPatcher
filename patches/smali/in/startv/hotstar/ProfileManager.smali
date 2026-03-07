@@ -1265,3 +1265,173 @@
     move-result-object v0
     return-object v0
 .end method
+
+
+# ===== Import all profiles from a content URI (via SAF file picker) =====
+# Uses ContentResolver to read from content:// URI — no storage permission needed
+.method public static importAllProfilesFromUri(Landroid/content/Context;Landroid/net/Uri;)Ljava/lang/String;
+    .locals 10
+
+    :try_start_uri
+    # Get ext dir
+    const/4 v0, 0x0
+    invoke-virtual {p0, v0}, Landroid/content/Context;->getExternalFilesDir(Ljava/lang/String;)Ljava/io/File;
+    move-result-object v0
+    if-nez v0, :ext_ok_uri
+
+    const-string v0, "Error: no external storage"
+    return-object v0
+
+    :ext_ok_uri
+    # Get ContentResolver and open InputStream from URI
+    invoke-virtual {p0}, Landroid/content/Context;->getContentResolver()Landroid/content/ContentResolver;
+    move-result-object v1
+
+    invoke-virtual {v1, p1}, Landroid/content/ContentResolver;->openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;
+    move-result-object v2
+    if-nez v2, :stream_ok
+
+    const-string v0, "Error: cannot open selected file"
+    return-object v0
+
+    :stream_ok
+    # Wrap in ZipInputStream
+    new-instance v3, Ljava/util/zip/ZipInputStream;
+    invoke-direct {v3, v2}, Ljava/util/zip/ZipInputStream;-><init>(Ljava/io/InputStream;)V
+
+    const/4 v8, 0x0    # fileCount
+
+    # ====== Extract zip entries ======
+    :uri_zip_loop
+    invoke-virtual {v3}, Ljava/util/zip/ZipInputStream;->getNextEntry()Ljava/util/zip/ZipEntry;
+    move-result-object v4
+    if-eqz v4, :uri_zip_done
+
+    invoke-virtual {v4}, Ljava/util/zip/ZipEntry;->getName()Ljava/lang/String;
+    move-result-object v4
+
+    # Build output file: extDir / entryName
+    new-instance v9, Ljava/io/File;
+    invoke-direct {v9, v0, v4}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+
+    # Check if directory entry (name ends with /)
+    invoke-virtual {v4}, Ljava/lang/String;->length()I
+    move-result v5
+    add-int/lit8 v5, v5, -0x1
+    invoke-virtual {v4, v5}, Ljava/lang/String;->charAt(I)C
+    move-result v5
+    const/16 v6, 0x2f
+    if-ne v5, v6, :uri_is_file
+
+    # Directory entry
+    invoke-virtual {v9}, Ljava/io/File;->mkdirs()Z
+    goto :uri_close_entry
+
+    :uri_is_file
+    # Ensure parent dir exists
+    invoke-virtual {v9}, Ljava/io/File;->getParentFile()Ljava/io/File;
+    move-result-object v5
+    if-eqz v5, :uri_write
+    invoke-virtual {v5}, Ljava/io/File;->mkdirs()Z
+
+    :uri_write
+    # Write file contents from zip stream
+    new-instance v5, Ljava/io/FileOutputStream;
+    invoke-direct {v5, v9}, Ljava/io/FileOutputStream;-><init>(Ljava/io/File;)V
+
+    const/16 v6, 0x4000
+    new-array v6, v6, [B
+
+    :uri_read_loop
+    invoke-virtual {v3, v6}, Ljava/util/zip/ZipInputStream;->read([B)I
+    move-result v7
+    const/4 v4, -0x1
+    if-eq v7, v4, :uri_read_done
+    const/4 v4, 0x0
+    invoke-virtual {v5, v6, v4, v7}, Ljava/io/FileOutputStream;->write([BII)V
+    goto :uri_read_loop
+
+    :uri_read_done
+    invoke-virtual {v5}, Ljava/io/FileOutputStream;->close()V
+    add-int/lit8 v8, v8, 0x1
+
+    :uri_close_entry
+    invoke-virtual {v3}, Ljava/util/zip/ZipInputStream;->closeEntry()V
+    goto :uri_zip_loop
+
+    :uri_zip_done
+    invoke-virtual {v3}, Ljava/util/zip/ZipInputStream;->close()V
+
+    # ====== Verify import result ======
+    new-instance v3, Ljava/io/File;
+    const-string v4, "hspatch_profiles"
+    invoke-direct {v3, v0, v4}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+
+    invoke-virtual {v3}, Ljava/io/File;->exists()Z
+    move-result v4
+    if-eqz v4, :uri_import_failed
+
+    invoke-virtual {v3}, Ljava/io/File;->isDirectory()Z
+    move-result v4
+    if-eqz v4, :uri_import_failed
+
+    # Count profiles
+    invoke-virtual {v3}, Ljava/io/File;->list()[Ljava/lang/String;
+    move-result-object v4
+    if-nez v4, :uri_has_list
+    const/4 v5, 0x0
+    goto :uri_build_result
+    :uri_has_list
+    array-length v5, v4
+
+    :uri_build_result
+    new-instance v4, Ljava/lang/StringBuilder;
+    invoke-direct {v4}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v6, "\u2705 Imported successfully!\n\nProfiles found: "
+    invoke-virtual {v4, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+    const-string v6, "\nFiles extracted: "
+    invoke-virtual {v4, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v4, v8}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+    const-string v6, "\nProfiles dir: "
+    invoke-virtual {v4, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v3}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v3
+    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v3
+
+    # Log
+    const-string v0, "HSPatch"
+    invoke-static {v0, v3}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
+
+    return-object v3
+
+    :uri_import_failed
+    new-instance v3, Ljava/lang/StringBuilder;
+    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v4, "\u274c Import failed.\nZip file did not contain hspatch_profiles/ directory.\nFiles extracted: "
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v3, v8}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+    const-string v4, "\n\nMake sure the zip was exported via Export All Profiles."
+    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v3}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v3
+    return-object v3
+
+    :try_end_uri
+    .catchall {:try_start_uri .. :try_end_uri} :catch_uri
+
+    :catch_uri
+    move-exception v0
+    invoke-virtual {v0}, Ljava/lang/Exception;->getMessage()Ljava/lang/String;
+    move-result-object v0
+    new-instance v1, Ljava/lang/StringBuilder;
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v2, "Import error: "
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v0
+    return-object v0
+.end method

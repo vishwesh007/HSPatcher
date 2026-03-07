@@ -33,7 +33,7 @@
     return-void
 .end method
 
-# ===== Static: read file content (max 5MB, detect binary) =====
+# ===== Static: read file content (max 50MB, detect binary) =====
 .method public static readFileContent(Ljava/lang/String;)Ljava/lang/String;
     .locals 7
 
@@ -50,7 +50,7 @@
     :exists
     invoke-virtual {v0}, Ljava/io/File;->length()J
     move-result-wide v1
-    const-wide/32 v3, 0x500000
+    const-wide/32 v3, 0x3200000
     cmp-long v5, v1, v3
     if-lez v5, :size_ok
     const/4 v0, 0x0
@@ -1034,7 +1034,7 @@
     const/4 v2, 0x1
     iput-boolean v2, v12, Lin/startv/hotstar/FileViewerActivity;->isBinary:Z
     iget-object v2, v12, Lin/startv/hotstar/FileViewerActivity;->editText:Landroid/widget/EditText;
-    const-string v3, "[Binary file or file too large (>5MB)]\n\nCannot display in text editor."
+    const-string v3, "[Binary file or file too large (>50MB)]\n\nCannot display in text editor."
     invoke-virtual {v2, v3}, Landroid/widget/EditText;->setText(Ljava/lang/CharSequence;)V
     const/4 v3, 0x0
     invoke-virtual {v2, v3}, Landroid/widget/EditText;->setEnabled(Z)V
@@ -1063,6 +1063,26 @@
     iput-boolean v2, v12, Lin/startv/hotstar/FileViewerActivity;->isBinary:Z
     iget-object v2, v12, Lin/startv/hotstar/FileViewerActivity;->editText:Landroid/widget/EditText;
     invoke-virtual {v2, v0}, Landroid/widget/EditText;->setText(Ljava/lang/CharSequence;)V
+
+    # Check if file > 5MB -> read-only mode
+    new-instance v8, Ljava/io/File;
+    iget-object v9, v12, Lin/startv/hotstar/FileViewerActivity;->filePath:Ljava/lang/String;
+    invoke-direct {v8, v9}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v8}, Ljava/io/File;->length()J
+    move-result-wide v8
+    const-wide/32 v10, 0x500000
+    cmp-long v3, v8, v10
+    if-lez v3, :editable_file
+    # Large file: disable editing to prevent OOM
+    const/4 v3, 0x0
+    invoke-virtual {v2, v3}, Landroid/widget/EditText;->setEnabled(Z)V
+    iget-object v2, v12, Lin/startv/hotstar/FileViewerActivity;->editText:Landroid/widget/EditText;
+    const/4 v3, 0x0
+    invoke-virtual {v2, v3}, Landroid/widget/EditText;->setFocusable(Z)V
+    const/4 v3, 0x1
+    invoke-virtual {v2, v3}, Landroid/widget/TextView;->setTextIsSelectable(Z)V
+    :editable_file
+
     const-string v3, "\n"
     invoke-virtual {v0, v3}, Ljava/lang/String;->split(Ljava/lang/String;)[Ljava/lang/String;
     move-result-object v3
@@ -1082,7 +1102,21 @@
     const-string v7, " | Size: "
     invoke-virtual {v6, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v6, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    # Check if large file for status suffix
+    new-instance v8, Ljava/io/File;
+    iget-object v9, v12, Lin/startv/hotstar/FileViewerActivity;->filePath:Ljava/lang/String;
+    invoke-direct {v8, v9}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v8}, Ljava/io/File;->length()J
+    move-result-wide v8
+    const-wide/32 v10, 0x500000
+    cmp-long v3, v8, v10
+    if-lez v3, :small_status
+    const-string v7, " | UTF-8 | Read-only (large)"
+    goto :status_suffix
+    :small_status
     const-string v7, " | UTF-8"
+    :status_suffix
     invoke-virtual {v6, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v6}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v3

@@ -13,6 +13,8 @@
 .field public static initialized:Z
 .field public static autoResetFingerprint:Z
 .field public static debugNotificationPersistent:Z
+.field public static networkFilterEnabled:Z
+.field public static networkFilterMode:I    # 0 = Only Block (blacklist), 1 = Only Allow (whitelist)
 
 
 # direct methods
@@ -86,6 +88,20 @@
     invoke-interface {v0, v1, v2}, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
     move-result v1
     sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->debugNotificationPersistent:Z
+
+    # Load network filter enabled toggle (default: true = ON)
+    const-string v1, "network_filter_enabled"
+    const/4 v2, 0x1
+    invoke-interface {v0, v1, v2}, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
+    move-result v1
+    sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->networkFilterEnabled:Z
+
+    # Load network filter mode (default: 0 = Only Block)
+    const-string v1, "network_filter_mode"
+    const/4 v2, 0x0
+    invoke-interface {v0, v1, v2}, Landroid/content/SharedPreferences;->getInt(Ljava/lang/String;I)I
+    move-result v1
+    sput v1, Lin/startv/hotstar/HSPatchConfig;->networkFilterMode:I
 
     const-string v0, "HSPatch"
     new-instance v1, Ljava/lang/StringBuilder;
@@ -284,4 +300,84 @@
     invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
 
     return-void
+.end method
+
+
+# ================================================================
+# setNetworkFilterEnabled(Context, boolean) - Persist toggle
+# ================================================================
+.method public static setNetworkFilterEnabled(Landroid/content/Context;Z)V
+    .locals 3
+
+    sput-boolean p1, Lin/startv/hotstar/HSPatchConfig;->networkFilterEnabled:Z
+
+    const-string v0, "hspatch_settings"
+    const/4 v1, 0x0
+    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v0
+    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+    const-string v2, "network_filter_enabled"
+    invoke-interface {v1, v2, p1}, Landroid/content/SharedPreferences$Editor;->putBoolean(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
+
+    # Also sync to hspatch_config prefs (used by agent.js)
+    const-string v0, "hspatch_config"
+    const/4 v1, 0x0
+    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v0
+    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+    const-string v2, "blocking_enabled"
+    invoke-interface {v1, v2, p1}, Landroid/content/SharedPreferences$Editor;->putBoolean(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
+
+    return-void
+.end method
+
+
+# ================================================================
+# setNetworkFilterMode(Context, int) - Persist filter mode
+# 0 = Only Block (blacklist), 1 = Only Allow (whitelist)
+# ================================================================
+.method public static setNetworkFilterMode(Landroid/content/Context;I)V
+    .locals 3
+
+    sput p1, Lin/startv/hotstar/HSPatchConfig;->networkFilterMode:I
+
+    const-string v0, "hspatch_settings"
+    const/4 v1, 0x0
+    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v0
+    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+    const-string v2, "network_filter_mode"
+    invoke-interface {v1, v2, p1}, Landroid/content/SharedPreferences$Editor;->putInt(Ljava/lang/String;I)Landroid/content/SharedPreferences$Editor;
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
+
+    # Also sync to hspatch_config prefs (used by agent.js)
+    const-string v0, "hspatch_config"
+    const/4 v1, 0x0
+    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v0
+    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+    const-string v2, "network_filter_mode"
+    invoke-interface {v1, v2, p1}, Landroid/content/SharedPreferences$Editor;->putInt(Ljava/lang/String;I)Landroid/content/SharedPreferences$Editor;
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
+
+    return-void
+.end method
+
+
+# ================================================================
+# getHostRulesFilePath() - Returns path to host_rules.txt
+# ================================================================
+.method public static getHostRulesFilePath()Ljava/lang/String;
+    .locals 1
+
+    const-string v0, "host_rules.txt"
+    invoke-static {v0}, Lin/startv/hotstar/HSPatchConfig;->getFilePath(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v0
+    return-object v0
 .end method
