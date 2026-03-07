@@ -45,6 +45,12 @@
             android:configChanges="orientation|screenSize"
             android:theme="@android:style/Theme.Material.NoActionBar" />
 
+        <activity
+            android:name=".DbEditorActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
         <provider
             android:name=".HspFileProvider"
             android:authorities="in.startv.hspatcher.provider"

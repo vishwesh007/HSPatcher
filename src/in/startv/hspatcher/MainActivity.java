@@ -40,7 +40,7 @@ public class MainActivity extends Activity {
     private static final int PICK_CERT = 1009;
 
     private Button btnSelect, btnPatch, btnInstall, btnExtract, btnUninstall;
-    private Button btnBackup, btnSigner, btnCert;
+    private Button btnBackup, btnSigner, btnCert, btnDbEditor;
     private TextView logOutput, apkName, apkSize, progressText, versionText;
     private ScrollView logScroll;
     private ProgressBar progressBar;
@@ -98,6 +98,8 @@ public class MainActivity extends Activity {
 
         btnBackup.setOnClickListener(v -> onBackupClick());
         btnSigner.setOnClickListener(v -> onSignerClick());
+        btnDbEditor = findViewById(R.id.btn_db_editor);
+        btnDbEditor.setOnClickListener(v -> onDbEditorClick());
 
         btnCert = findViewById(R.id.btn_cert);
         btnCert.setOnClickListener(v -> onCertClick());
@@ -1115,6 +1117,11 @@ public class MainActivity extends Activity {
 
     private void onSignerClick() {
         Intent intent = new Intent(this, ApkSignerActivity.class);
+        startActivity(intent);
+    }
+
+    private void onDbEditorClick() {
+        Intent intent = new Intent(this, DbEditorActivity.class);
         startActivity(intent);
     }
 
