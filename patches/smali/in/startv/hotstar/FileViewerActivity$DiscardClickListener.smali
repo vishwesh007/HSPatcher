@@ -37,7 +37,7 @@
         }
     .end annotation
 
-    .line 971
+    .line 1194
     iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$DiscardClickListener;->this$0:Lin/startv/hotstar/FileViewerActivity;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -52,11 +52,11 @@
 .method public onClick(Landroid/content/DialogInterface;I)V
     .locals 0
 
-    .line 973
+    .line 1196
     iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$DiscardClickListener;->activity:Lin/startv/hotstar/FileViewerActivity;
 
     invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->finish()V
 
-    .line 974
+    .line 1197
     return-void
 .end method

@@ -33,7 +33,7 @@
         }
     .end annotation
 
-    .line 877
+    .line 1089
     iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$2;->this$0:Lin/startv/hotstar/FileViewerActivity;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -46,7 +46,7 @@
 .method public run()V
     .locals 3
 
-    .line 881
+    .line 1093
     :try_start_0
     iget-object v0, p0, Lin/startv/hotstar/FileViewerActivity$2;->this$0:Lin/startv/hotstar/FileViewerActivity;
 
@@ -54,14 +54,14 @@
     :try_end_0
     .catch Ljava/lang/Exception; {:try_start_0 .. :try_end_0} :catch_0
 
-    .line 884
+    .line 1096
     goto :goto_0
 
-    .line 882
+    .line 1094
     :catch_0
     move-exception v0
 
-    .line 883
+    .line 1095
     invoke-virtual {v0}, Ljava/lang/Exception;->getMessage()Ljava/lang/String;
 
     move-result-object v0
@@ -88,7 +88,7 @@
 
     invoke-static {v1, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
-    .line 885
+    .line 1097
     :goto_0
     return-void
 .end method

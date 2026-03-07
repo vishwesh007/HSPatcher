@@ -41,7 +41,7 @@
         }
     .end annotation
 
-    .line 880
+    .line 1063
     iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->this$0:Lin/startv/hotstar/FileExplorerActivity;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -56,15 +56,15 @@
 .method private deleteRecursive(Ljava/io/File;)Z
     .locals 5
 
-    .line 898
+    .line 1081
     invoke-virtual {p1}, Ljava/io/File;->listFiles()[Ljava/io/File;
 
     move-result-object v0
 
-    .line 899
+    .line 1082
     if-eqz v0, :cond_1
 
-    .line 900
+    .line 1083
     array-length v1, v0
 
     const/4 v2, 0x0
@@ -74,7 +74,7 @@
 
     aget-object v3, v0, v2
 
-    .line 901
+    .line 1084
     invoke-virtual {v3}, Ljava/io/File;->isDirectory()Z
 
     move-result v4
@@ -85,17 +85,17 @@
 
     goto :goto_1
 
-    .line 902
+    .line 1085
     :cond_0
     invoke-virtual {v3}, Ljava/io/File;->delete()Z
 
-    .line 900
+    .line 1083
     :goto_1
     add-int/lit8 v2, v2, 0x1
 
     goto :goto_0
 
-    .line 905
+    .line 1088
     :cond_1
     invoke-virtual {p1}, Ljava/io/File;->delete()Z
 
@@ -109,40 +109,40 @@
 .method public onClick(Landroid/content/DialogInterface;I)V
     .locals 1
 
-    .line 882
+    .line 1065
     new-instance p1, Ljava/io/File;
 
     iget-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->path:Ljava/lang/String;
 
     invoke-direct {p1, p2}, Ljava/io/File;-><init>(Ljava/lang/String;)V
 
-    .line 884
+    .line 1067
     invoke-virtual {p1}, Ljava/io/File;->isDirectory()Z
 
     move-result p2
 
     if-eqz p2, :cond_0
 
-    .line 885
+    .line 1068
     invoke-direct {p0, p1}, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->deleteRecursive(Ljava/io/File;)Z
 
     move-result p1
 
     goto :goto_0
 
-    .line 887
+    .line 1070
     :cond_0
     invoke-virtual {p1}, Ljava/io/File;->delete()Z
 
     move-result p1
 
-    .line 889
+    .line 1072
     :goto_0
     const/4 p2, 0x0
 
     if-eqz p1, :cond_1
 
-    .line 890
+    .line 1073
     iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
 
     const-string v0, "Deleted"
@@ -153,7 +153,7 @@
 
     invoke-virtual {p1}, Landroid/widget/Toast;->show()V
 
-    .line 891
+    .line 1074
     iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
 
     iget-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
@@ -164,7 +164,7 @@
 
     goto :goto_1
 
-    .line 893
+    .line 1076
     :cond_1
     iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$DeleteConfirmListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
 
@@ -176,7 +176,7 @@
 
     invoke-virtual {p1}, Landroid/widget/Toast;->show()V
 
-    .line 895
+    .line 1078
     :goto_1
     return-void
 .end method

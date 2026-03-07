@@ -30,7 +30,7 @@
 .method constructor <init>()V
     .locals 0
 
-    .line 910
+    .line 1093
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
 
     return-void
@@ -41,7 +41,7 @@
 .method public compare(Ljava/io/File;Ljava/io/File;)I
     .locals 1
 
-    .line 912
+    .line 1095
     invoke-virtual {p1}, Ljava/io/File;->isDirectory()Z
 
     move-result v0
@@ -58,7 +58,7 @@
 
     return p1
 
-    .line 913
+    .line 1096
     :cond_0
     invoke-virtual {p1}, Ljava/io/File;->isDirectory()Z
 
@@ -76,7 +76,7 @@
 
     return p1
 
-    .line 914
+    .line 1097
     :cond_1
     invoke-virtual {p1}, Ljava/io/File;->getName()Ljava/lang/String;
 
@@ -106,7 +106,7 @@
         }
     .end annotation
 
-    .line 910
+    .line 1093
     check-cast p1, Ljava/io/File;
 
     check-cast p2, Ljava/io/File;

@@ -37,7 +37,7 @@
         }
     .end annotation
 
-    .line 953
+    .line 1176
     iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$BackClickListener;->this$0:Lin/startv/hotstar/FileViewerActivity;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -52,11 +52,11 @@
 .method public onClick(Landroid/view/View;)V
     .locals 0
 
-    .line 955
+    .line 1178
     iget-object p1, p0, Lin/startv/hotstar/FileViewerActivity$BackClickListener;->activity:Lin/startv/hotstar/FileViewerActivity;
 
     invoke-virtual {p1}, Lin/startv/hotstar/FileViewerActivity;->onBackPressed()V
 
-    .line 956
+    .line 1179
     return-void
 .end method

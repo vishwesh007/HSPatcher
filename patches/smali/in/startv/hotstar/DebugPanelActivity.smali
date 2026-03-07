@@ -27,7 +27,7 @@
 .end method
 
 .method public readFile(Ljava/lang/String;)Ljava/lang/String;
-    .locals 5
+    .locals 6
 
     :try_start
     new-instance v0, Ljava/io/File;
@@ -41,8 +41,9 @@
     return-object v0
 
     :file_exists
-    new-instance v1, Ljava/lang/StringBuilder;
-    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+    # Collect all lines into ArrayList for reverse iteration
+    new-instance v1, Ljava/util/ArrayList;
+    invoke-direct {v1}, Ljava/util/ArrayList;-><init>()V
 
     new-instance v2, Ljava/io/BufferedReader;
     new-instance v3, Ljava/io/FileReader;
@@ -55,33 +56,54 @@
 
     if-eqz v3, :end_loop
 
-    invoke-virtual {v1, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v4, "\n"
-    invoke-virtual {v1, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v1, v3}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
 
     goto :loop
 
     :end_loop
     invoke-virtual {v2}, Ljava/io/BufferedReader;->close()V
 
-    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    # Build string in reverse order (newest logs first)
+    new-instance v2, Ljava/lang/StringBuilder;
+    invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
+
+    invoke-virtual {v1}, Ljava/util/ArrayList;->size()I
+    move-result v3
+    sub-int/lit8 v3, v3, 0x1
+
+    :rev_loop
+    if-ltz v3, :rev_end
+
+    invoke-virtual {v1, v3}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;
+    move-result-object v4
+    check-cast v4, Ljava/lang/String;
+
+    invoke-virtual {v2, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v5, "\n"
+    invoke-virtual {v2, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+    sub-int/lit8 v3, v3, 0x1
+    goto :rev_loop
+
+    :rev_end
+    invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v0
 
-    # Limit to last 5000 chars to avoid OOM
+    # Limit to first 5000 chars (newest lines since reversed)
     invoke-virtual {v0}, Ljava/lang/String;->length()I
     move-result v1
     const/16 v2, 0x1388
     if-le v1, v2, :no_trim
 
-    sub-int v2, v1, v2
-    invoke-virtual {v0, v2}, Ljava/lang/String;->substring(I)Ljava/lang/String;
+    const/4 v3, 0x0
+    invoke-virtual {v0, v3, v2}, Ljava/lang/String;->substring(II)Ljava/lang/String;
     move-result-object v0
 
     new-instance v1, Ljava/lang/StringBuilder;
     invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v2, "... (showing last 5000 chars) ...\n"
-    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    const-string v2, "\n... (showing first 5000 chars, newest first) ..."
+    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v0
 
@@ -263,10 +285,10 @@
     iget-object v1, p0, Lin/startv/hotstar/DebugPanelActivity;->logView:Landroid/widget/TextView;
     invoke-virtual {v1, v0}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
 
-    # Auto-scroll
+    # Auto-scroll to top (newest logs are at top now)
     iget-object v0, p0, Lin/startv/hotstar/DebugPanelActivity;->logScrollView:Landroid/widget/ScrollView;
     if-eqz v0, :no_file
-    const/16 v1, 0x82
+    const/16 v1, 0x21
     invoke-virtual {v0, v1}, Landroid/widget/ScrollView;->fullScroll(I)Z
 
     :no_file

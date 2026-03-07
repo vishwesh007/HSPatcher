@@ -37,7 +37,7 @@
         }
     .end annotation
 
-    .line 763
+    .line 921
     iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->this$0:Lin/startv/hotstar/FileExplorerActivity;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -52,7 +52,7 @@
 .method public onClick(Landroid/view/View;)V
     .locals 1
 
-    .line 765
+    .line 923
     iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
 
     invoke-virtual {p1}, Lin/startv/hotstar/FileExplorerActivity;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;
@@ -61,11 +61,11 @@
 
     iget-object p1, p1, Landroid/content/pm/ApplicationInfo;->dataDir:Ljava/lang/String;
 
-    .line 766
+    .line 924
     iget-object v0, p0, Lin/startv/hotstar/FileExplorerActivity$HomeClickListener;->activity:Lin/startv/hotstar/FileExplorerActivity;
 
     invoke-virtual {v0, p1}, Lin/startv/hotstar/FileExplorerActivity;->navigateTo(Ljava/lang/String;)V
 
-    .line 767
+    .line 925
     return-void
 .end method

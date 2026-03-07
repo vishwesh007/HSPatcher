@@ -1,4 +1,4 @@
-.class Lin/startv/hotstar/FileExplorerActivity$3;
+.class Lin/startv/hotstar/FileExplorerActivity$5;
 .super Ljava/lang/Object;
 .source "FileExplorerActivity.java"
 
@@ -8,7 +8,7 @@
 
 # annotations
 .annotation system Ldalvik/annotation/EnclosingMethod;
-    value = Lin/startv/hotstar/FileExplorerActivity;->showNewFileDialog()V
+    value = Lin/startv/hotstar/FileExplorerActivity;->showSearchDialog()V
 .end annotation
 
 .annotation system Ldalvik/annotation/InnerClass;
@@ -20,21 +20,33 @@
 # instance fields
 .field final synthetic this$0:Lin/startv/hotstar/FileExplorerActivity;
 
+.field final synthetic val$selectedMode:[I
+
 
 # direct methods
-.method constructor <init>(Lin/startv/hotstar/FileExplorerActivity;)V
+.method constructor <init>(Lin/startv/hotstar/FileExplorerActivity;[I)V
     .locals 0
     .annotation system Ldalvik/annotation/MethodParameters;
         accessFlags = {
-            0x8010
+            0x8010,
+            0x1010
         }
         names = {
+            null,
             null
         }
     .end annotation
 
-    .line 691
-    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$3;->this$0:Lin/startv/hotstar/FileExplorerActivity;
+    .annotation system Ldalvik/annotation/Signature;
+        value = {
+            "()V"
+        }
+    .end annotation
+
+    .line 755
+    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$5;->this$0:Lin/startv/hotstar/FileExplorerActivity;
+
+    iput-object p2, p0, Lin/startv/hotstar/FileExplorerActivity$5;->val$selectedMode:[I
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
 
@@ -46,21 +58,13 @@
 .method public onClick(Landroid/content/DialogInterface;I)V
     .locals 1
 
-    .line 694
-    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$3;->this$0:Lin/startv/hotstar/FileExplorerActivity;
+    .line 758
+    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$5;->val$selectedMode:[I
 
-    const/4 v0, 0x1
-
-    if-ne p2, v0, :cond_0
-
-    goto :goto_0
-
-    :cond_0
     const/4 v0, 0x0
 
-    :goto_0
-    invoke-virtual {p1, v0}, Lin/startv/hotstar/FileExplorerActivity;->showNameInputDialog(Z)V
+    aput p2, p1, v0
 
-    .line 695
+    .line 759
     return-void
 .end method

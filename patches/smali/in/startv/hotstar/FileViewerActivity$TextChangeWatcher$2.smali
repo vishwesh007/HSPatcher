@@ -1,4 +1,4 @@
-.class Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher$1;
+.class Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher$2;
 .super Ljava/lang/Object;
 .source "FileViewerActivity.java"
 
@@ -33,8 +33,8 @@
         }
     .end annotation
 
-    .line 1217
-    iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher$1;->this$1:Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher;
+    .line 1232
+    iput-object p1, p0, Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher$2;->this$1:Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
 
@@ -46,13 +46,13 @@
 .method public run()V
     .locals 1
 
-    .line 1220
-    iget-object v0, p0, Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher$1;->this$1:Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher;
+    .line 1235
+    iget-object v0, p0, Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher$2;->this$1:Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher;
 
     iget-object v0, v0, Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher;->activity:Lin/startv/hotstar/FileViewerActivity;
 
-    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->saveUndoState()V
+    invoke-virtual {v0}, Lin/startv/hotstar/FileViewerActivity;->applySyntaxHighlighting()V
 
-    .line 1221
+    .line 1236
     return-void
 .end method

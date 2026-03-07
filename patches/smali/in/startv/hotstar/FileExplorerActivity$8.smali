@@ -1,4 +1,4 @@
-.class Lin/startv/hotstar/FileExplorerActivity$2;
+.class Lin/startv/hotstar/FileExplorerActivity$8;
 .super Ljava/lang/Object;
 .source "FileExplorerActivity.java"
 
@@ -8,7 +8,7 @@
 
 # annotations
 .annotation system Ldalvik/annotation/EnclosingMethod;
-    value = Lin/startv/hotstar/FileExplorerActivity;->onCreate(Landroid/os/Bundle;)V
+    value = Lin/startv/hotstar/FileExplorerActivity;->showSearchResults(Ljava/util/ArrayList;Ljava/lang/String;)V
 .end annotation
 
 .annotation system Ldalvik/annotation/InnerClass;
@@ -33,8 +33,8 @@
         }
     .end annotation
 
-    .line 566
-    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$2;->this$0:Lin/startv/hotstar/FileExplorerActivity;
+    .line 860
+    iput-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$8;->this$0:Lin/startv/hotstar/FileExplorerActivity;
 
     invoke-direct {p0}, Ljava/lang/Object;-><init>()V
 
@@ -44,13 +44,17 @@
 
 # virtual methods
 .method public onClick(Landroid/view/View;)V
-    .locals 0
+    .locals 1
 
-    .line 569
-    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$2;->this$0:Lin/startv/hotstar/FileExplorerActivity;
+    .line 863
+    iget-object p1, p0, Lin/startv/hotstar/FileExplorerActivity$8;->this$0:Lin/startv/hotstar/FileExplorerActivity;
 
-    invoke-virtual {p1}, Lin/startv/hotstar/FileExplorerActivity;->showSearchDialog()V
+    iget-object v0, p0, Lin/startv/hotstar/FileExplorerActivity$8;->this$0:Lin/startv/hotstar/FileExplorerActivity;
 
-    .line 570
+    iget-object v0, v0, Lin/startv/hotstar/FileExplorerActivity;->currentPath:Ljava/lang/String;
+
+    invoke-virtual {p1, v0}, Lin/startv/hotstar/FileExplorerActivity;->navigateTo(Ljava/lang/String;)V
+
+    .line 864
     return-void
 .end method
