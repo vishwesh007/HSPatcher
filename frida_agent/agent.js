@@ -661,6 +661,166 @@ Java.performNow(function() {
 
         console.log('[*] Piracy/License/Root bypass hooks installed');
 
+        // =====================================================
+        // 3a-ext. FRIDA DETECTION HIDING & PairIP BYPASS
+        //   - Hide frida-related files, ports, and /proc artifacts
+        //   - Block Runtime.exec commands that probe for frida
+        //   - Prevent app self-kill via Process.killProcess / System.exit
+        //   - Neutralize PairIP integrity check library if present
+        // =====================================================
+
+        // --- Frida file path hiding ---
+        try {
+            var File = Java.use('java.io.File');
+            var _origFridaExists = File.exists;
+            var _fridaPathSet = {};
+            ['/data/local/tmp/frida-server', '/data/local/tmp/re.frida.server',
+             '/data/local/tmp/frida-agent', '/data/local/tmp/frida-gadget',
+             '/data/local/tmp/frida-helper', '/data/local/tmp/frida',
+             '/sdcard/frida-server', '/system/lib/libfrida-gadget.so',
+             '/system/lib64/libfrida-gadget.so',
+             '/data/local/tmp/libfrida-gadget.so',
+             '/data/local/tmp/libfrida-gadget-arm.so',
+             '/data/local/tmp/libfrida-gadget-arm64.so'].forEach(function(p) { _fridaPathSet[p] = true; });
+            // Extend existing File.exists hook (already hooked for root paths above)
+            var _prevExistsImpl = File.exists.implementation;
+            if (_prevExistsImpl) {
+                File.exists.implementation = function() {
+                    var path = this.getAbsolutePath();
+                    if (_fridaPathSet[path]) {
+                        console.log('[+] FRIDA-HIDE: Hiding frida path: ' + path);
+                        return false;
+                    }
+                    return _prevExistsImpl.call(this);
+                };
+            }
+        } catch (err) {
+            console.log('[!] Frida path hiding hook error: ' + err);
+        }
+
+        // --- Frida port detection hiding (default port 27042) ---
+        try {
+            var InetAddress = Java.use('java.net.InetAddress');
+            var Socket = Java.use('java.net.Socket');
+            var origSocketInit = Socket.$init.overload('java.net.InetAddress', 'int');
+            origSocketInit.implementation = function(addr, port) {
+                if (port === 27042 || port === 27043) {
+                    console.log('[+] FRIDA-HIDE: Blocking frida port probe: ' + port);
+                    throw Java.use('java.net.ConnectException').$new('Connection refused');
+                }
+                return origSocketInit.call(this, addr, port);
+            };
+        } catch (err) { }
+
+        // --- Block frida detection via Runtime.exec (extend existing hook) ---
+        try {
+            var Runtime2 = Java.use('java.lang.Runtime');
+            var origExec2 = Runtime2.exec.overload('[Ljava.lang.String;');
+            origExec2.implementation = function(cmdArr) {
+                if (cmdArr !== null && cmdArr.length > 0) {
+                    var joined = '';
+                    for (var i = 0; i < cmdArr.length; i++) {
+                        joined += cmdArr[i] + ' ';
+                    }
+                    var lower = joined.toLowerCase();
+                    if (lower.indexOf('frida') !== -1 || lower.indexOf('gadget') !== -1 ||
+                        lower.indexOf('27042') !== -1 || lower.indexOf('xposed') !== -1) {
+                        console.log('[+] FRIDA-HIDE: Blocking detection exec: ' + joined.trim());
+                        throw Java.use('java.io.IOException').$new('Permission denied');
+                    }
+                }
+                return origExec2.call(this, cmdArr);
+            };
+        } catch (err) { }
+
+        // --- Hide frida from /proc/self/maps reading ---
+        try {
+            var BufferedReader = Java.use('java.io.BufferedReader');
+            var origReadLine = BufferedReader.readLine;
+            origReadLine.implementation = function() {
+                var line = origReadLine.call(this);
+                if (line !== null) {
+                    var s = '' + line;
+                    if (s.indexOf('frida') !== -1 || s.indexOf('gadget') !== -1 ||
+                        s.indexOf('LIBFRIDA') !== -1 || s.indexOf('linjector') !== -1) {
+                        // Return empty string to hide frida from maps
+                        return Java.use('java.lang.String').$new('');
+                    }
+                }
+                return line;
+            };
+        } catch (err) { }
+
+        // --- Prevent app self-kill ---
+        try {
+            var Process = Java.use('android.os.Process');
+            var myPid = Process.myPid();
+            Process.killProcess.implementation = function(pid) {
+                if (pid === myPid) {
+                    console.log('[+] ANTI-KILL: Blocked Process.killProcess(myPid) \u2014 app stays alive');
+                    return;
+                }
+                Process.killProcess.call(this, pid);
+            };
+        } catch (err) { }
+
+        try {
+            var SystemClass = Java.use('java.lang.System');
+            SystemClass.exit.implementation = function(code) {
+                console.log('[+] ANTI-KILL: Blocked System.exit(' + code + ') \u2014 app stays alive');
+                // Don't actually exit
+            };
+        } catch (err) { }
+
+        // --- PairIP integrity check bypass ---
+        // PairIP (libpairipcore.so) is an anti-tamper library used by some apps.
+        // It validates APK signature/integrity and kills the app if modified.
+        // Strategy: Hook its native init + Java entry points to neutralize it.
+        try {
+            var pairipLoaded = false;
+            try {
+                var pairipLib = Module.findBaseAddress('libpairipcore.so');
+                if (pairipLib !== null) pairipLoaded = true;
+            } catch(e) {}
+
+            if (pairipLoaded) {
+                console.log('[*] PAIRIP: libpairipcore.so detected \u2014 applying bypass');
+                // Hook common PairIP entry functions
+                var pairFuncs = ['pairip_start', 'pairip_init', 'Java_com_pairip_VMRunner_start',
+                                 'Java_com_pairip_VMRunner_execute'];
+                pairFuncs.forEach(function(fname) {
+                    try {
+                        var addr = Module.findExportByName('libpairipcore.so', fname);
+                        if (addr) {
+                            Interceptor.replace(addr, new NativeCallback(function() {
+                                console.log('[+] PAIRIP: Neutralized ' + fname + '()');
+                                return 0;
+                            }, 'int', []));
+                        }
+                    } catch(e) {}
+                });
+            }
+
+            // Also hook PairIP Java side if class exists
+            try {
+                var VMRunner = Java.use('com.pairip.VMRunner');
+                VMRunner.start.implementation = function() {
+                    console.log('[+] PAIRIP: Blocked VMRunner.start()');
+                };
+            } catch(e) { /* Class not present \u2014 OK */ }
+            try {
+                var VMRunner2 = Java.use('com.pairip.VMRunner');
+                VMRunner2.execute.implementation = function() {
+                    console.log('[+] PAIRIP: Blocked VMRunner.execute()');
+                };
+            } catch(e) { /* Class not present \u2014 OK */ }
+
+        } catch (err) {
+            console.log('[!] PairIP bypass error: ' + err);
+        }
+
+        console.log('[*] Frida hiding + Anti-kill + PairIP bypass installed');
+
 
         // =====================================================
         // 3b. CRYPTO EXCEPTION RESILIENCE (Re-signing Safety Net)
@@ -1188,6 +1348,15 @@ Java.performNow(function() {
                 if (ctx === null) return;
                 var context = Java.cast(ctx, Java.use('android.content.Context'));
 
+                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
+                                   Java.use('android.app.NotificationManager'));
+
+                // Only show notification when blocking is enabled
+                if (!trafficMonitorEnabled) {
+                    nm.cancel(NOTIF_ID);
+                    return;
+                }
+
                 var Intent = Java.use('android.content.Intent');
                 var PendingIntent = Java.use('android.app.PendingIntent');
                 var toggleIntent = Intent.$new(Java.use('java.lang.String').$new('hspatch.TOGGLE_BLOCK'));
@@ -1198,14 +1367,10 @@ Java.performNow(function() {
                 var Builder = Java.use('android.app.Notification$Builder');
                 var builder = Builder.$new(context, Java.use('java.lang.String').$new(NOTIF_CHANNEL));
 
-                var title = trafficMonitorEnabled
-                    ? '\uD83D\uDEE1 Blocking: ON'
-                    : '\uD83D\uDEE1 Blocking: OFF';
+                var title = '\uD83D\uDEE1 Blocking: ON';
                 var modeStr = networkFilterMode === 0 ? 'Blacklist' : 'Whitelist';
                 var hostCount = Object.keys(discoveredHosts).length;
-                var text = trafficMonitorEnabled
-                    ? 'Mode: ' + modeStr + ' \u2022 ' + hostCount + ' hosts \u2022 Tap to disable'
-                    : 'Blocking disabled \u2022 Tap to enable';
+                var text = 'Mode: ' + modeStr + ' \u2022 ' + hostCount + ' hosts \u2022 Tap to disable';
 
                 var iconId = 17301624; // android.R.drawable.ic_lock_idle_lock
                 try { iconId = ctx.getApplicationInfo().icon.value; } catch(e) {}
@@ -1216,13 +1381,11 @@ Java.performNow(function() {
                 builder.setOngoing(true);
                 builder.setContentIntent(togglePi);
                 // Add explicit action button
-                var actionLabel = trafficMonitorEnabled ? '\u274C Turn OFF' : '\u2705 Turn ON';
+                var actionLabel = '\u274C Turn OFF';
                 builder.addAction(iconId,
                     Java.cast(Java.use('java.lang.String').$new(actionLabel), Java.use('java.lang.CharSequence')),
                     togglePi);
 
-                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
-                                   Java.use('android.app.NotificationManager'));
                 nm.notify(NOTIF_ID, builder.build());
             } catch(e) {
                 Log.e(netLogTag, '[TOGGLE] Notification error: ' + e);
@@ -1305,6 +1468,55 @@ Java.performNow(function() {
                 Log.i(netLogTag, '[TOGGLE] In-app blocking toggle ready (notification)');
             } catch(e) {
                 Log.e(netLogTag, '[TOGGLE] Setup error: ' + e);
+            }
+        }
+
+        var DEBUG_NOTIF_ID = 19731;
+        var DEBUG_NOTIF_CHANNEL = 'hspatch_debug';
+
+        function showDebugPanelNotification(context, nm) {
+            try {
+                // Create debug panel notification channel
+                var NotificationChannel = Java.use('android.app.NotificationChannel');
+                var ch = NotificationChannel.$new(
+                    Java.use('java.lang.String').$new(DEBUG_NOTIF_CHANNEL),
+                    Java.cast(Java.use('java.lang.String').$new('HSPatch Debug Panel'), Java.use('java.lang.CharSequence')),
+                    2); // IMPORTANCE_LOW — no sound
+                ch.setDescription(Java.use('java.lang.String').$new('Quick access to HSPatch Debug Panel'));
+                nm.createNotificationChannel(ch);
+
+                // Create intent to open DebugPanelActivity using actual package name
+                var Intent = Java.use('android.content.Intent');
+                var PendingIntent = Java.use('android.app.PendingIntent');
+                var ComponentName = Java.use('android.content.ComponentName');
+
+                var pkgName = context.getPackageName();
+                var launchIntent = Intent.$new();
+                launchIntent.setComponent(ComponentName.$new(
+                    pkgName,
+                    Java.use('java.lang.String').$new('in.startv.hotstar.DebugPanelActivity')));
+                launchIntent.setFlags(0x10000000); // FLAG_ACTIVITY_NEW_TASK
+
+                var piFlags = 0x08000000 | 0x04000000; // FLAG_UPDATE_CURRENT | FLAG_IMMUTABLE
+                var pi = PendingIntent.getActivity(context, 1, launchIntent, piFlags);
+
+                var Builder = Java.use('android.app.Notification$Builder');
+                var builder = Builder.$new(context, Java.use('java.lang.String').$new(DEBUG_NOTIF_CHANNEL));
+
+                var iconId = 17301624;
+                try { iconId = context.getApplicationInfo().icon.value; } catch(e) {}
+                if (iconId === 0) iconId = 17301624; // fallback to system icon
+
+                builder.setSmallIcon(iconId);
+                builder.setContentTitle(Java.use('java.lang.String').$new('\uD83D\uDEE0 HSPatch Debug Panel'));
+                builder.setContentText(Java.use('java.lang.String').$new('Tap to open debug panel \u2022 File explorer \u2022 Logs'));
+                builder.setOngoing(true);
+                builder.setContentIntent(pi);
+
+                nm.notify(DEBUG_NOTIF_ID, builder.build());
+                Log.i(netLogTag, '[DEBUG] Debug panel persistent notification shown (pkg=' + pkgName + ')');
+            } catch(e) {
+                Log.e(netLogTag, '[DEBUG] Debug panel notification error: ' + e);
             }
         }
 

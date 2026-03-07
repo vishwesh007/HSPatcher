@@ -17,12 +17,15 @@
 
 # Show a DISMISSABLE notification with app name that opens DebugPanelActivity
 .method public static show(Landroid/content/Context;)V
-    .locals 8
+    .locals 9
 
     :try_start
     # ====== Get app label for notification title ======
     invoke-virtual {p0}, Landroid/content/Context;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;
     move-result-object v6
+
+    # Get app icon ID for notification
+    iget v8, v6, Landroid/content/pm/ApplicationInfo;->icon:I
 
     invoke-virtual {p0}, Landroid/content/Context;->getPackageManager()Landroid/content/pm/PackageManager;
     move-result-object v7
@@ -69,10 +72,18 @@
 
     :skip_channel
 
-    # ====== Step 2: Create PendingIntent for DebugPanelActivity ======
+    # ====== Step 2: Create PendingIntent using ComponentName (safe, no class loading) ======
     new-instance v2, Landroid/content/Intent;
-    const-class v3, Lin/startv/hotstar/DebugPanelActivity;
-    invoke-direct {v2, p0, v3}, Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V
+    invoke-direct {v2}, Landroid/content/Intent;-><init>()V
+
+    # Use ComponentName with package string + class string (avoids ClassNotFoundException)
+    invoke-virtual {p0}, Landroid/content/Context;->getPackageName()Ljava/lang/String;
+    move-result-object v3
+
+    new-instance v4, Landroid/content/ComponentName;
+    const-string v5, "in.startv.hotstar.DebugPanelActivity"
+    invoke-direct {v4, v3, v5}, Landroid/content/ComponentName;-><init>(Ljava/lang/String;Ljava/lang/String;)V
+    invoke-virtual {v2, v4}, Landroid/content/Intent;->setComponent(Landroid/content/ComponentName;)Landroid/content/Intent;
 
     # Set flags
     const/high16 v3, 0x10000000    # FLAG_ACTIVITY_NEW_TASK
@@ -80,14 +91,11 @@
 
     # Create PendingIntent
     const/4 v3, 0x0    # requestCode
-    const/high16 v4, 0x4000000    # FLAG_IMMUTABLE
-    # Add FLAG_UPDATE_CURRENT
-    const v5, 0x8000000    # FLAG_UPDATE_CURRENT
-    or-int/2addr v4, v5
+    const v4, 0xc000000    # FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT
     invoke-static {p0, v3, v2, v4}, Landroid/app/PendingIntent;->getActivity(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;
     move-result-object v2
 
-    # ====== Step 3: Build the Notification (DISMISSABLE) ======
+    # ====== Step 3: Build the Notification ======
     new-instance v3, Landroid/app/Notification$Builder;
 
     # Check if we need channel (Android O+)
@@ -102,9 +110,12 @@
 
     :builder_done
 
-    # Set small icon
-    const v4, 0x01080034
-    invoke-virtual {v3, v4}, Landroid/app/Notification$Builder;->setSmallIcon(I)Landroid/app/Notification$Builder;
+    # Set small icon — use app's own icon (stored in v8)
+    # Fallback to system icon if app icon is 0
+    if-nez v8, :use_app_icon
+    const v8, 0x01080034
+    :use_app_icon
+    invoke-virtual {v3, v8}, Landroid/app/Notification$Builder;->setSmallIcon(I)Landroid/app/Notification$Builder;
 
     # Set title — dynamic "<AppName> Debug Panel"
     invoke-virtual {v3, v6}, Landroid/app/Notification$Builder;->setContentTitle(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;
@@ -171,10 +182,10 @@
     :catch_block
     move-exception v0
 
-    # Log error
+    # Log error with full stack trace
     const-string v1, "HSPatch"
     const-string v2, "Failed to show debug notification"
-    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
 
     :after
     return-void

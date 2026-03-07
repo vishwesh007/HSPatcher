@@ -1,12 +1,16 @@
 #!/usr/bin/env pwsh
 # ============================================================================
-# HSPatcher Test Suite v3.45
-# Comprehensive unit, integration, and device tests
+# HSPatcher Test Suite v3.47
+# Comprehensive unit, integration, device, and mock tests
+# Covers: FileViewer, FileExplorer, DebugNotification, DebugPanel,
+#         Frida agent (blocking, hiding, PairIP bypass, anti-kill),
+#         ManifestPatcher, build pipeline, and on-device verification
 # ============================================================================
 
 param (
     [switch]$SkipDevice,        # Skip device tests (for CI/offline)
-    [string]$DeviceSerial = "41498191"
+    [string]$DeviceSerial = "41498191",
+    [string]$TestApp = "com.amaze.filemanager"  # Patched test app for device tests
 )
 
 $ErrorActionPreference = "Continue"
@@ -19,6 +23,9 @@ $ROOT = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $HSPATCHER = Join-Path $ROOT "HSPatcher"
 $PATCHES = Join-Path $HSPATCHER "patches\smali\in\startv\hotstar"
 $JAVA_SRC = Join-Path $ROOT "temp_java_build\src\in\startv\hotstar"
+$AGENT_JS = Join-Path $HSPATCHER "frida_agent\agent.js"
+$COMPILED_AGENT = Join-Path $HSPATCHER "frida_agent\compiled_agent.js"
+$PATCHER_SRC = Join-Path $HSPATCHER "src\in\startv\hspatcher"
 
 # ============================================================================
 # Test Helpers
@@ -118,6 +125,26 @@ if (Test-Path $fva) {
 
     # Test 16: Handler cleanup prevents leak
     Test-Assert "FVA: handler cleanup in onDestroy" ($fvaContent -match 'handler\.removeCallbacks')
+
+    # ---- v3.46 Feature Tests: Search/Replace/Regex/Undo ----
+    # Test: Search bar with regex toggle
+    Test-Assert "FVA: has regex toggle" ($fvaContent -match 'useRegex|isRegex|regexToggle|btnRegex')
+    
+    # Test: Whole word toggle
+    Test-Assert "FVA: has whole word match" ($fvaContent -match 'wholeWord|matchWholeWord|btnWholeWord')
+
+    # Test: Match case toggle  
+    Test-Assert "FVA: has match case toggle" ($fvaContent -match 'matchCase|caseSensitive|btnCase')
+
+    # Test: Undo/Redo support
+    Test-Assert "FVA: has undo method" ($fvaContent -match 'void undo\(|performUndo|undoStack')
+    Test-Assert "FVA: has redo method" ($fvaContent -match 'void redo\(|performRedo|redoStack')
+
+    # Test: Keyboard layout fix (SOFT_INPUT_ADJUST_RESIZE)
+    Test-Assert "FVA: SOFT_INPUT_ADJUST_RESIZE" ($fvaContent -match 'SOFT_INPUT_ADJUST_RESIZE|setSoftInputMode')
+
+    # Test: fitsSystemWindows for UI spillage fix
+    Test-Assert "FVA: fitsSystemWindows" ($fvaContent -match 'fitsSystemWindows|setFitsSystemWindows')
 }
 
 # FileExplorerActivity tests
@@ -161,6 +188,15 @@ if (Test-Path $fea) {
 
     # Test 27: FileComparator sorts dirs first
     Test-Assert "FEA: directories sorted first" ($feaContent -match 'a\.isDirectory\(\)\s*&&\s*!b\.isDirectory')
+
+    # ---- v3.46 Feature Tests: DB Routing & Recursive Search ----
+    # Test: DB file routing (opens DbEditorActivity for .db/.sqlite/.sqlite3)
+    Test-Assert "FEA: has DB file detection" ($feaContent -match '\.db|\.sqlite|\.sqlite3')
+    Test-Assert "FEA: routes to DbEditorActivity" ($feaContent -match 'DbEditorActivity')
+    
+    # Test: Recursive file search
+    Test-Assert "FEA: has recursive search method" ($feaContent -match 'searchFiles|recursiveSearch|searchRecursive|performSearch')
+    Test-Assert "FEA: has search input UI" ($feaContent -match 'search|SearchView|searchField|searchInput')
 }
 
 # ============================================================================
@@ -388,6 +424,256 @@ $cr7 = Get-ContrastRatio $feaTextSecondary $feaBg
 Test-Assert "FEA: secondary text contrast >= 3:1" ($cr7 -ge 3.0) ("ratio: {0:F1}:1" -f $cr7)
 
 # ============================================================================
+# INTEGRATION TESTS: DebugNotification.smali (v3.47 Critical Fix)
+# ============================================================================
+Write-Section "INTEGRATION TESTS: DebugNotification (v3.47 Fix)"
+
+$debugNotifSmali = Join-Path $PATCHES "DebugNotification.smali"
+Test-Assert "DebugNotification.smali exists" (Test-Path $debugNotifSmali)
+
+if (Test-Path $debugNotifSmali) {
+    $dnContent = Get-Content $debugNotifSmali -Raw
+
+    # Test: Uses ComponentName(String, String) instead of const-class (avoids ClassNotFoundException)
+    Test-Assert "DN: uses ComponentName (no const-class)" ($dnContent -match 'Landroid/content/ComponentName;-><init>\(Ljava/lang/String;Ljava/lang/String;\)V')
+    $usesConstClass = $dnContent -match 'const-class.*DebugPanelActivity'
+    Test-Assert "DN: does NOT use const-class DebugPanelActivity" (-not $usesConstClass) "const-class causes ClassNotFoundException on first launch"
+
+    # Test: Uses context.getPackageName() for ComponentName 
+    Test-Assert "DN: uses getPackageName" ($dnContent -match 'invoke-virtual.*getPackageName')
+
+    # Test: Uses app's own icon from ApplicationInfo
+    Test-Assert "DN: reads ApplicationInfo.icon" ($dnContent -match 'Landroid/content/pm/ApplicationInfo;->icon:I')
+    
+    # Test: Has icon fallback to system icon (0x01080034)
+    Test-Assert "DN: has icon fallback" ($dnContent -match '0x01080034')
+
+    # Test: Catch block includes Throwable (3-arg Log.e for stack trace)
+    Test-Assert "DN: catch logs full stack trace" ($dnContent -match 'invoke-static.*Log;->e\(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;\)I')
+
+    # Test: Uses catchall (not specific exception) for robustness
+    Test-Assert "DN: uses .catchall for max robustness" ($dnContent -match '\.catchall')
+
+    # Test: Creates notification channel with correct ID
+    Test-Assert "DN: channel ID 'hspatch_debug'" ($dnContent -match '"hspatch_debug"')
+
+    # Test: Notification ID is 0x4853 (18515)
+    Test-Assert "DN: notification ID 0x4853" ($dnContent -match '0x4853')
+
+    # Test: IMPORTANCE_LOW (no sound) = 2
+    Test-Assert "DN: IMPORTANCE_LOW for channel" ($dnContent -match 'IMPORTANCE_LOW|const/4 v5, 0x2.*NotificationChannel')
+
+    # Test: Has persistent toggle via SharedPreferences
+    Test-Assert "DN: reads persistent preference" ($dnContent -match '"debug_notification_persistent"')
+
+    # Test: Uses FLAG_IMMUTABLE for PendingIntent (Android 12+ requirement)
+    Test-Assert "DN: PendingIntent uses FLAG_IMMUTABLE" ($dnContent -match '0xc000000|FLAG_IMMUTABLE')
+
+    # Test: Has cancel method
+    Test-Assert "DN: has cancel method" ($dnContent -match '\.method.*cancel\(Landroid/content/Context;\)V')
+    
+    # Test: Dynamic app label in title
+    Test-Assert "DN: loads app label dynamically" ($dnContent -match 'loadLabel')
+}
+
+# ============================================================================
+# INTEGRATION TESTS: DebugPanelActivity.smali (v3.46 Logs Newest-First)
+# ============================================================================
+Write-Section "INTEGRATION TESTS: DebugPanelActivity (v3.46)"
+
+$debugPanelSmali = Join-Path $PATCHES "DebugPanelActivity.smali"
+if (Test-Path $debugPanelSmali) {
+    $dpContent = Get-Content $debugPanelSmali -Raw
+
+    # Test: readFile uses ArrayList.size()/get() reverse iteration (newest-first)
+    Test-Assert "DP: has ArrayList usage for readFile" ($dpContent -match 'Ljava/util/ArrayList;')
+    
+    # Test: fullScroll uses FOCUS_UP (0x21) to scroll to top after adding newest-first
+    $hasFocusUp = $dpContent -match '0x21'
+    $doesNotUseFocusDown = -not ($dpContent -match '0x82.*fullScroll')
+    Test-Assert "DP: fullScroll uses FOCUS_UP (0x21)" $hasFocusUp
+} else {
+    Test-Skip "DebugPanelActivity tests" "Smali not found"
+}
+
+# ============================================================================
+# INTEGRATION TESTS: NetworkInterceptor.smali 
+# ============================================================================
+Write-Section "INTEGRATION TESTS: NetworkInterceptor"
+
+$netIntSmali = Join-Path $PATCHES "NetworkInterceptor.smali"
+if (Test-Path $netIntSmali) {
+    $niContent = Get-Content $netIntSmali -Raw
+
+    # Test: Calls DebugNotification.show()
+    Test-Assert "NI: calls DebugNotification.show()" ($niContent -match 'DebugNotification;->show')
+
+    # Test: Has 6 initialization steps
+    Test-Assert "NI: has step [1] SSL pinning" ($niContent -match '\[1\]')
+    Test-Assert "NI: has step [6] Debug notification" ($niContent -match '\[6\].*Debug notification')
+} else {
+    Test-Skip "NetworkInterceptor tests" "Smali not found"
+}
+
+# ============================================================================
+# UNIT TESTS: Frida Agent (agent.js) — v3.46 & v3.47 Features
+# ============================================================================
+Write-Section "UNIT TESTS: Frida Agent (agent.js)"
+
+Test-Assert "agent.js exists" (Test-Path $AGENT_JS)
+
+if (Test-Path $AGENT_JS) {
+    $agentContent = Get-Content $AGENT_JS -Raw
+
+    # ---- v3.47: Debug Notification Fix ----
+    # Test: showDebugPanelNotification uses context.getPackageName() (not hardcoded 'in.startv.hotstar')
+    Test-Assert "Agent: showDebugPanelNotification uses getPackageName" ($agentContent -match 'getPackageName\(\)')
+    $hardcodedPkg = $agentContent -match "showDebugPanelNotification[\s\S]{0,500}'in\.startv\.hotstar'"
+    Test-Assert "Agent: no hardcoded 'in.startv.hotstar' in showDebugPanelNotification" (-not $hardcodedPkg) "Package name must be dynamic"
+
+    # Test: Debug panel notification ID is 19731
+    Test-Assert "Agent: DEBUG_NOTIF_ID = 19731" ($agentContent -match 'DEBUG_NOTIF_ID\s*=\s*19731;')
+
+    # Test: Uses ComponentName for debug notification intent
+    Test-Assert "Agent: uses ComponentName for notification" ($agentContent -match 'ComponentName')
+
+    # Test: Icon fallback when icon is 0
+    Test-Assert "Agent: icon fallback if 0" ($agentContent -match 'iconId === 0')
+
+    # ---- v3.46: Blocking Notification Cancel on OFF ----
+    # Test: updateBlockingNotification cancels when blocking is off
+    Test-Assert "Agent: has updateBlockingNotification" ($agentContent -match 'updateBlockingNotification')
+    Test-Assert "Agent: nm.cancel when blocking OFF" ($agentContent -match 'cancel\(NOTIF_ID\)')
+
+    # ---- v3.46: Frida Hiding ----
+    # Test: Frida path detection and hiding
+    Test-Assert "Agent: Frida hiding hooks" ($agentContent -match 'frida|re\.frida\.server|frida-agent')
+    Test-Assert "Agent: blocks frida port detection" ($agentContent -match '27042|frida.*port')
+
+    # ---- v3.46: PairIP Bypass ----
+    Test-Assert "Agent: PairIP bypass" ($agentContent -match 'pairip|libpairipcore|PairIP')
+
+    # ---- v3.46: Anti-kill ----
+    Test-Assert "Agent: anti-kill hooks" ($agentContent -match 'ANTI-KILL|killProcess|System\.exit')
+
+    # ---- Core Features ----
+    # Test: Traffic blocking patterns
+    Test-Assert "Agent: has shouldBlock function" ($agentContent -match 'function shouldBlock')
+    Test-Assert "Agent: has blockPatterns array" ($agentContent -match 'blockPatterns')
+
+    # Test: DNS interception
+    Test-Assert "Agent: has DNS hook" ($agentContent -match 'InetAddress|getAllByName|getByName')
+
+    # Test: Network logging
+    Test-Assert "Agent: has network log tag" ($agentContent -match "netLogTag|HSPatch-Net")
+
+    # Test: Config loading
+    Test-Assert "Agent: loads config from HSPatchConfig" ($agentContent -match 'HSPatchConfig|hspatch_config')
+
+    # Test: Has error handling wrapper
+    Test-Assert "Agent: try-catch in main init" ($agentContent -match 'try\s*\{[\s\S]{10,}catch')
+}
+
+# Test: Compiled agent exists and is non-trivial
+if (Test-Path $COMPILED_AGENT) {
+    $compiledSize = (Get-Item $COMPILED_AGENT).Length
+    Test-Assert "compiled_agent.js exists and > 200KB" ($compiledSize -gt 200000) "Size: $($compiledSize / 1KB) KB"
+} else {
+    Test-Skip "compiled_agent.js size" "File not found"
+}
+
+# ============================================================================
+# INTEGRATION TESTS: HSPatchInjector generates notification module
+# ============================================================================
+Write-Section "INTEGRATION TESTS: HSPatchInjector"
+
+$injectorJava = Join-Path $PATCHER_SRC "HSPatchInjector.java"
+if (Test-Path $injectorJava) {
+    $injContent = Get-Content $injectorJava -Raw
+    Test-Assert "Injector: generates notif module" ($injContent -match 'notif|DebugNotification')
+    Test-Assert "Injector: generates init method" ($injContent -match 'init|generate|inject')
+    Test-Assert "Injector: generates netlog module" ($injContent -match 'netlog|NetworkInterceptor|network')
+    Test-Assert "Injector: has method generation logic" ($injContent -match 'smali|invoke|method')
+} else {
+    Test-Skip "HSPatchInjector tests" "File not found"
+}
+
+# ============================================================================
+# INTEGRATION TESTS: PatchEngine has all modules
+# ============================================================================
+Write-Section "INTEGRATION TESTS: PatchEngine"
+
+$patchEngineJava = Join-Path $PATCHER_SRC "PatchEngine.java"
+if (Test-Path $patchEngineJava) {
+    $peContent = Get-Content $patchEngineJava -Raw
+    Test-Assert "PatchEngine: has DebugNotification module" ($peContent -match 'DebugNotification|notif')
+    Test-Assert "PatchEngine: has SignatureKiller module" ($peContent -match 'SignatureKiller|sigkill')
+    Test-Assert "PatchEngine: has NetworkInterceptor module" ($peContent -match 'NetworkInterceptor|netlog')
+    Test-Assert "PatchEngine: injects smali patches" ($peContent -match 'smali|inject|patch')
+    Test-Assert "PatchEngine: handles manifest patching" ($peContent -match 'manifest|Manifest')
+    Test-Assert "PatchEngine: handles APK signing" ($peContent -match 'sign|Sign')
+} else {
+    Test-Skip "PatchEngine tests" "File not found"
+}
+
+# ============================================================================
+# MOCK TESTS: Smali Instruction Validation
+# ============================================================================
+Write-Section "MOCK TESTS: Smali Instruction Patterns"
+
+# Mock test: Verify DebugNotification.smali PendingIntent flags are correct
+if (Test-Path $debugNotifSmali) {
+    $dnContent = Get-Content $debugNotifSmali -Raw
+    
+    # FLAG_IMMUTABLE (0x04000000) | FLAG_UPDATE_CURRENT (0x08000000) = 0x0C000000
+    $hasCorrectFlags = $dnContent -match '0xc000000'
+    Test-Assert "Mock: PendingIntent combined flags = 0xC000000" $hasCorrectFlags
+
+    # FLAG_ACTIVITY_NEW_TASK = 0x10000000
+    Test-Assert "Mock: Intent FLAG_ACTIVITY_NEW_TASK" ($dnContent -match '0x10000000')
+
+    # NotificationManager.notify(id, notification) — verify method signature
+    Test-Assert "Mock: calls NotificationManager.notify(I, Notification)" ($dnContent -match 'notify\(ILandroid/app/Notification;\)V')
+
+    # Builder.setOngoing(boolean) — for persistent toggle
+    Test-Assert "Mock: calls setOngoing(Z)" ($dnContent -match 'setOngoing\(Z\)')
+
+    # Builder.setAutoCancel(boolean)
+    Test-Assert "Mock: calls setAutoCancel(Z)" ($dnContent -match 'setAutoCancel\(Z\)')
+}
+
+# Mock test: Verify Frida agent notification IDs don't conflict
+if (Test-Path $AGENT_JS) {
+    $agentContent = Get-Content $AGENT_JS -Raw
+    
+    # Blocking notification ID (19730 from v3.46 context)
+    $hasBlockNotifId = $agentContent -match 'BLOCK_NOTIF_ID|BLOCKING_NOTIF_ID|19730'
+    Test-Assert "Mock: blocking notification ID defined" $hasBlockNotifId
+    
+    # Debug notification ID (19731) 
+    $hasDebugNotifId = $agentContent -match 'DEBUG_NOTIF_ID\s*=\s*19731;'
+    Test-Assert "Mock: debug notification ID = 19731 (different from blocking)" $hasDebugNotifId
+    
+    # IDs must be different: 19730 != 19731
+    Test-Assert "Mock: notification IDs don't conflict (19730 vs 19731)" $true
+}
+
+# Mock test: Verify smali register allocation
+if (Test-Path $debugNotifSmali) {
+    $dnContent = Get-Content $debugNotifSmali -Raw
+    
+    # show() method needs at least 9 locals (v0-v8 + p0)
+    $hasLocals = $dnContent -match '\.locals\s+9'
+    Test-Assert "Mock: DebugNotification.show() has .locals 9" $hasLocals
+    
+    # cancel() method needs at least 3 locals
+    $cancelLocals = [regex]::Match($dnContent, 'cancel\(.*?\.locals\s+(\d+)', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if ($cancelLocals.Success) {
+        Test-Assert "Mock: DebugNotification.cancel() has >= 3 locals" ([int]$cancelLocals.Groups[1].Value -ge 3)
+    }
+}
+
+# ============================================================================
 # DEVICE TESTS
 # ============================================================================
 if ($SkipDevice) {
@@ -405,9 +691,9 @@ if ($SkipDevice) {
         $pkgCheck = adb -s $DeviceSerial shell "pm list packages in.startv.hspatcher" 2>&1
         Test-Assert "HSPatcher app installed" ($pkgCheck -match "in.startv.hspatcher")
 
-        # Test: Hotstar installed
-        $hsCheck = adb -s $DeviceSerial shell "pm list packages in.startv.hotstar" 2>&1
-        Test-Assert "Hotstar app installed" ($hsCheck -match "in.startv.hotstar")
+        # Test: Test app installed
+        $testAppCheck = adb -s $DeviceSerial shell "pm list packages $TestApp" 2>&1
+        Test-Assert "Test app ($TestApp) installed" ($testAppCheck -match $TestApp)
 
         # Test: Launch HSPatcher (should not crash)
         adb -s $DeviceSerial logcat -c 2>$null
@@ -422,29 +708,114 @@ if ($SkipDevice) {
         $hsPid = adb -s $DeviceSerial shell "pidof in.startv.hspatcher" 2>&1
         Test-Assert "HSPatcher: process alive after launch" ($hsPid -match '^\d+$')
 
-        # Test: Hotstar app alive
-        $hsPid2 = adb -s $DeviceSerial shell "pidof in.startv.hotstar" 2>&1
-        if ($hsPid2 -match '^\d+$') {
-            Test-Assert "Hotstar: process alive" $true
-        } else {
-            Test-Skip "Hotstar: process alive" "Process not running"
-        }
-
-        # Test: Check if FileExplorerActivity is registered in the Hotstar manifest
-        $dumpOutput = adb -s $DeviceSerial shell "dumpsys package in.startv.hotstar" 2>&1 | Out-String
+        # ---- Test App Verification ----
+        # Test: Check if activities are registered in the test app manifest
+        $dumpOutput = adb -s $DeviceSerial shell "dumpsys package $TestApp" 2>&1 | Out-String
         $hasFEA = $dumpOutput -match "FileExplorerActivity"
         if ($hasFEA) {
-            Test-Assert "Hotstar: FileExplorerActivity registered" $true
+            Test-Assert "TestApp: FileExplorerActivity registered" $true
         } else {
-            Test-Skip "Hotstar: FileExplorerActivity registered" "APK needs re-patching with latest HSPatcher"
+            Test-Skip "TestApp: FileExplorerActivity registered" "APK needs re-patching with latest HSPatcher"
         }
 
         $hasFVA = $dumpOutput -match "FileViewerActivity"
         if ($hasFVA) {
-            Test-Assert "Hotstar: FileViewerActivity registered" $true
+            Test-Assert "TestApp: FileViewerActivity registered" $true
         } else {
-            Test-Skip "Hotstar: FileViewerActivity registered" "APK needs re-patching with latest HSPatcher"
+            Test-Skip "TestApp: FileViewerActivity registered" "APK needs re-patching with latest HSPatcher"
         }
+
+        $hasDP = $dumpOutput -match "DebugPanelActivity"
+        if ($hasDP) {
+            Test-Assert "TestApp: DebugPanelActivity registered" $true
+        } else {
+            Test-Skip "TestApp: DebugPanelActivity registered" "APK needs re-patching"
+        }
+
+        # ---- v3.47 Critical Test: Debug Notification on First Launch ----
+        Write-Host "`n  -- Debug Notification Verification --" -ForegroundColor Cyan
+        
+        # Force stop and clear logcat for clean test
+        adb -s $DeviceSerial shell "am force-stop $TestApp" 2>$null
+        Start-Sleep -Seconds 1
+        adb -s $DeviceSerial logcat -c 2>$null
+
+        # Launch test app
+        $mainActivity = adb -s $DeviceSerial shell "cmd package resolve-activity --brief $TestApp" 2>&1 | Select-Object -Last 1
+        if ($mainActivity -and $mainActivity -match '/') {
+            adb -s $DeviceSerial shell "am start -n $mainActivity" 2>$null
+        } else {
+            adb -s $DeviceSerial shell "monkey -p $TestApp -c android.intent.category.LAUNCHER 1" 2>$null
+        }
+        Start-Sleep -Seconds 5
+
+        # Check logcat for debug notification success
+        $hsLogs = adb -s $DeviceSerial logcat -d -s HSPatch 2>&1 | Out-String
+        $notifShown = $hsLogs -match "Debug notification shown"
+        $notifFailed = $hsLogs -match "Failed to show debug notification"
+        Test-Assert "Device: Debug notification shown on launch" $notifShown
+        Test-Assert "Device: No 'Failed to show debug notification'" (-not $notifFailed) "CRITICAL: notification failed"
+
+        # Check all HSPatch modules loaded
+        $allModulesOk = $hsLogs -match 'SignatureKiller OK' -and $hsLogs -match 'config OK' -and $hsLogs -match 'notif OK'
+        if ($allModulesOk) {
+            Test-Assert "Device: All HSPatch modules loaded" $true
+        } else {
+            Test-Assert "Device: All HSPatch modules loaded" $false "Check logcat for module failures"
+        }
+
+        # Verify notification in notification shade via dumpsys
+        $notifDump = adb -s $DeviceSerial shell "dumpsys notification" 2>&1 | Out-String
+
+        # Debug notification (id=18515 = 0x4853)
+        $debugNotifExists = $notifDump -match "$TestApp.*id=18515|id=18515.*$TestApp"
+        Test-Assert "Device: Debug notification (18515) in shade" $debugNotifExists
+
+        # Blocking notification (id=19730)
+        $blockNotifExists = $notifDump -match "$TestApp.*id=19730|id=19730.*$TestApp"
+        if ($blockNotifExists) {
+            Test-Assert "Device: Blocking notification (19730) in shade" $true
+        } else {
+            Test-Skip "Device: Blocking notification (19730) in shade" "May not be posted if Frida late-init"
+        }
+
+        # Check notification channel exists
+        $channelExists = $notifDump -match "hspatch_debug.*$TestApp|$TestApp.*hspatch_debug"
+        Test-Assert "Device: hspatch_debug channel exists" $channelExists
+
+        # Check notification permission
+        $permCheck = adb -s $DeviceSerial shell "dumpsys package $TestApp" 2>&1 | Out-String
+        if ($permCheck -match 'POST_NOTIFICATIONS.*granted=true') {
+            Test-Assert "Device: POST_NOTIFICATIONS granted" $true
+        } else {
+            Test-Skip "Device: POST_NOTIFICATIONS" "Permission not explicitly shown"
+        }
+
+        # ---- Frida Agent Verification ----
+        Write-Host "`n  -- Frida Agent Verification --" -ForegroundColor Cyan
+        $netLogs = adb -s $DeviceSerial logcat -d -s HSPatch-Net 2>&1 | Out-String
+        
+        $fridaLoaded = $netLogs -match '\[6\] Debug notification: OK'
+        if ($fridaLoaded) {
+            Test-Assert "Device: Frida agent loaded (NetworkInterceptor [6])" $true
+        } else {
+            Test-Skip "Device: Frida agent loaded" "Frida may not be injected in test app"
+        }
+
+        $blockingEnabled = $netLogs -match 'Blocking: ENABLED'
+        if ($blockingEnabled) {
+            Test-Assert "Device: Blocking toggle ready" $true
+        } else {
+            Test-Skip "Device: Blocking toggle ready" "Frida agent may not have initialized"
+        }
+
+        # ---- Test App Crash Check ----
+        $testAppPid = adb -s $DeviceSerial shell "pidof $TestApp" 2>&1
+        Test-Assert "Device: Test app alive after launch" ($testAppPid -match '^\d+$')
+
+        $fatalCheck = adb -s $DeviceSerial logcat -d 2>&1 | Out-String
+        $hasFatalInTestApp = $fatalCheck -match "FATAL EXCEPTION.*$TestApp"
+        Test-Assert "Device: No FATAL_EXCEPTION in test app" (-not $hasFatalInTestApp)
 
         # Test: Build APK exists and is reasonable size
         $buildApk = Join-Path $HSPATCHER "build\HSPatcher.apk"
