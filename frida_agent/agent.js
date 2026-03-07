@@ -998,6 +998,9 @@ Java.performNow(function() {
             if (!trafficMonitorEnabled) return null;
             var host = hostname.toLowerCase();
 
+            // Never block loopback — our own blocked-URL redirect uses 127.0.0.1
+            if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0') return null;
+
             // Discover the host
             discoverHost(host);
 
@@ -1620,11 +1623,14 @@ Java.performNow(function() {
                 var _urlInit1 = URL.$init.overload('java.lang.String');
                 _urlInit1.implementation = function(spec) {
                     var s = spec ? spec.toString() : '';
-                    if (s.length > 0) {
-                        var bm = shouldBlock(s);
-                        if (bm !== null) { logBlocked('URL', '$init(String)', s, bm); return _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); }
-                        var rw = applyRewrites(s);
-                        if (rw.changed) { logRewritten('URL', '$init(String)', s, rw.url); return _urlInit1.call(this, rw.url); }
+                    // Only intercept HTTP/HTTPS URLs — skip content://, file://, jar:// etc.
+                    if (s.length > 0 && (s.indexOf('http://') === 0 || s.indexOf('https://') === 0)) {
+                        try {
+                            var bm = shouldBlock(s);
+                            if (bm !== null) { logBlocked('URL', '$init(String)', s, bm); return _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); }
+                            var rw = applyRewrites(s);
+                            if (rw.changed) { logRewritten('URL', '$init(String)', s, rw.url); return _urlInit1.call(this, rw.url); }
+                        } catch (hookErr) { Log.w(netLogTag, '[!] URL.$init hook err: ' + hookErr); }
                     }
                     return _urlInit1.call(this, spec);
                 };
@@ -1638,10 +1644,13 @@ Java.performNow(function() {
                     // Resolve the full URL by calling original, then check
                     _urlInit2.call(this, context, spec);
                     var full = this.toString();
-                    var bm = shouldBlock(full);
-                    if (bm !== null) { logBlocked('URL', '$init(URL,String)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
-                    var rw = applyRewrites(full);
-                    if (rw.changed) { logRewritten('URL', '$init(URL,String)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                    if (full.indexOf('http://') !== 0 && full.indexOf('https://') !== 0) return; // skip non-HTTP
+                    try {
+                        var bm = shouldBlock(full);
+                        if (bm !== null) { logBlocked('URL', '$init(URL,String)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
+                        var rw = applyRewrites(full);
+                        if (rw.changed) { logRewritten('URL', '$init(URL,String)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                    } catch (hookErr) { Log.w(netLogTag, '[!] URL.$init(URL,String) hook err: ' + hookErr); }
                 };
                 Log.d(netLogTag, '[+] URL.$init(URL,String) hooked');
             } catch (e) { Log.d(netLogTag, '[-] URL.$init(URL,String): ' + e); }
@@ -1651,11 +1660,15 @@ Java.performNow(function() {
                 var _urlInit3 = URL.$init.overload('java.lang.String', 'java.lang.String', 'java.lang.String');
                 _urlInit3.implementation = function(protocol, host, file) {
                     _urlInit3.call(this, protocol, host, file);
+                    var proto = protocol ? protocol.toString().toLowerCase() : '';
+                    if (proto !== 'http' && proto !== 'https') return; // skip non-HTTP
                     var full = this.toString();
-                    var bm = shouldBlock(full);
-                    if (bm !== null) { logBlocked('URL', '$init(proto,host,file)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
-                    var rw = applyRewrites(full);
-                    if (rw.changed) { logRewritten('URL', '$init(proto,host,file)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                    try {
+                        var bm = shouldBlock(full);
+                        if (bm !== null) { logBlocked('URL', '$init(proto,host,file)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
+                        var rw = applyRewrites(full);
+                        if (rw.changed) { logRewritten('URL', '$init(proto,host,file)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                    } catch (hookErr) { Log.w(netLogTag, '[!] URL.$init(proto,host,file) hook err: ' + hookErr); }
                 };
                 Log.d(netLogTag, '[+] URL.$init(proto,host,file) hooked');
             } catch (e) { Log.d(netLogTag, '[-] URL.$init(proto,host,file): ' + e); }
@@ -1665,11 +1678,15 @@ Java.performNow(function() {
                 var _urlInit4 = URL.$init.overload('java.lang.String', 'java.lang.String', 'int', 'java.lang.String');
                 _urlInit4.implementation = function(protocol, host, port, file) {
                     _urlInit4.call(this, protocol, host, port, file);
+                    var proto = protocol ? protocol.toString().toLowerCase() : '';
+                    if (proto !== 'http' && proto !== 'https') return; // skip non-HTTP
                     var full = this.toString();
-                    var bm = shouldBlock(full);
-                    if (bm !== null) { logBlocked('URL', '$init(proto,host,port,file)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
-                    var rw = applyRewrites(full);
-                    if (rw.changed) { logRewritten('URL', '$init(proto,host,port,file)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                    try {
+                        var bm = shouldBlock(full);
+                        if (bm !== null) { logBlocked('URL', '$init(proto,host,port,file)', full, bm); _urlInit1.call(this, 'http://127.0.0.1:1/blocked'); return; }
+                        var rw = applyRewrites(full);
+                        if (rw.changed) { logRewritten('URL', '$init(proto,host,port,file)', full, rw.url); _urlInit1.call(this, rw.url); return; }
+                    } catch (hookErr) { Log.w(netLogTag, '[!] URL.$init(proto,host,port,file) hook err: ' + hookErr); }
                 };
                 Log.d(netLogTag, '[+] URL.$init(proto,host,port,file) hooked');
             } catch (e) { Log.d(netLogTag, '[-] URL.$init(proto,host,port,file): ' + e); }
@@ -1679,20 +1696,28 @@ Java.performNow(function() {
             var _urlOpen0 = URL.openConnection.overload();
             _urlOpen0.implementation = function() {
                 var u = this.toString();
-                var bm = shouldBlock(u);
-                if (bm !== null) { logBlocked('URL', 'OPEN', u, bm); return _urlOpen0.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked')); }
-                var rw = applyRewrites(u);
-                if (rw.changed) { logRewritten('URL', 'OPEN', u, rw.url); return _urlOpen0.call(Java.use('java.net.URL').$new(rw.url)); }
+                if (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) {
+                    try {
+                        var bm = shouldBlock(u);
+                        if (bm !== null) { logBlocked('URL', 'OPEN', u, bm); return _urlOpen0.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked')); }
+                        var rw = applyRewrites(u);
+                        if (rw.changed) { logRewritten('URL', 'OPEN', u, rw.url); return _urlOpen0.call(Java.use('java.net.URL').$new(rw.url)); }
+                    } catch (hookErr) { Log.w(netLogTag, '[!] URL.openConnection hook err: ' + hookErr); }
+                }
                 return _urlOpen0.call(this);
             };
             try {
                 var _urlOpenProxy = URL.openConnection.overload('java.net.Proxy');
                 _urlOpenProxy.implementation = function(proxy) {
                     var u = this.toString();
-                    var bm = shouldBlock(u);
-                    if (bm !== null) { logBlocked('URL', 'OPEN_PROXY', u, bm); return _urlOpenProxy.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked'), proxy); }
-                    var rw = applyRewrites(u);
-                    if (rw.changed) { logRewritten('URL', 'OPEN_PROXY', u, rw.url); return _urlOpenProxy.call(Java.use('java.net.URL').$new(rw.url), proxy); }
+                    if (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) {
+                        try {
+                            var bm = shouldBlock(u);
+                            if (bm !== null) { logBlocked('URL', 'OPEN_PROXY', u, bm); return _urlOpenProxy.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked'), proxy); }
+                            var rw = applyRewrites(u);
+                            if (rw.changed) { logRewritten('URL', 'OPEN_PROXY', u, rw.url); return _urlOpenProxy.call(Java.use('java.net.URL').$new(rw.url), proxy); }
+                        } catch (hookErr) { Log.w(netLogTag, '[!] URL.openConnection(Proxy) hook err: ' + hookErr); }
+                    }
                     return _urlOpenProxy.call(this, proxy);
                 };
             } catch (e) { }

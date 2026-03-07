@@ -256,15 +256,17 @@ public class ManifestPatcher {
             actXml.write(VAL_STRING);       // typedValue.dataType
             wInt(actXml, classIdx);         // typedValue.data
 
-            // Attribute 2 (optional): android:exported = false
+            // Attribute 2 (optional): android:exported
+            // DebugPanelActivity is exported=true so it can be launched via ADB intent
             if (addExported) {
+                boolean shouldExport = toRegister.get(i).endsWith("DebugPanelActivity");
                 wInt(actXml, androidNsIdx);
                 wInt(actXml, exportedAttrIdx);
                 wInt(actXml, 0xFFFFFFFF);   // rawValue = none
                 wShort(actXml, 0x0008);
                 actXml.write(0x00);
                 actXml.write(VAL_BOOLEAN);
-                wInt(actXml, 0);            // false
+                wInt(actXml, shouldExport ? 0xFFFFFFFF : 0); // true (-1) or false (0)
             }
 
             // EndElement
