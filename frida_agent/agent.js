@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.42
+ * HSPatch Universal Frida Script v3.44
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -29,7 +29,7 @@ Java.performNow(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.42              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.44              [#]');
         console.log('======================================================');
 
 
@@ -254,7 +254,7 @@ Java.performNow(function() {
             //       find the obfuscated class dynamically (name changes per release).
             // =====================================================
 
-            // v3.42: REMOVED attemptErrorMapperHook() — it called
+            // v3.44: REMOVED attemptErrorMapperHook() — it called
             // Java.enumerateMethods('*!a/s') which scans ALL methods in ALL classes,
             // taking seconds and causing startup lag/ANR. The NET_201/security error
             // is fully handled by PatchEngine's JSON config patching at APK level.
@@ -268,7 +268,7 @@ Java.performNow(function() {
                 };
             } catch(eSSL) {}
 
-            // v3.42: REMOVED hookCronetCallbacks() with enumerateLoadedClasses —
+            // v3.44: REMOVED hookCronetCallbacks() with enumerateLoadedClasses —
             // iterating ALL loaded classes is extremely expensive (~5000+ classes).
             // SSL errors are already suppressed at TrustManager/BoringSSL level.
             // Any remaining Cronet SSL errors are non-fatal after SSL bypass.
@@ -322,7 +322,7 @@ Java.performNow(function() {
 
 
             // ── NET_201 Runtime Suppression ──────────────────────
-            // v3.42: REMOVED JSONObject.getString/optString hooks — they ran on
+            // v3.44: REMOVED JSONObject.getString/optString hooks — they ran on
             // EVERY JSON string read in the entire app (thousands per API response),
             // causing severe performance overhead. NET_201 is handled at APK level
             // by PatchEngine JSON file patching, which is permanent and zero-cost.
@@ -632,7 +632,7 @@ Java.performNow(function() {
             };
         } catch (err) { }
 
-        // Root detection - hide known root paths (v3.42: O(1) Set lookup)
+        // Root detection - hide known root paths (v3.44: O(1) Set lookup)
         try {
             var File = Java.use('java.io.File');
             var origExists = File.exists;
@@ -1141,7 +1141,7 @@ Java.performNow(function() {
                     }
                 });
                 scheduleRuleReload();
-            }, 120000); // v3.42: 120s instead of 5s to reduce GC pressure
+            }, 120000); // v3.44: 120s instead of 5s to reduce GC pressure
         }
         loadBlockingRules();
         loadHostRules();
@@ -1400,7 +1400,7 @@ Java.performNow(function() {
         //  No Java library, native SDK, or JNI code can bypass them.
         // =========================================================
 
-        // v3.42: _fdMap, _fdLoggedSend, _fdLoggedRecv REMOVED — no longer
+        // v3.44: _fdMap, _fdLoggedSend, _fdLoggedRecv REMOVED — no longer
         // needed after removing send/recv/write/read/close hooks
 
         // Parse struct sockaddr → { family, ip, port }
@@ -1457,7 +1457,7 @@ Java.performNow(function() {
         }
 
         // === connect(fd, addr, addrlen) — EVERY outbound TCP/UDP connection ===
-        // v3.42: onEnter-only (no onLeave) saves ~5μs per call per Frida docs
+        // v3.44: onEnter-only (no onLeave) saves ~5μs per call per Frida docs
         try {
             var _connectPtr = Process.getModuleByName('libc.so').getExportByName('connect');
             Interceptor.attach(_connectPtr, {
@@ -1502,11 +1502,11 @@ Java.performNow(function() {
             nativeLog('[+] Native getaddrinfo() hooked');
         } catch (e) { nativeLog('[-] getaddrinfo hook: ' + e); }
 
-        // v3.42: REMOVED send()/sendto()/recvfrom() hooks — monitoring-only,
+        // v3.44: REMOVED send()/sendto()/recvfrom() hooks — monitoring-only,
         // not blocking. They intercepted every socket data transfer causing lag.
         // Blocking is handled by getaddrinfo() (DNS) + Java URL hooks + TLS SNI.
 
-        // v3.42: REMOVED write()/read()/close() hooks — they intercepted EVERY
+        // v3.44: REMOVED write()/read()/close() hooks — they intercepted EVERY
         // I/O syscall (file, pipe, binder, UI rendering, etc.) causing severe lag
         // and ANR. Network monitoring is handled by SSL_write + connect + getaddrinfo.
 
@@ -1516,7 +1516,7 @@ Java.performNow(function() {
         // =========================================================
         //  LAYER 2: NATIVE TLS HOOKS — SEE DECRYPTED HTTPS DATA
         //  Hooks SSL_write from BoringSSL (libssl.so)
-        //  v3.42: SSL_read removed (hot during streaming, monitoring-only)
+        //  v3.44: SSL_read removed (hot during streaming, monitoring-only)
         //  SSL_write lets us see outgoing HTTP request headers.
         // =========================================================
 
@@ -1563,7 +1563,7 @@ Java.performNow(function() {
                 }
             } catch (e) { }
 
-            // v3.42: REMOVED SSL_read hook — monitoring-only (response viewing).
+            // v3.44: REMOVED SSL_read hook — monitoring-only (response viewing).
             // During video streaming, SSL_read is called thousands of times/sec
             // for downloading video chunks. ~11μs overhead per call = severe lag.
             // SSL_write (kept above) provides sufficient request visibility.
@@ -2219,7 +2219,7 @@ Java.performNow(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.42: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.44: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2235,7 +2235,7 @@ Java.performNow(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.42: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.44: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
@@ -2250,3 +2250,4 @@ Java.performNow(function() {
         // Set up in-app blocking toggle notification
         setupBlockingToggleUI();
     });
+
