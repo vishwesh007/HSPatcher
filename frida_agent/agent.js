@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.44
+ * HSPatch Universal Frida Script v3.45
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -29,7 +29,7 @@ Java.performNow(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.44              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.45              [#]');
         console.log('======================================================');
 
 
@@ -868,6 +868,107 @@ Java.performNow(function() {
         var NOTIF_CHANNEL = 'hspatch_block';
         var apiDumpMaxBytes = 10 * 1024 * 1024;
 
+        // =========================================================
+        //  TRAFFIC INSPECTOR — structured request/response log
+        //  Writes JSONL entries to external files dir so HSPatcher
+        //  can read and display them in the Network Inspector UI.
+        // =========================================================
+        var _trafficSeq = 0;
+        var _trafficWriteTimer = null;
+        var _trafficQueue = [];
+        var TRAFFIC_MAX_BODY = 4096;  // max body bytes stored per entry
+
+        function getTrafficLogPath() {
+            try {
+                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctx === null) return null;
+                // Prefer external files dir (readable by HSPatcher with MANAGE_ALL_FILES)
+                try {
+                    var efd = ctx.getExternalFilesDir(null);
+                    if (efd !== null) return efd.getAbsolutePath() + '/traffic_log.jsonl';
+                } catch (e) {}
+                return ctx.getFilesDir().getAbsolutePath() + '/traffic_log.jsonl';
+            } catch (e) { return null; }
+        }
+
+        function escJ(s) {
+            if (s === null || s === undefined) return '';
+            var str = '' + s;
+            if (str.length > TRAFFIC_MAX_BODY) str = str.substring(0, TRAFFIC_MAX_BODY) + '…[truncated]';
+            return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+                .replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+        }
+
+        function headersToJson(headers) {
+            try {
+                var sb = '{';
+                var first = true;
+                for (var i = 0; i < headers.size(); i++) {
+                    if (!first) sb += ',';
+                    sb += '"' + escJ(headers.name(i)) + '":"' + escJ(headers.value(i)) + '"';
+                    first = false;
+                }
+                return sb + '}';
+            } catch (e) { return '{}'; }
+        }
+
+        function flushTrafficQueue() {
+            if (_trafficQueue.length === 0) return;
+            _trafficWriteTimer = null;
+            var lines = _trafficQueue.slice();
+            _trafficQueue = [];
+            try {
+                var path = getTrafficLogPath();
+                if (!path) return;
+                var File = Java.use('java.io.File');
+                var f = File.$new(path);
+                // Rotate at 3 MB
+                if (f.exists() && f.length() > 3 * 1024 * 1024) f.delete();
+                var fw = Java.use('java.io.FileWriter').$new(path, true);
+                for (var i = 0; i < lines.length; i++) fw.write(lines[i] + '\n');
+                fw.flush();
+                fw.close();
+            } catch (e) { Log.w(netLogTag, '[TRAFFIC] flush error: ' + e); }
+        }
+
+        function queueTrafficEntry(jsonLine) {
+            _trafficQueue.push(jsonLine);
+            if (_trafficWriteTimer === null) {
+                _trafficWriteTimer = setTimeout(function() {
+                    Java.perform(function() { flushTrafficQueue(); });
+                }, 800);
+            }
+        }
+
+        function buildTrafficEntry(seq, tsMs, method, url, statusCode, statusText,
+                                   reqHeadersJson, reqBodyStr, resHeadersJson, resBodyStr,
+                                   elapsedMs, source, blockedRule) {
+            return '{"id":' + seq +
+                ',"ts":' + tsMs +
+                ',"method":"' + escJ(method) + '"' +
+                ',"url":"' + escJ(url) + '"' +
+                ',"status":' + (statusCode | 0) +
+                ',"status_text":"' + escJ(statusText) + '"' +
+                ',"req_headers":' + (reqHeadersJson || '{}') +
+                ',"req_body":"' + escJ(reqBodyStr) + '"' +
+                ',"res_headers":' + (resHeadersJson || '{}') +
+                ',"res_body":"' + escJ(resBodyStr) + '"' +
+                ',"ms":' + (elapsedMs | 0) +
+                ',"source":"' + escJ(source) + '"' +
+                ',"blocked":"' + escJ(blockedRule) + '"}';
+        }
+
+        function recordSimpleEntry(source, method, url, blockedRule) {
+            // Lightweight entry for non-OkHttp blocked/rewritten requests (no body)
+            var entry = buildTrafficEntry(
+                ++_trafficSeq, Date.now(), method, url,
+                blockedRule ? 0 : -1, blockedRule ? 'BLOCKED' : '',
+                '{}', '', '{}', '',
+                0, source, blockedRule || ''
+            );
+            queueTrafficEntry(entry);
+        }
+
         // --- Host discovery & filter mode ---
         var networkFilterMode = 0; // 0 = Only Block (blacklist), 1 = Only Allow (whitelist)
         var discoveredHosts = {};  // hostname -> 'ALLOW' or 'DENY'
@@ -1392,6 +1493,11 @@ Java.performNow(function() {
         function logBlocked(source, method, url, pattern) {
             Log.i(netLogTag, '[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
             safeNetworkLoggerLog('[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
+            // Record in traffic inspector (OkHttp interceptor already records with full detail;
+            // only record simple entries for non-OkHttp sources to avoid duplicates)
+            if (source !== 'OkHttp-Interceptor') {
+                recordSimpleEntry(source, method, url, pattern);
+            }
             try {
                 var bp = getInternalFilePath('blocked_urls.txt');
                 if (bp) { var fw = Java.use('java.io.FileWriter').$new(bp, true); fw.write(url + '\n'); fw.flush(); fw.close(); }
@@ -2003,11 +2109,37 @@ Java.performNow(function() {
                         implementation: function(chain) {
                             var request = chain.request();
                             var url = request.url().toString();
+                            var method = request.method();
+                            var startTs = Date.now();
+
+                            // ── Capture request headers & body ──
+                            var reqHeadersJson = '{}';
+                            var reqBodyStr = '';
+                            try { reqHeadersJson = headersToJson(request.headers()); } catch(e) {}
+                            try {
+                                var rb = request.body();
+                                if (rb !== null) {
+                                    var buf = Java.use('okio.Buffer').$new();
+                                    rb.writeTo(buf);
+                                    var rbStr = buf.readUtf8();
+                                    reqBodyStr = rbStr.toString();
+                                }
+                            } catch(e) {}
+
+                            // ── Block check ──
                             var bm = shouldBlock(url);
                             if (bm !== null) {
-                                logBlocked('OkHttp-Interceptor', request.method(), url, bm);
+                                logBlocked('OkHttp-Interceptor', method, url, bm);
                                 advBlockCount++;
-                                // Return empty 204 No Content response via Builder (stable API)
+                                // Record blocked entry
+                                var bEntry = buildTrafficEntry(
+                                    ++_trafficSeq, startTs, method, url,
+                                    0, 'BLOCKED',
+                                    reqHeadersJson, reqBodyStr, '{}', '',
+                                    0, 'OkHttp', bm
+                                );
+                                queueTrafficEntry(bEntry);
+                                // Return empty 204 No Content response
                                 var ResponseBuilder = Java.use('okhttp3.Response$Builder');
                                 return ResponseBuilder.$new()
                                     .request(request)
@@ -2020,8 +2152,43 @@ Java.performNow(function() {
                                     ))
                                     .build();
                             }
-                            // Not blocked — proceed normally
-                            return chain.proceed(request);
+
+                            // ── Proceed & capture response ──
+                            var response = chain.proceed(request);
+                            var elapsed = Date.now() - startTs;
+                            var statusCode = response.code();
+                            var statusMsg = '';
+                            try { statusMsg = response.message().toString(); } catch(e) {}
+                            var resHeadersJson = '{}';
+                            var resBodyStr = '';
+                            try { resHeadersJson = headersToJson(response.headers()); } catch(e) {}
+                            try {
+                                var origBody = response.body();
+                                if (origBody !== null) {
+                                    var contentType = origBody.contentType();
+                                    // Buffer the source safely
+                                    var source = origBody.source();
+                                    source.request(1048576); // buffer up to 1 MB
+                                    var cloned = source.getBuffer().clone();
+                                    var rawBody = cloned.readUtf8();
+                                    resBodyStr = rawBody.toString();
+                                    // Rebuild response body so downstream can still read it
+                                    var newBody = ResponseBody.create(contentType,
+                                        Java.use('java.lang.String').$new(resBodyStr));
+                                    response = response.newBuilder().body(newBody).build();
+                                }
+                            } catch(e) {}
+
+                            // Write traffic entry
+                            var entry = buildTrafficEntry(
+                                ++_trafficSeq, startTs, method, url,
+                                statusCode, statusMsg,
+                                reqHeadersJson, reqBodyStr,
+                                resHeadersJson, resBodyStr,
+                                elapsed, 'OkHttp', ''
+                            );
+                            queueTrafficEntry(entry);
+                            return response;
                         }
                     }]
                 }
@@ -2230,7 +2397,7 @@ Java.performNow(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.44: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.45: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2246,7 +2413,7 @@ Java.performNow(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.44: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.45: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');

@@ -245,7 +245,7 @@
             android:layout_marginStart="4dp" />
     </LinearLayout>
 
-    <!-- Tools Row 2: DB Editor -->
+    <!-- Tools Row 2: DB Editor + Traffic Inspector -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -254,13 +254,27 @@
 
         <Button
             android:id="@+id/btn_db_editor"
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="44dp"
+            android:layout_weight="1"
             android:text="🗄️ DB EDITOR"
             android:textColor="#FF000000"
             android:textSize="11sp"
             android:textStyle="bold"
-            android:background="#FFFFAB00" />
+            android:background="#FFFFAB00"
+            android:layout_marginEnd="4dp" />
+
+        <Button
+            android:id="@+id/btn_traffic"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:text="🔍 TRAFFIC"
+            android:textColor="#FFFFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:background="#FF00838F"
+            android:layout_marginStart="4dp" />
     </LinearLayout>
 
 </LinearLayout>
