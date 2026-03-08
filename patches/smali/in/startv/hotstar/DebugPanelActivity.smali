@@ -475,6 +475,26 @@
     invoke-virtual {v2, v3}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
     invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
+    # Traffic Log (JSONL file written by Frida OkHttp interceptor)
+    const-string v7, "\ud83d\udd0d Traffic Log (Frida)"
+    const v8, -0xff7c01    # teal 0xFF00838F
+    invoke-direct {p0, v7, v8}, Lin/startv/hotstar/DebugPanelActivity;->createButton(Ljava/lang/String;I)Landroid/widget/Button;
+    move-result-object v2
+    new-instance v3, Lin/startv/hotstar/DebugPanelActivity$TrafficLogListener;
+    invoke-direct {v3, p0}, Lin/startv/hotstar/DebugPanelActivity$TrafficLogListener;-><init>(Lin/startv/hotstar/DebugPanelActivity;)V
+    invoke-virtual {v2, v3}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    # Network Monitor (live logcat stream)
+    const-string v7, "\ud83d\udce1 Network Monitor (Live)"
+    const v8, -0xcc4a1a
+    invoke-direct {p0, v7, v8}, Lin/startv/hotstar/DebugPanelActivity;->createButton(Ljava/lang/String;I)Landroid/widget/Button;
+    move-result-object v2
+    new-instance v3, Lin/startv/hotstar/DebugPanelActivity$NetworkMonitorListener;
+    invoke-direct {v3, p0}, Lin/startv/hotstar/DebugPanelActivity$NetworkMonitorListener;-><init>(Lin/startv/hotstar/DebugPanelActivity;)V
+    invoke-virtual {v2, v3}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+    invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
     invoke-virtual {v1, v10}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     # ============================================================
