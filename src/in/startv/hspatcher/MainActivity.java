@@ -193,7 +193,7 @@ public class MainActivity extends Activity {
                     // If launched with --ez auto_patch true, patch only after load completes
                     if (autoPatchAfterLoad) {
                         autoPatchAfterLoad = false;
-                        mainHandler.postDelayed(this::onPatchClick, 250);
+                        mainHandler.postDelayed(this::doPatch, 250);
                     }
                 });
                 if (isBundle) {
@@ -534,7 +534,7 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
-        log("⚡ HSPatcher v3.42 — Starting one-click patch");
+        log("⚡ HSPatcher v3.48 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         new Thread(() -> {

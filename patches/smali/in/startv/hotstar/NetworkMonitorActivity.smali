@@ -500,7 +500,8 @@
     if-le v1, v2, :no_trim
 
     sub-int v2, v1, v2
-    invoke-virtual {v0, 0x0, v2}, Ljava/lang/StringBuilder;->delete(II)Ljava/lang/StringBuilder;
+    const/4 v3, 0x0
+    invoke-virtual {v0, v3, v2}, Ljava/lang/StringBuilder;->delete(II)Ljava/lang/StringBuilder;
 
     :no_trim
 

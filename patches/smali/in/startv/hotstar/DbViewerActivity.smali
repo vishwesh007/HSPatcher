@@ -269,7 +269,7 @@
 
     # Compute padding: 8dp horizontal, 4dp vertical
     iget v9, v12, Lin/startv/hotstar/DbViewerActivity;->density:F
-    const/4 v10, 0x8
+    const/16 v10, 0x8
     int-to-float v10, v10
     mul-float/2addr v10, v9
     float-to-int v10, v10

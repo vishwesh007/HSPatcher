@@ -791,8 +791,13 @@ public class PatchEngine {
         int ok = 0, fail = 0;
         for (File sf : smaliFiles) {
             try {
-                SmaliMod.assembleSmaliFile(sf, db, 35, false, false);
-                ok++;
+                boolean success = SmaliMod.assembleSmaliFile(sf, db, 35, true, false);
+                if (success) {
+                    ok++;
+                } else {
+                    fail++;
+                    log("   ⚠️ SMALI FAILED (returned false): " + sf.getName());
+                }
             } catch (Exception e) {
                 fail++;
                 if (fail <= 5) log("   ⚠️ " + sf.getName() + ": " + e.getMessage());
@@ -805,6 +810,7 @@ public class PatchEngine {
 
         deleteDir(tmpDir);
         if (fail > 0) log("   (" + fail + " assembly errors)");
+        log("   ✅ " + ok + " classes compiled, " + fail + " failed");
         return ok;
     }
 
@@ -1653,7 +1659,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.42";
+            String version = "3.48";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);
@@ -1976,8 +1982,8 @@ public class PatchEngine {
                 int ok = 0, fail = 0;
                 for (File sf : allSmali) {
                     try {
-                        SmaliMod.assembleSmaliFile(sf, db, 35, false, false);
-                        ok++;
+                        boolean success = SmaliMod.assembleSmaliFile(sf, db, 35, true, false);
+                        if (success) { ok++; } else { fail++; log("   ⚠️ SmaliMod returned false: " + sf.getName()); }
                     } catch (Exception e) {
                         fail++;
                     }

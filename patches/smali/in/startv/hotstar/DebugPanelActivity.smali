@@ -69,7 +69,7 @@
 
     invoke-virtual {v1}, Ljava/util/ArrayList;->size()I
     move-result v3
-    sub-int/lit8 v3, v3, 0x1
+    add-int/lit8 v3, v3, -0x1
 
     :rev_loop
     if-ltz v3, :rev_end
@@ -82,7 +82,7 @@
     const-string v5, "\n"
     invoke-virtual {v2, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
 
-    sub-int/lit8 v3, v3, 0x1
+    add-int/lit8 v3, v3, -0x1
     goto :rev_loop
 
     :rev_end
