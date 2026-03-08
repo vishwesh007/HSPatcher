@@ -42,6 +42,8 @@ import java.util.*;
  */
 public class DbEditorActivity extends Activity {
 
+    public static final String EXTRA_PACKAGE_NAME = "pkg_name";
+
     private static final String TAG = "HSPatcher";
     private static final int PICK_DB = 3001;
     private static final int MAX_ROWS_PER_PAGE = 100;
@@ -62,6 +64,7 @@ public class DbEditorActivity extends Activity {
     private SQLiteDatabase db;
     private File currentDbFile;
     private String currentTable;
+    private String targetPkg;
     private int currentPage = 0;
     private int totalRows = 0;
 
@@ -81,6 +84,7 @@ public class DbEditorActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mainHandler = new Handler(Looper.getMainLooper());
+        targetPkg = getIntent().getStringExtra(EXTRA_PACKAGE_NAME);
         buildUI();
 
         // Accept DB path from intent
@@ -134,6 +138,23 @@ public class DbEditorActivity extends Activity {
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0, 0, 0, dp(12));
         main.addView(sub);
+
+        // Quick-nav: Traffic Inspector
+        Button btnTrafficInspector = makeButton("🔍  TRAFFIC INSPECTOR", 0xFF00838F);
+        LinearLayout.LayoutParams tiLP = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
+        tiLP.topMargin = dp(6);
+        tiLP.bottomMargin = dp(10);
+        btnTrafficInspector.setLayoutParams(tiLP);
+        btnTrafficInspector.setTextSize(12);
+        btnTrafficInspector.setOnClickListener(v -> {
+            Intent ti = new Intent(DbEditorActivity.this, NetworkInspectorActivity.class);
+            if (targetPkg != null && !targetPkg.isEmpty()) {
+                ti.putExtra(NetworkInspectorActivity.EXTRA_PACKAGE_NAME, targetPkg);
+            }
+            startActivity(ti);
+        });
+        main.addView(btnTrafficInspector);
 
         // DB file selector
         LinearLayout fileRow = new LinearLayout(this);
