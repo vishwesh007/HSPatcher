@@ -1,0 +1,2 @@
+Sun Mar  8 10:52:37 IST 2026
+-rw-rw---- 1 u0_a272 media_rw 49062746 2026-03-08 10:31 /sdcard/Download/HSPatched_Amaze_103104.apk -rw-rw---- 1 u0_a272 media_rw 49046362 2026-03-07 20:30 /sdcard/Download/HSPatched_Amaze_203045.apk -rw-rw---- 1 u0_a272 media_rw 49062746 2026-03-07 22:35 /sdcard/Download/HSPatched_Amaze_223553.apk

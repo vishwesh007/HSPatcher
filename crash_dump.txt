@@ -1,0 +1,22 @@
+--------- beginning of crash
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: FATAL EXCEPTION: main
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: Process: com.amaze.filemanager, PID: 29134
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: java.lang.NoSuchMethodError: No direct method <init>(Lin/startv/hotstar/FileViewerActivity;)V in class Lin/startv/hotstar/FileViewerActivity$TextChangeWatcher; or its super classes (declaration of 'in.startv.hotstar.FileViewerActivity$TextChangeWatcher' appears in /data/app/~~LohGo2IgQCP944Di20h5Ug==/com.amaze.filemanager-Oryr9tRy880eO8ov043wyw==/base.apk!classes3.dex)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at in.startv.hotstar.FileViewerActivity.onCreate(Unknown Source:1143)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9380)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.Activity.performCreate(Activity.java:9323)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.Instrumentation.callActivityOnCreate(Instrumentation.java:1537)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.ActivityThread.performLaunchActivity(ActivityThread.java:4685)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.ActivityThread.handleLaunchActivity(ActivityThread.java:4932)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.servertransaction.LaunchActivityItem.execute(LaunchActivityItem.java:222)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeNonLifecycleItem(TransactionExecutor.java:136)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.executeTransactionItems(TransactionExecutor.java:106)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:83)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:3085)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.os.Handler.dispatchMessage(Handler.java:114)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.os.Looper.loopOnce(Looper.java:267)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.os.Looper.loop(Looper.java:360)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at android.app.ActivityThread.main(ActivityThread.java:10054)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at java.lang.reflect.Method.invoke(Native Method)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:616)
+03-08 09:27:05.370 29134 29134 E AndroidRuntime: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:1115)

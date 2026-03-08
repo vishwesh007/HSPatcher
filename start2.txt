@@ -1,0 +1,2 @@
+Stopping: in.startv.hspatcher
+Starting: Intent { cmp=in.startv.hspatcher/.MainActivity (has extras) }

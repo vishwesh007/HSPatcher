@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.42
+ * HSPatch Universal Frida Script v3.44
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -29,7 +29,7 @@ Java.performNow(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.42              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.44              [#]');
         console.log('======================================================');
 
 
@@ -988,14 +988,19 @@ Java.performNow(function() {
             if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return;
             // Skip IPs that are just numbers (not real hostnames) - still discover them
             if (discoveredHosts[host] !== undefined) return; // already known
-            discoveredHosts[host] = 'ALLOW'; // default to ALLOW
+            // v3.44: In Only Allow (whitelist) mode, new unknown hosts default to DENY
+            //        so they are blocked until explicitly marked ALLOW by the user.
+            //        In Only Block (blacklist) mode they default to ALLOW as before.
+            var defaultStatus = (networkFilterMode === 1) ? 'DENY' : 'ALLOW';
+            discoveredHosts[host] = defaultStatus;
             hostRulesDirty = true;
-            Log.i(netLogTag, '[HOSTS] Discovered new host: ' + host + ' (default: ALLOW)');
+            Log.i(netLogTag, '[HOSTS] Discovered new host: ' + host + ' (default: ' + defaultStatus + ')');
             scheduleHostRulesSave();
         }
 
         function shouldBlockByHostRules(hostname) {
             if (!trafficMonitorEnabled) return null;
+            if (!hostname || hostname.length === 0) return null; // v3.44: null guard
             var host = hostname.toLowerCase();
 
             // Never block loopback — our own blocked-URL redirect uses 127.0.0.1
@@ -1769,8 +1774,14 @@ Java.performNow(function() {
                 var bm = shouldBlock(url);
                 if (bm !== null) {
                     logBlocked('OkHttp3', method, url, bm);
-                    var blockedReq = request.newBuilder().url(Java.use('okhttp3.HttpUrl').parse('http://127.0.0.1:1/blocked')).build();
-                    return _okNewCall.call(this, blockedReq);
+                    // v3.44: null-safe blocked URL — parse() can return null for some OkHttp builds
+                    var _blockedHU = Java.use('okhttp3.HttpUrl').parse('http://127.0.0.1:1/blocked');
+                    if (_blockedHU === null) _blockedHU = Java.use('okhttp3.HttpUrl').parse('http://0.0.0.0/blocked');
+                    if (_blockedHU !== null) {
+                        var blockedReq = request.newBuilder().url(_blockedHU).build();
+                        return _okNewCall.call(this, blockedReq);
+                    }
+                    return _okNewCall.call(this, request); // fallback: let it fail naturally
                 }
                 var rw = applyRewrites(url);
                 if (rw.changed) {
@@ -2219,7 +2230,7 @@ Java.performNow(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.42: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.44: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2235,7 +2246,7 @@ Java.performNow(function() {
             else pathRuleCount++;
         }
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.42: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.44: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');

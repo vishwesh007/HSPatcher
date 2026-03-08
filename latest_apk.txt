@@ -1,0 +1,14 @@
+-rw-rw---- 1 u0_a272 media_rw 49062746 2026-03-08 10:55 /sdcard/Download/HSPatched_Amaze_105541.apk
+-rw-rw---- 1 u0_a272 media_rw 49062746 2026-03-08 10:54 /sdcard/Download/HSPatched_Amaze_105434.apk
+-rw-rw---- 1 u0_a272 media_rw 49062746 2026-03-08 10:31 /sdcard/Download/HSPatched_Amaze_103104.apk
+Sun Mar  8 10:56:13 IST 2026
+03-08 10:56:13.038 19705 19749 I bta_gattc_main: system/bta/gatt/bta_gattc_main.cc:336 bta_gattc_hdl_event: Sending Conn failed to establish for conn_id: 65535
+03-08 10:56:13.097 19076 19076 I WearApiCall: onFailed() called with: status = [147]
+03-08 10:56:13.098 19076 19076 I RealConnection#459688393: WearAuthWrapper() called with: status = 2002, message = connect failed: 147, mac = 75:96
+03-08 10:56:13.099 19076 19076 I RealConnection#459688393: onConnectFailure() called with: status = 2002, message = connect failed: 147 , cost = 30.134
+03-08 10:56:13.173  2307  2714 E HwcComposer: getLuts failed Status(-129, EX_TRANSACTION_FAILED): 'UNKNOWN_TRANSACTION: '
+03-08 10:56:13.489  2307  2714 E HwcComposer: getLuts failed Status(-129, EX_TRANSACTION_FAILED): 'UNKNOWN_TRANSACTION: '
+03-08 10:56:13.696  2307  2714 E HwcComposer: getLuts failed Status(-129, EX_TRANSACTION_FAILED): 'UNKNOWN_TRANSACTION: '
+03-08 10:56:13.793  2108  2108 E ANDR-PERF-REQUEST: ANDR-PERF-REQUEST: Process() 374: Translate to physical failed
+03-08 10:56:13.793  2108  2108 E ANDR-PERF-REQUEST: ANDR-PERF-REQUEST: Process() 374: Translate to physical failed
+03-08 10:56:13.896  2307  2714 E HwcComposer: getLuts failed Status(-129, EX_TRANSACTION_FAILED): 'UNKNOWN_TRANSACTION: '

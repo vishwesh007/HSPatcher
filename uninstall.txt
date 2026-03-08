@@ -1,0 +1,2 @@
+Success
+/sdcard/Download/HSPatched_Amaze_105541.apk: 1 file pulled, 0 skipped. 20.4 MB/s (49062746 bytes in 2.288s)

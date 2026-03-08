@@ -1,0 +1,1 @@
+START RESULT: Starting: Intent { cmp=in.startv.hspatcher/.MainActivity (has extras) } Warning: Activity not started, intent has been delivered to currently running top-most instance.
