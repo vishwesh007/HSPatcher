@@ -11,7 +11,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.OpenableColumns;
+import android.text.InputType;
+import android.text.method.KeyListener;
+import android.text.method.ScrollingMovementMethod;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -74,6 +78,9 @@ public class TextReplaceActivity extends Activity {
     private ProgressBar progressBar;
     private Button btnFindNext, btnReplaceOne, btnReplaceAll, btnCancel;
 
+    private ScrollView rootScroll;
+    private KeyListener etContentKeyListener;
+
     // --- Threading ---
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private volatile Thread workerThread = null;
@@ -103,9 +110,9 @@ public class TextReplaceActivity extends Activity {
     // ======================= UI BUILD =======================
 
     private void buildUi() {
-        ScrollView root = new ScrollView(this);
-        root.setFillViewport(true);
-        root.setBackgroundResource(R.drawable.bg_glass_root);
+        rootScroll = new ScrollView(this);
+        rootScroll.setFillViewport(true);
+        rootScroll.setBackgroundResource(R.drawable.bg_glass_root);
 
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
@@ -295,13 +302,50 @@ public class TextReplaceActivity extends Activity {
         etContent.setPadding(dp(12), dp(12), dp(12), dp(12));
         etContent.setMinLines(12);
         etContent.setGravity(Gravity.TOP | Gravity.START);
+        etContent.setSingleLine(false);
+        etContent.setInputType(InputType.TYPE_CLASS_TEXT
+            | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         etContent.setHorizontallyScrolling(true);
+        etContent.setVerticalScrollBarEnabled(true);
+        etContent.setHorizontalScrollBarEnabled(true);
         etContent.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+        etContent.setOverScrollMode(View.OVER_SCROLL_ALWAYS);
+        etContent.setMovementMethod(ScrollingMovementMethod.getInstance());
+        etContent.setOnTouchListener((v, event) -> {
+            // Allow scrolling inside etContent even though the whole screen is a ScrollView.
+            // Otherwise the parent ScrollView intercepts touch events and it feels like
+            // the content area is "not scrollable".
+            if (rootScroll != null) {
+                int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
+                    rootScroll.requestDisallowInterceptTouchEvent(true);
+                } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    rootScroll.requestDisallowInterceptTouchEvent(false);
+                }
+            }
+            return false;
+        });
+        etContentKeyListener = etContent.getKeyListener();
         main.addView(etContent, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(420)));
 
-        root.addView(main);
-        setContentView(root);
+        rootScroll.addView(main);
+        setContentView(rootScroll);
+    }
+
+    private void setContentReadOnly(boolean readOnly) {
+        // Keep the view enabled so it can scroll/select text.
+        etContent.setEnabled(true);
+        if (readOnly) {
+            etContent.setKeyListener(null);
+            etContent.setCursorVisible(false);
+            etContent.setTextIsSelectable(true);
+        } else {
+            etContent.setKeyListener(etContentKeyListener);
+            etContent.setCursorVisible(true);
+            etContent.setTextIsSelectable(false);
+        }
     }
 
     // ======================= PROGRESS UI =======================
@@ -449,7 +493,7 @@ public class TextReplaceActivity extends Activity {
         mainHandler.post(() -> {
             setWorkingState(false);
             isLargeFile = false;
-            etContent.setEnabled(true);
+            setContentReadOnly(false);
             etContent.setText(decoded.text);
             etContent.setHint("");
             lastMatchStart = -1;
@@ -498,7 +542,7 @@ public class TextReplaceActivity extends Activity {
         mainHandler.post(() -> {
             setWorkingState(false);
             isLargeFile = true;
-            etContent.setEnabled(false); // read-only preview
+            setContentReadOnly(true);
             etContent.setText(displayText);
             etContent.setHint("");
             lastMatchStart = -1;
