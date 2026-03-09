@@ -1,0 +1,33 @@
+═══════════════════════════════════════════════════════════════
+  HSPatcher — Main UI Modernization Notes
+  Talk to me here! (safe to overwrite)
+═══════════════════════════════════════════════════════════════
+
+Goal
+- Modernize HSPatcher MainActivity UI (xed-inspired feel): darker surfaces, cards, ripple + press-scale micro-interactions, smoother log scrolling.
+
+What’s already done (this workspace)
+- New design resources: colors + dimens + modern drawables + press-scale animator.
+- Main layout switched to resource-driven styling + cleaner hierarchy.
+- MainActivity: smoother batched log auto-scroll + animated progress updates + system bar coloring.
+- MainActivity now uses NoActionBar theme.
+
+Build status
+- `HSPatcher/build.ps1` builds successfully.
+
+What to test next (device)
+- Install the freshly built `HSPatcher.apk` and verify:
+  1) Log scrolling feels smooth (no jumpy fullScroll)
+  2) Progress bar animates between steps
+  3) Buttons show ripple + press-scale
+  4) Status/nav bars stay dark (no light icons)
+
+Notes / questions for you
+- If you want the header centered again (like older UI), say so.
+- If you want the main CTA wording to keep emojis, say so.
+
+Branch workflow
+- If you want me to enforce “never edit main”, tell me the branch name you want (I didn’t create a branch automatically).
+
+
+please create any branch that fits you buddy but not main ill merged_fields
