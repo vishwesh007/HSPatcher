@@ -5,9 +5,7 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
 import android.graphics.drawable.Drawable;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -70,7 +68,7 @@ public class AppListActivity extends Activity {
         backBtn.setText("←");
         backBtn.setTextSize(20);
         backBtn.setTextColor(getColor(R.color.hsp_text));
-        backBtn.setBackgroundColor(0x00000000);
+        backBtn.setBackgroundResource(R.drawable.btn_surface);
         backBtn.setPadding(0, 0, dp(8), 0);
         backBtn.setOnClickListener(v -> finish());
         titleBar.addView(backBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
@@ -189,9 +187,6 @@ public class AppListActivity extends Activity {
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
         row.setClickable(true);
 
-        GradientDrawable rowBg = new GradientDrawable();
-        rowBg.setColor(0xFF1E1E1E);
-        rowBg.setCornerRadius(dp(8));
         row.setBackgroundResource(R.drawable.bg_card);
 
         LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(

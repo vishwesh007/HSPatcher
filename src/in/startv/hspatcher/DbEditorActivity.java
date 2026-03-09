@@ -52,18 +52,8 @@ public class DbEditorActivity extends Activity {
     private static final int PICK_DB = 3001;
     private static final int MAX_ROWS_PER_PAGE = 100;
 
-    // Colors matching HSPatcher theme
-    private static final int BG_PRIMARY = 0xFF121212;
-    private static final int BG_CARD = 0xFF1E1E1E;
-    private static final int BG_INPUT = 0xFF2A2A2A;
-    private static final int ACCENT = 0xFF00E676;
-    private static final int ACCENT_BLUE = 0xFF448AFF;
-    private static final int ACCENT_RED = 0xFFFF5252;
-    private static final int ACCENT_ORANGE = 0xFFFFAB00;
-    private static final int TEXT_PRIMARY = 0xFFFFFFFF;
-    private static final int TEXT_SECONDARY = 0x99FFFFFF;
-    private static final int BORDER = 0xFF333333;
-    private static final int HEADER_BG = 0xFF263238;
+    // Colors - all migrated to R.color tokens
+    // (constants removed in liquid glass migration)
 
     private SQLiteDatabase db;
     private File currentDbFile;
@@ -146,7 +136,7 @@ public class DbEditorActivity extends Activity {
         fileRow.setOrientation(LinearLayout.HORIZONTAL);
         fileRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        btnOpenDb = makeButton("📂 OPEN DATABASE", ACCENT_BLUE);
+        btnOpenDb = makeButton("📂 OPEN DATABASE", getColor(R.color.hsp_accent_blue));
         btnOpenDb.setLayoutParams(new LinearLayout.LayoutParams(0, dp(48), 1));
         btnOpenDb.setOnClickListener(v -> pickDatabase());
         fileRow.addView(btnOpenDb);
@@ -207,7 +197,7 @@ public class DbEditorActivity extends Activity {
         tvRowCount.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         pageRow.addView(tvRowCount);
 
-        btnPrevPage = makeButton("◀ Prev", BORDER);
+        btnPrevPage = makeButton("◀ Prev", getColor(R.color.hsp_surface));
         btnPrevPage.setTextSize(11);
         btnPrevPage.setPadding(dp(12), dp(4), dp(12), dp(4));
         btnPrevPage.setOnClickListener(v -> { if (currentPage > 0) { currentPage--; loadTableData(); } });
@@ -221,7 +211,7 @@ public class DbEditorActivity extends Activity {
         tvPageInfo.setGravity(Gravity.CENTER);
         pageRow.addView(tvPageInfo);
 
-        btnNextPage = makeButton("Next ▶", BORDER);
+        btnNextPage = makeButton("Next ▶", getColor(R.color.hsp_surface));
         btnNextPage.setTextSize(11);
         btnNextPage.setPadding(dp(12), dp(4), dp(12), dp(4));
         btnNextPage.setOnClickListener(v -> {
@@ -237,7 +227,7 @@ public class DbEditorActivity extends Activity {
         toolsRow.setOrientation(LinearLayout.HORIZONTAL);
         toolsRow.setPadding(0, dp(2), 0, dp(6));
 
-        Button btnSchema = makeButton("📋 Schema", HEADER_BG);
+        Button btnSchema = makeButton("📋 Schema", getColor(R.color.hsp_surface));
         btnSchema.setTextSize(11);
         btnSchema.setLayoutParams(new LinearLayout.LayoutParams(0, dp(36), 1));
         btnSchema.setOnClickListener(v -> showSchema());
@@ -245,7 +235,7 @@ public class DbEditorActivity extends Activity {
 
         addSpacer(toolsRow, 4);
 
-        Button btnInsert = makeButton("➕ Insert", 0xFF2E7D32);
+        Button btnInsert = makeButton("➕ Insert", getColor(R.color.hsp_legacy_success));
         btnInsert.setTextSize(11);
         btnInsert.setLayoutParams(new LinearLayout.LayoutParams(0, dp(36), 1));
         btnInsert.setOnClickListener(v -> insertRow());
@@ -253,7 +243,7 @@ public class DbEditorActivity extends Activity {
 
         addSpacer(toolsRow, 4);
 
-        Button btnExport = makeButton("💾 Export", 0xFF5C6BC0);
+        Button btnExport = makeButton("💾 Export", getColor(R.color.hsp_accent_indigo));
         btnExport.setTextSize(11);
         btnExport.setLayoutParams(new LinearLayout.LayoutParams(0, dp(36), 1));
         btnExport.setOnClickListener(v -> exportTable());
@@ -281,15 +271,15 @@ public class DbEditorActivity extends Activity {
         TextView sqlLabel = new TextView(this);
         sqlLabel.setText("Raw SQL");
         sqlLabel.setTextSize(12);
-        sqlLabel.setTextColor(ACCENT);
+        sqlLabel.setTextColor(getColor(R.color.hsp_accent_green));
         sqlLabel.setTypeface(null, android.graphics.Typeface.BOLD);
         sqlLabel.setPadding(0, dp(12), 0, dp(4));
         main.addView(sqlLabel);
 
         etSql = new EditText(this);
         etSql.setHint("SELECT * FROM table_name WHERE ...");
-        etSql.setHintTextColor(0x55FFFFFF);
-        etSql.setTextColor(TEXT_PRIMARY);
+        etSql.setHintTextColor(getColor(R.color.hsp_text_faint));
+        etSql.setTextColor(getColor(R.color.hsp_text));
         etSql.setTextSize(13);
         etSql.setBackgroundResource(R.drawable.bg_glass_input);
         etSql.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -299,7 +289,7 @@ public class DbEditorActivity extends Activity {
         etSql.setTypeface(android.graphics.Typeface.MONOSPACE);
         main.addView(etSql);
 
-        btnExecSql = makeButton("▶ EXECUTE SQL", ACCENT_BLUE);
+        btnExecSql = makeButton("▶ EXECUTE SQL", getColor(R.color.hsp_accent_blue));
         LinearLayout.LayoutParams execLP = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(44));
         execLP.topMargin = dp(6);
@@ -319,7 +309,7 @@ public class DbEditorActivity extends Activity {
         tvLog = new TextView(this);
         tvLog.setText("Ready. Open a .db or .sqlite file to start.");
         tvLog.setTextSize(11);
-        tvLog.setTextColor(0xFFCCCCCC);
+        tvLog.setTextColor(getColor(R.color.hsp_text_mono));
         tvLog.setTypeface(android.graphics.Typeface.MONOSPACE);
         logScroll.addView(tvLog);
 
@@ -385,7 +375,7 @@ public class DbEditorActivity extends Activity {
                 SQLiteDatabase.OPEN_READWRITE | SQLiteDatabase.NO_LOCALIZED_COLLATORS
             );
             tvDbPath.setText(file.getName() + " (" + (file.length() / 1024) + " KB)");
-            tvDbPath.setTextColor(ACCENT);
+            tvDbPath.setTextColor(getColor(R.color.hsp_accent_green));
             log("✅ Opened: " + file.getName());
             log("   Path: " + file.getAbsolutePath());
             log("   Size: " + (file.length() / 1024) + " KB");
@@ -401,7 +391,7 @@ public class DbEditorActivity extends Activity {
         } catch (Exception e) {
             log("❌ Failed to open database: " + e.getMessage());
             tvDbPath.setText("Error opening: " + file.getName());
-            tvDbPath.setTextColor(ACCENT_RED);
+            tvDbPath.setTextColor(getColor(R.color.hsp_accent_red));
         }
     }
 
@@ -477,7 +467,7 @@ public class DbEditorActivity extends Activity {
             log("❌ Error loading table: " + e.getMessage());
             TextView errTv = new TextView(this);
             errTv.setText("Error: " + e.getMessage());
-            errTv.setTextColor(ACCENT_RED);
+            errTv.setTextColor(getColor(R.color.hsp_accent_red));
             errTv.setPadding(dp(8), dp(8), dp(8), dp(8));
             tableContainer.addView(errTv);
         } finally {
