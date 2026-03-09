@@ -1485,7 +1485,6 @@ public class MainActivity extends Activity {
             btnCert.setBackgroundResource(R.drawable.btn_success);
             btnCert.setTextColor(getColor(R.color.hsp_text_dark));
         } else {
-            btnCert.setText("CA CERT");
             btnCert.setText("\uD83D\uDCDC CA CERT");
             btnCert.setBackgroundResource(R.drawable.btn_primary_cert);
             btnCert.setTextColor(getColor(R.color.hsp_text));
