@@ -9,13 +9,14 @@
         </shape>
     </item>
 
+    <!-- Gloss highlight strip (top) -->
     <item>
         <inset android:insetLeft="1dp" android:insetTop="1dp" android:insetRight="1dp" android:insetBottom="1dp">
             <shape>
                 <corners android:radius="@dimen/hsp_radius_md" />
                 <gradient
                     android:angle="270"
-                    android:startColor="#26FFFFFF"
+                    android:startColor="@color/hsp_glass_highlight"
                     android:endColor="#00FFFFFF" />
             </shape>
         </inset>

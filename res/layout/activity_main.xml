@@ -5,7 +5,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:padding="@dimen/hsp_padding_screen"
-    android:background="@color/hsp_bg"
+    android:background="@drawable/bg_glass_root"
     android:animateLayoutChanges="true"
     android:clipToPadding="false">
 

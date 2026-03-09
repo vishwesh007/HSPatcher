@@ -28,4 +28,11 @@
     <color name="hsp_legacy_cert">#FF795548</color>
 
     <color name="hsp_ripple">#33FFFFFF</color>
+
+    <!-- Liquid-glass (glassmorphism) tokens -->
+    <color name="hsp_glass_fill">#1AFFFFFF</color>
+    <color name="hsp_glass_fill_strong">#26FFFFFF</color>
+    <color name="hsp_glass_stroke">#33FFFFFF</color>
+    <color name="hsp_glass_highlight">#40FFFFFF</color>
+    <color name="hsp_glass_shadow">#26000000</color>
 </resources>

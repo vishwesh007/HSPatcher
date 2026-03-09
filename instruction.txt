@@ -1,16 +1,26 @@
 ═══════════════════════════════════════════════════════════════
-  HSPatcher — Main UI Modernization Notes
+  HSPatcher — UI Notes (Liquid Glass)
   Talk to me here! (safe to overwrite)
 ═══════════════════════════════════════════════════════════════
 
 Goal
-- Modernize HSPatcher MainActivity UI (xed-inspired feel): darker surfaces, cards, ripple + press-scale micro-interactions, smoother log scrolling.
+- Apply a liquid-glass (glassmorphism) look across the app while preserving the legacy “mini icon/emoji” vibe and the meaning of button colors.
 
 What’s already done (this workspace)
 - New design resources: colors + dimens + modern drawables + press-scale animator.
 - Main layout switched to resource-driven styling + cleaner hierarchy.
 - MainActivity: smoother batched log auto-scroll + animated progress updates + system bar coloring.
 - MainActivity now uses NoActionBar theme.
+
+Liquid glass (new)
+- Added glass tokens in `res/values/colors.xml` (`hsp_glass_*`).
+- Added glass drawables: `bg_glass_root`, `bg_glass_input`.
+- Converted core surfaces to glass: `bg_card`, `bg_log`, `bg_chip`.
+- Activities updated:
+  - MainActivity root background uses `bg_glass_root`.
+  - AppListActivity uses glass root + glass inputs + glass cards (rows).
+  - ApkSignerActivity uses glass root + glass inputs + glass log + glass ripple buttons.
+  - DbEditorActivity uses glass root + glass inputs + glass log + glassy table rows + ripple buttons.
 
 Patch entertainment (new)
 - While patching runs, the header/progress area animates (float/wiggle/pulse) and the progress text shows a spinner + dots + fun status flair.
@@ -25,6 +35,8 @@ What to test next (device)
   2) Progress bar animates between steps
   3) Buttons show ripple + press-scale
   4) Status/nav bars stay dark (no light icons)
+  5) AppList/Signer/DB Editor all have glass backgrounds + readable text
+  6) Table scrolling/row taps still work in DB Editor
 
 Notes / questions for you
 - If you want the header centered again (like older UI), say so.

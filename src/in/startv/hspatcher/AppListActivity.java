@@ -20,6 +20,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
 
+import android.content.res.ColorStateList;
 import java.io.*;
 import java.util.*;
 
@@ -56,7 +57,7 @@ public class AppListActivity extends Activity {
     private void buildUI() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF121212);
+        root.setBackgroundResource(R.drawable.bg_glass_root);
         root.setPadding(dp(16), dp(16), dp(16), dp(16));
 
         // Title bar
@@ -68,7 +69,7 @@ public class AppListActivity extends Activity {
         Button backBtn = new Button(this);
         backBtn.setText("←");
         backBtn.setTextSize(20);
-        backBtn.setTextColor(0xFFFFFFFF);
+        backBtn.setTextColor(getColor(R.color.hsp_text));
         backBtn.setBackgroundColor(0x00000000);
         backBtn.setPadding(0, 0, dp(8), 0);
         backBtn.setOnClickListener(v -> finish());
@@ -78,7 +79,7 @@ public class AppListActivity extends Activity {
         boolean bkMode = getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false);
         title.setText(bkMode ? "💾 Select App to Backup" : "📱 Extract from Installed Apps");
         title.setTextSize(20);
-        title.setTextColor(0xFF00E676);
+        title.setTextColor(getColor(R.color.hsp_accent_green));
         titleBar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         root.addView(titleBar);
@@ -86,18 +87,13 @@ public class AppListActivity extends Activity {
         // Search box
         searchBox = new EditText(this);
         searchBox.setHint("🔍 Search apps...");
-        searchBox.setHintTextColor(0x66FFFFFF);
-        searchBox.setTextColor(0xFFFFFFFF);
+        searchBox.setHintTextColor(getColor(R.color.hsp_text_faint));
+        searchBox.setTextColor(getColor(R.color.hsp_text));
         searchBox.setTextSize(14);
-        searchBox.setBackgroundColor(0xFF1E1E1E);
         searchBox.setPadding(dp(12), dp(10), dp(12), dp(10));
         searchBox.setSingleLine(true);
 
-        GradientDrawable searchBg = new GradientDrawable();
-        searchBg.setColor(0xFF1E1E1E);
-        searchBg.setCornerRadius(dp(8));
-        searchBg.setStroke(1, 0x33FFFFFF);
-        searchBox.setBackground(searchBg);
+        searchBox.setBackgroundResource(R.drawable.bg_glass_input);
 
         root.addView(searchBox, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -115,15 +111,15 @@ public class AppListActivity extends Activity {
         toggleRow.setPadding(0, dp(8), 0, dp(4));
 
         showSystem = new CheckBox(this);
-        showSystem.setTextColor(0x99FFFFFF);
+        showSystem.setTextColor(getColor(R.color.hsp_text_muted));
         showSystem.setText("Show system apps");
         showSystem.setTextSize(13);
-        showSystem.setButtonTintList(android.content.res.ColorStateList.valueOf(0xFF00E676));
+        showSystem.setButtonTintList(ColorStateList.valueOf(getColor(R.color.hsp_accent_green)));
         showSystem.setOnCheckedChangeListener((btn, checked) -> loadApps(checked));
         toggleRow.addView(showSystem);
 
         statusText = new TextView(this);
-        statusText.setTextColor(0x99FFFFFF);
+        statusText.setTextColor(getColor(R.color.hsp_text_muted));
         statusText.setTextSize(12);
         statusText.setGravity(Gravity.END);
         LinearLayout.LayoutParams stlp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
@@ -196,7 +192,7 @@ public class AppListActivity extends Activity {
         GradientDrawable rowBg = new GradientDrawable();
         rowBg.setColor(0xFF1E1E1E);
         rowBg.setCornerRadius(dp(8));
-        row.setBackground(rowBg);
+        row.setBackgroundResource(R.drawable.bg_card);
 
         LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -218,14 +214,14 @@ public class AppListActivity extends Activity {
 
         TextView nameText = new TextView(this);
         nameText.setText(app.label);
-        nameText.setTextColor(0xFFFFFFFF);
+        nameText.setTextColor(getColor(R.color.hsp_text));
         nameText.setTextSize(15);
         nameText.setSingleLine(true);
         info.addView(nameText);
 
         TextView pkgText = new TextView(this);
         pkgText.setText(app.packageName);
-        pkgText.setTextColor(0x88FFFFFF);
+        pkgText.setTextColor(getColor(R.color.hsp_text_muted));
         pkgText.setTextSize(11);
         pkgText.setSingleLine(true);
         info.addView(pkgText);
@@ -236,20 +232,17 @@ public class AppListActivity extends Activity {
 
         TextView sizeText = new TextView(this);
         sizeText.setText(app.getSizeStr() + "  v" + app.version);
-        sizeText.setTextColor(0x66FFFFFF);
+        sizeText.setTextColor(getColor(R.color.hsp_text_faint));
         sizeText.setTextSize(11);
         metaRow.addView(sizeText);
 
         if (app.isSplit) {
             TextView splitBadge = new TextView(this);
             splitBadge.setText(" SPLIT");
-            splitBadge.setTextColor(0xFF00BCD4);
+            splitBadge.setTextColor(getColor(R.color.hsp_accent_teal));
             splitBadge.setTextSize(10);
             splitBadge.setPadding(dp(6), 0, dp(6), 0);
-            GradientDrawable badgeBg = new GradientDrawable();
-            badgeBg.setColor(0x2200BCD4);
-            badgeBg.setCornerRadius(dp(4));
-            splitBadge.setBackground(badgeBg);
+            splitBadge.setBackgroundResource(R.drawable.bg_chip);
             LinearLayout.LayoutParams badgeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             badgeLp.leftMargin = dp(8);
@@ -263,7 +256,7 @@ public class AppListActivity extends Activity {
         TextView extractBtn = new TextView(this);
         extractBtn.setText("→");
         extractBtn.setTextSize(20);
-        extractBtn.setTextColor(0xFF00E676);
+        extractBtn.setTextColor(getColor(R.color.hsp_accent_green));
         extractBtn.setGravity(Gravity.CENTER);
         extractBtn.setPadding(dp(8), 0, 0, 0);
         row.addView(extractBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
@@ -295,7 +288,7 @@ public class AppListActivity extends Activity {
 
         TextView status = new TextView(this);
         status.setText("📦 Extracting " + app.label + "...\n");
-        status.setTextColor(0xFFCCCCCC);
+        status.setTextColor(getColor(R.color.hsp_text_mono));
         status.setTextSize(13);
         status.setPadding(dp(8), dp(16), dp(8), 0);
         appListContainer.addView(status);

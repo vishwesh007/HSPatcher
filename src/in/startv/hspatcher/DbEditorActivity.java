@@ -17,6 +17,12 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
+import android.content.res.ColorStateList;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.animation.AnimatorInflater;
 import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -110,7 +116,7 @@ public class DbEditorActivity extends Activity {
 
     private void buildUI() {
         ScrollView root = new ScrollView(this);
-        root.setBackgroundColor(BG_PRIMARY);
+        root.setBackgroundResource(R.drawable.bg_glass_root);
         root.setFillViewport(true);
 
         LinearLayout main = new LinearLayout(this);
@@ -121,7 +127,7 @@ public class DbEditorActivity extends Activity {
         TextView header = new TextView(this);
         header.setText("🗄️ DB Editor");
         header.setTextSize(28);
-        header.setTextColor(ACCENT);
+        header.setTextColor(getColor(R.color.hsp_accent_green));
         header.setTypeface(null, android.graphics.Typeface.BOLD);
         header.setGravity(Gravity.CENTER);
         header.setPadding(0, dp(8), 0, dp(4));
@@ -130,7 +136,7 @@ public class DbEditorActivity extends Activity {
         TextView sub = new TextView(this);
         sub.setText("SQLite Database Viewer & Editor");
         sub.setTextSize(13);
-        sub.setTextColor(TEXT_SECONDARY);
+        sub.setTextColor(getColor(R.color.hsp_text_muted));
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0, 0, 0, dp(12));
         main.addView(sub);
@@ -151,7 +157,7 @@ public class DbEditorActivity extends Activity {
         tvDbPath = new TextView(this);
         tvDbPath.setText("No database loaded");
         tvDbPath.setTextSize(12);
-        tvDbPath.setTextColor(TEXT_SECONDARY);
+        tvDbPath.setTextColor(getColor(R.color.hsp_text_muted));
         tvDbPath.setPadding(dp(4), dp(6), dp(4), dp(6));
         tvDbPath.setSingleLine(true);
         main.addView(tvDbPath);
@@ -165,12 +171,12 @@ public class DbEditorActivity extends Activity {
         TextView lblTable = new TextView(this);
         lblTable.setText("Table: ");
         lblTable.setTextSize(14);
-        lblTable.setTextColor(TEXT_PRIMARY);
+        lblTable.setTextColor(getColor(R.color.hsp_text));
         tableSelRow.addView(lblTable);
 
         spinnerTables = new Spinner(this);
         spinnerTables.setLayoutParams(new LinearLayout.LayoutParams(0, dp(40), 1));
-        spinnerTables.setBackgroundColor(BG_INPUT);
+        spinnerTables.setBackgroundResource(R.drawable.bg_glass_input);
         spinnerTables.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
@@ -197,7 +203,7 @@ public class DbEditorActivity extends Activity {
         tvRowCount = new TextView(this);
         tvRowCount.setText("");
         tvRowCount.setTextSize(12);
-        tvRowCount.setTextColor(TEXT_SECONDARY);
+        tvRowCount.setTextColor(getColor(R.color.hsp_text_muted));
         tvRowCount.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         pageRow.addView(tvRowCount);
 
@@ -210,7 +216,7 @@ public class DbEditorActivity extends Activity {
         tvPageInfo = new TextView(this);
         tvPageInfo.setText("");
         tvPageInfo.setTextSize(11);
-        tvPageInfo.setTextColor(TEXT_SECONDARY);
+        tvPageInfo.setTextColor(getColor(R.color.hsp_text_muted));
         tvPageInfo.setPadding(dp(8), 0, dp(8), 0);
         tvPageInfo.setGravity(Gravity.CENTER);
         pageRow.addView(tvPageInfo);
@@ -257,7 +263,7 @@ public class DbEditorActivity extends Activity {
 
         // Table data area (horizontal scrollable)
         tableHScroll = new HorizontalScrollView(this);
-        tableHScroll.setBackgroundColor(BG_CARD);
+        tableHScroll.setBackgroundResource(R.drawable.bg_card);
         LinearLayout.LayoutParams tableLP = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(300));
         tableHScroll.setLayoutParams(tableLP);
@@ -285,7 +291,7 @@ public class DbEditorActivity extends Activity {
         etSql.setHintTextColor(0x55FFFFFF);
         etSql.setTextColor(TEXT_PRIMARY);
         etSql.setTextSize(13);
-        etSql.setBackgroundColor(BG_INPUT);
+        etSql.setBackgroundResource(R.drawable.bg_glass_input);
         etSql.setPadding(dp(12), dp(10), dp(12), dp(10));
         etSql.setMinLines(2);
         etSql.setMaxLines(5);
@@ -303,7 +309,7 @@ public class DbEditorActivity extends Activity {
 
         // Log output
         logScroll = new ScrollView(this);
-        logScroll.setBackgroundColor(0xFF1A1A1A);
+        logScroll.setBackgroundResource(R.drawable.bg_log);
         LinearLayout.LayoutParams logLP = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(120));
         logLP.topMargin = dp(8);
@@ -485,7 +491,7 @@ public class DbEditorActivity extends Activity {
         if (c == null || c.getColumnCount() == 0) {
             TextView tv = new TextView(this);
             tv.setText("No data");
-            tv.setTextColor(TEXT_SECONDARY);
+            tv.setTextColor(getColor(R.color.hsp_text_muted));
             tv.setPadding(dp(8), dp(8), dp(8), dp(8));
             tableContainer.addView(tv);
             return;
@@ -503,18 +509,18 @@ public class DbEditorActivity extends Activity {
         // Header row
         LinearLayout headerRow = new LinearLayout(this);
         headerRow.setOrientation(LinearLayout.HORIZONTAL);
-        headerRow.setBackgroundColor(HEADER_BG);
+        headerRow.setBackgroundColor(getColor(R.color.hsp_glass_fill_strong));
         headerRow.setPadding(0, dp(2), 0, dp(2));
 
         // Row number column
         TextView rnHeader = makeCell("#", dp(40));
-        rnHeader.setTextColor(ACCENT);
+        rnHeader.setTextColor(getColor(R.color.hsp_accent_green));
         rnHeader.setTypeface(null, android.graphics.Typeface.BOLD);
         headerRow.addView(rnHeader);
 
         for (int i = 0; i < colCount; i++) {
             TextView cell = makeCell(cols[i], colWidths[i]);
-            cell.setTextColor(ACCENT);
+            cell.setTextColor(getColor(R.color.hsp_accent_green));
             cell.setTypeface(null, android.graphics.Typeface.BOLD);
             headerRow.addView(cell);
         }
@@ -522,7 +528,7 @@ public class DbEditorActivity extends Activity {
         // Delete header
         if (editable) {
             TextView delHeader = makeCell("DEL", dp(50));
-            delHeader.setTextColor(ACCENT_RED);
+            delHeader.setTextColor(getColor(R.color.hsp_accent_red));
             delHeader.setTypeface(null, android.graphics.Typeface.BOLD);
             headerRow.addView(delHeader);
         }
@@ -536,12 +542,12 @@ public class DbEditorActivity extends Activity {
             final int displayRowNum = rowIdx;
             LinearLayout dataRow = new LinearLayout(this);
             dataRow.setOrientation(LinearLayout.HORIZONTAL);
-            dataRow.setBackgroundColor(rowIdx % 2 == 0 ? BG_CARD : 0xFF242424);
+            dataRow.setBackgroundColor(rowIdx % 2 == 0 ? getColor(R.color.hsp_glass_fill) : 0x00000000);
             dataRow.setPadding(0, dp(1), 0, dp(1));
 
             // Row number
             TextView rnCell = makeCell(String.valueOf(displayRowNum), dp(40));
-            rnCell.setTextColor(TEXT_SECONDARY);
+            rnCell.setTextColor(getColor(R.color.hsp_text_muted));
             dataRow.addView(rnCell);
 
             // Collect row values for editing
@@ -566,7 +572,7 @@ public class DbEditorActivity extends Activity {
 
                 TextView cell = makeCell(val != null ? val : "(NULL)", colWidths[i]);
                 if (val != null && val.startsWith("(")) {
-                    cell.setTextColor(TEXT_SECONDARY);
+                    cell.setTextColor(getColor(R.color.hsp_text_muted));
                 }
 
                 // Tap to edit
@@ -584,12 +590,33 @@ public class DbEditorActivity extends Activity {
                 Button delBtn = new Button(this);
                 delBtn.setText("🗑");
                 delBtn.setTextSize(14);
-                delBtn.setBackgroundColor(0x33FF5252);
-                delBtn.setTextColor(ACCENT_RED);
+                delBtn.setTextColor(getColor(R.color.hsp_accent_red));
+                GradientDrawable delFill = new GradientDrawable();
+                delFill.setShape(GradientDrawable.RECTANGLE);
+                delFill.setCornerRadius(dp(12));
+                delFill.setColor(0x33FF5252);
+
+                GradientDrawable delStroke = new GradientDrawable();
+                delStroke.setShape(GradientDrawable.RECTANGLE);
+                delStroke.setCornerRadius(dp(12));
+                delStroke.setColor(0x00000000);
+                delStroke.setStroke(dp(1), getColor(R.color.hsp_glass_stroke));
+
+                LayerDrawable delBase = new LayerDrawable(new Drawable[] { delFill, delStroke });
+                RippleDrawable delRipple = new RippleDrawable(
+                        ColorStateList.valueOf(getColor(R.color.hsp_ripple)),
+                        delBase,
+                        null
+                );
+                delBtn.setBackground(delRipple);
                 delBtn.setPadding(dp(4), 0, dp(4), 0);
                 LinearLayout.LayoutParams delLP = new LinearLayout.LayoutParams(dp(50), dp(32));
                 delLP.gravity = Gravity.CENTER_VERTICAL;
                 delBtn.setLayoutParams(delLP);
+                try {
+                    delBtn.setStateListAnimator(AnimatorInflater.loadStateListAnimator(this, R.xml.press_scale));
+                } catch (Exception ignored) {
+                }
                 delBtn.setOnClickListener(v -> deleteRow(cols, rowValues));
                 dataRow.addView(delBtn);
             }
@@ -600,7 +627,7 @@ public class DbEditorActivity extends Activity {
         if (rowIdx == currentPage * MAX_ROWS_PER_PAGE) {
             TextView empty = new TextView(this);
             empty.setText("(empty table)");
-            empty.setTextColor(TEXT_SECONDARY);
+            empty.setTextColor(getColor(R.color.hsp_text_muted));
             empty.setPadding(dp(8), dp(16), dp(8), dp(16));
             empty.setGravity(Gravity.CENTER);
             tableContainer.addView(empty);
@@ -629,15 +656,15 @@ public class DbEditorActivity extends Activity {
 
         TextView lbl = new TextView(this);
         lbl.setText("Column: " + colName);
-        lbl.setTextColor(TEXT_SECONDARY);
+        lbl.setTextColor(getColor(R.color.hsp_text_muted));
         lbl.setTextSize(12);
         layout.addView(lbl);
 
         EditText input = new EditText(this);
         input.setText(currentVal);
-        input.setTextColor(TEXT_PRIMARY);
+        input.setTextColor(getColor(R.color.hsp_text));
         input.setTextSize(14);
-        input.setBackgroundColor(BG_INPUT);
+        input.setBackgroundResource(R.drawable.bg_glass_input);
         input.setPadding(dp(12), dp(10), dp(12), dp(10));
         input.setMinLines(1);
         input.setMaxLines(8);
@@ -646,7 +673,7 @@ public class DbEditorActivity extends Activity {
         // Set NULL button
         CheckBox cbNull = new CheckBox(this);
         cbNull.setText("Set to NULL");
-        cbNull.setTextColor(TEXT_SECONDARY);
+        cbNull.setTextColor(getColor(R.color.hsp_text_muted));
         cbNull.setOnCheckedChangeListener((btn, checked) -> input.setEnabled(!checked));
         layout.addView(cbNull);
 
@@ -720,17 +747,17 @@ public class DbEditorActivity extends Activity {
 
             TextView lbl = new TextView(this);
             lbl.setText(name + " (" + type + ")" + (isPk ? " PK" : ""));
-            lbl.setTextColor(isPk ? ACCENT : TEXT_SECONDARY);
+            lbl.setTextColor(isPk ? getColor(R.color.hsp_accent_green) : getColor(R.color.hsp_text_muted));
             lbl.setTextSize(12);
             lbl.setPadding(0, dp(6), 0, dp(2));
             layout.addView(lbl);
 
             EditText et = new EditText(this);
             et.setHint(isPk ? "(auto)" : "value");
-            et.setHintTextColor(0x55FFFFFF);
-            et.setTextColor(TEXT_PRIMARY);
+            et.setHintTextColor(getColor(R.color.hsp_text_faint));
+            et.setTextColor(getColor(R.color.hsp_text));
             et.setTextSize(13);
-            et.setBackgroundColor(BG_INPUT);
+            et.setBackgroundResource(R.drawable.bg_glass_input);
             et.setPadding(dp(8), dp(6), dp(8), dp(6));
             et.setSingleLine(true);
             layout.addView(et);
@@ -1028,7 +1055,7 @@ public class DbEditorActivity extends Activity {
         TextView tv = new TextView(this);
         tv.setText(text != null ? text : "");
         tv.setTextSize(11);
-        tv.setTextColor(TEXT_PRIMARY);
+        tv.setTextColor(getColor(R.color.hsp_text));
         tv.setPadding(dp(6), dp(4), dp(6), dp(4));
         tv.setMaxLines(2);
         tv.setSingleLine(false);
@@ -1041,10 +1068,34 @@ public class DbEditorActivity extends Activity {
         Button btn = new Button(this);
         btn.setText(text);
         btn.setTextSize(13);
-        btn.setTextColor(TEXT_PRIMARY);
-        btn.setBackgroundColor(bgColor);
+        btn.setTextColor(getColor(R.color.hsp_text));
         btn.setAllCaps(false);
         btn.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        GradientDrawable fill = new GradientDrawable();
+        fill.setShape(GradientDrawable.RECTANGLE);
+        fill.setCornerRadius(dp(14));
+        fill.setColor(bgColor);
+
+        GradientDrawable stroke = new GradientDrawable();
+        stroke.setShape(GradientDrawable.RECTANGLE);
+        stroke.setCornerRadius(dp(14));
+        stroke.setColor(0x00000000);
+        stroke.setStroke(dp(1), getColor(R.color.hsp_glass_stroke));
+
+        LayerDrawable base = new LayerDrawable(new Drawable[] { fill, stroke });
+        RippleDrawable ripple = new RippleDrawable(
+                ColorStateList.valueOf(getColor(R.color.hsp_ripple)),
+                base,
+                null
+        );
+        btn.setBackground(ripple);
+
+        try {
+            btn.setStateListAnimator(AnimatorInflater.loadStateListAnimator(this, R.xml.press_scale));
+        } catch (Exception ignored) {
+        }
+
         return btn;
     }
 
