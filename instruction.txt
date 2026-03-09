@@ -1,52 +1,26 @@
 ═══════════════════════════════════════════════════════════════
-  HSPatcher — UI Notes (Liquid Glass)
+  HSPatcher — instruction.txt
   Talk to me here! (safe to overwrite)
 ═══════════════════════════════════════════════════════════════
 
-Goal
-- Apply a liquid-glass (glassmorphism) look across the app while preserving the legacy “mini icon/emoji” vibe and the meaning of button colors.
+Current task
+- Build a Java-only (no XML layout) file Find/Replace tool with:
+  - Open file
+  - Whole-word search
+  - Regex/pattern search
+  - Replace / Replace All
+  - Save / Save As
 
-What’s already done (this workspace)
-- New design resources: colors + dimens + modern drawables + press-scale animator.
-- Main layout switched to resource-driven styling + cleaner hierarchy.
-- MainActivity: smoother batched log auto-scroll + animated progress updates + system bar coloring.
-- MainActivity now uses NoActionBar theme.
+How to use (device)
+- Open the app drawer entry: "Find/Replace"
+- Tap OPEN → choose a text file
+- Enter Search (+ optional Whole word / Regex)
+- Use FIND NEXT / REPLACE / REPLACE ALL
+- Use SAVE (write to same URI) or SAVE AS
 
-Liquid glass (new)
-- Added glass tokens in `res/values/colors.xml` (`hsp_glass_*`).
-- Added glass drawables: `bg_glass_root`, `bg_glass_input`.
-- Converted core surfaces to glass: `bg_card`, `bg_log`, `bg_chip`.
-- Activities updated:
-  - MainActivity root background uses `bg_glass_root`.
-  - AppListActivity uses glass root + glass inputs + glass cards (rows).
-  - ApkSignerActivity uses glass root + glass inputs + glass log + glass ripple buttons.
-  - DbEditorActivity uses glass root + glass inputs + glass log + glassy table rows + ripple buttons.
+Notes
+- All UI is constructed in Java code (no layout XML added).
+- Saving writes UTF-8.
 
-Patch entertainment (new)
-- While patching runs, the header/progress area animates (float/wiggle/pulse) and the progress text shows a spinner + dots + fun status flair.
-- Animations auto-cancel on success/failure and also stop onPause (restart onResume if patch is still running).
-
-Build status
-- `HSPatcher/build.ps1` builds successfully.
-
-What to test next (device)
-- Install the freshly built `HSPatcher.apk` and verify:
-  1) Log scrolling feels smooth (no jumpy fullScroll)
-  2) Progress bar animates between steps
-  3) Buttons show ripple + press-scale
-  4) Status/nav bars stay dark (no light icons)
-  5) AppList/Signer/DB Editor all have glass backgrounds + readable text
-  6) Table scrolling/row taps still work in DB Editor
-
-Notes / questions for you
-- If you want the header centered again (like older UI), say so.
-- If you want the main CTA wording to keep emojis, say so.
-
-Branch workflow
-- If you want me to enforce “never edit main”, tell me the branch name you want (I didn’t create a branch automatically).
-
-Current work branch
+Branch
 - patch-entertainment
-
-
-please create any branch that fits you buddy but not main ill merged_fields
