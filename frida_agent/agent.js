@@ -1377,6 +1377,94 @@ Java.performNow(function() {
             }
         }
 
+        // =====================================================
+        // 5b. WEBSOCKET KILL SWITCH
+        //     Completely blocks all WebSocket connections when enabled.
+        //     Toggled via Debug Panel switch, persisted via prefs.
+        // =====================================================
+        var websocketKillEnabled = false;
+        var wsKillTag = 'HSPatch-WSKill';
+
+        function loadWebsocketKillPref() {
+            try {
+                var ctxWS = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctxWS === null) return;
+                var prefsWS = ctxWS.getSharedPreferences(
+                    Java.use('java.lang.String').$new('hspatch_config'), 0);
+                websocketKillEnabled = prefsWS.getBoolean(
+                    Java.use('java.lang.String').$new('websocket_kill'), false);
+                Log.i(wsKillTag, '[WS-KILL] Pref loaded: ' + (websocketKillEnabled ? 'ON' : 'OFF'));
+            } catch (eWS) {
+                // Keep default false on errors
+            }
+        }
+        loadWebsocketKillPref();
+
+        // Hook OkHttp3 newWebSocket — the primary WebSocket creation API
+        try {
+            var OkHttpClient_WS = Java.use('okhttp3.OkHttpClient');
+            var _okNewWS = OkHttpClient_WS.newWebSocket.overload('okhttp3.Request', 'okhttp3.WebSocketListener');
+            _okNewWS.implementation = function(request, listener) {
+                loadWebsocketKillPref();
+                if (websocketKillEnabled) {
+                    var url = request.url().toString();
+                    Log.i(wsKillTag, '[WS-KILL] BLOCKED OkHttp3 WebSocket: ' + url);
+                    // Call listener.onFailure with an IOException to cleanly notify the caller
+                    try {
+                        var IOException = Java.use('java.io.IOException');
+                        var failEx = IOException.$new('HSPatch: WebSocket killed by user toggle');
+                        var Response_WS = Java.use('okhttp3.Response');
+                        listener.onFailure(Java.cast(Java.use('java.lang.Object').$new(), Java.use('okhttp3.WebSocket')), failEx, null);
+                    } catch(eFail) {
+                        // If onFailure fails, just log it
+                        Log.d(wsKillTag, '[WS-KILL] onFailure callback error (non-critical): ' + eFail);
+                    }
+                    return null;
+                }
+                return _okNewWS.call(this, request, listener);
+            };
+            Log.i(wsKillTag, '[+] OkHttp3 newWebSocket hooked');
+        } catch (e) {
+            Log.d(wsKillTag, '[-] OkHttp3 newWebSocket hook: ' + e);
+        }
+
+        // Hook RealWebSocket.connect — catches internal WebSocket initiation
+        try {
+            var RealWebSocket = Java.use('okhttp3.internal.ws.RealWebSocket');
+            var _rwsConnect = RealWebSocket.connect.overload('okhttp3.OkHttpClient');
+            _rwsConnect.implementation = function(client) {
+                loadWebsocketKillPref();
+                if (websocketKillEnabled) {
+                    Log.i(wsKillTag, '[WS-KILL] BLOCKED RealWebSocket.connect');
+                    return; // Simply don't connect
+                }
+                return _rwsConnect.call(this, client);
+            };
+            Log.i(wsKillTag, '[+] RealWebSocket.connect hooked');
+        } catch (e) {
+            Log.d(wsKillTag, '[-] RealWebSocket.connect hook: ' + e);
+        }
+
+        // Hook java.net WebSocket (JSR 356 / Tyrus)
+        try {
+            var WebSocketContainer = Java.use('javax.websocket.ContainerProvider');
+            var _getContainer = WebSocketContainer.getWebSocketContainer;
+            _getContainer.implementation = function() {
+                loadWebsocketKillPref();
+                if (websocketKillEnabled) {
+                    Log.i(wsKillTag, '[WS-KILL] BLOCKED WebSocketContainer creation');
+                    throw Java.use('java.lang.RuntimeException').$new('HSPatch: WebSocket killed by user toggle');
+                }
+                return _getContainer.call(this);
+            };
+            Log.i(wsKillTag, '[+] javax.websocket hooked');
+        } catch (e) {
+            // javax.websocket may not be present — that's fine
+            Log.d(wsKillTag, '[-] javax.websocket hook: ' + e);
+        }
+
+        Log.i(wsKillTag, '[*] WebSocket kill switch installed (state: ' + (websocketKillEnabled ? 'ON' : 'OFF') + ')');
+
         // Separate domain-only rules from path rules for smarter matching
         // Domain rules: no '/' → apply to DNS + URL hooks
         // Path rules: contain '/' → apply to URL hooks only (not DNS)

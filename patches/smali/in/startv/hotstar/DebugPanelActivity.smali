@@ -1089,6 +1089,47 @@
     invoke-virtual {v10, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
     invoke-virtual {v1, v10}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    # --- WebSocket Kill Toggle (Switch) ---
+    new-instance v2, Landroid/widget/LinearLayout;
+    invoke-direct {v2, p0}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V
+    const/4 v3, 0x0
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setOrientation(I)V
+    const/16 v3, 0x10
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setGravity(I)V
+    const/16 v3, 0x8
+    const/16 v4, 0xc
+    invoke-virtual {v2, v3, v4, v3, v4}, Landroid/view/View;->setPadding(IIII)V
+
+    new-instance v3, Landroid/widget/TextView;
+    invoke-direct {v3, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    const-string v4, "\ud83d\udd0c Kill WebSockets"
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const/high16 v4, 0x41600000    # 14.0f
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextSize(F)V
+    const/4 v4, -0x1
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextColor(I)V
+
+    new-instance v4, Landroid/widget/LinearLayout$LayoutParams;
+    const/4 v5, 0x0
+    const/4 v6, -0x2
+    const/high16 v7, 0x3f800000    # 1.0f weight
+    invoke-direct {v4, v5, v6, v7}, Landroid/widget/LinearLayout$LayoutParams;-><init>(IIF)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    new-instance v3, Landroid/widget/Switch;
+    invoke-direct {v3, p0}, Landroid/widget/Switch;-><init>(Landroid/content/Context;)V
+    sget-boolean v4, Lin/startv/hotstar/HSPatchConfig;->websocketKillEnabled:Z
+    invoke-virtual {v3, v4}, Landroid/widget/CompoundButton;->setChecked(Z)V
+
+    new-instance v4, Lin/startv/hotstar/DebugPanelActivity$WebSocketKillToggleListener;
+    invoke-direct {v4, p0}, Lin/startv/hotstar/DebugPanelActivity$WebSocketKillToggleListener;-><init>(Lin/startv/hotstar/DebugPanelActivity;)V
+    invoke-virtual {v3, v4}, Landroid/widget/CompoundButton;->setOnCheckedChangeListener(Landroid/widget/CompoundButton$OnCheckedChangeListener;)V
+
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+    invoke-virtual {v1, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
     # ============================================================
     const-string v7, "\ud83d\udcdd  Quick Log Output"
     invoke-direct {p0, v7}, Lin/startv/hotstar/DebugPanelActivity;->createSectionHeader(Ljava/lang/String;)Landroid/widget/TextView;
