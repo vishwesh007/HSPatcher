@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <layer-list>
+            <item>
+                <shape>
+                    <solid android:color="#33202642" />
+                    <corners android:radius="@dimen/hsp_radius_md" />
+                    <stroke android:width="1dp" android:color="@color/hsp_glass_disabled" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+
+    <!-- Pressed/held: show backup accent -->
+    <item android:state_pressed="true">
+        <ripple android:color="@color/hsp_ripple">
+            <item>
+                <layer-list>
+                    <item>
+                        <shape>
+                            <solid android:color="@color/hsp_legacy_backup" />
+                            <corners android:radius="@dimen/hsp_radius_md" />
+                            <stroke android:width="1dp" android:color="@color/hsp_glass_stroke" />
+                        </shape>
+                    </item>
+                    <item>
+                        <shape>
+                            <corners android:radius="@dimen/hsp_radius_md" />
+                            <gradient
+                                android:angle="270"
+                                android:startColor="@color/hsp_glass_gloss_start"
+                                android:endColor="@color/hsp_glass_gloss_end" />
+                        </shape>
+                    </item>
+                </layer-list>
+            </item>
+        </ripple>
+    </item>
+
+    <!-- Default: stay dark glass -->
+    <item>
+        <ripple android:color="@color/hsp_ripple">
+            <item>
+                <layer-list>
+                    <item>
+                        <shape>
+                            <solid android:color="@color/hsp_glass_fill" />
+                            <corners android:radius="@dimen/hsp_radius_md" />
+                            <stroke android:width="1dp" android:color="@color/hsp_glass_stroke" />
+                        </shape>
+                    </item>
+                    <item>
+                        <shape>
+                            <corners android:radius="@dimen/hsp_radius_md" />
+                            <gradient
+                                android:angle="270"
+                                android:startColor="@color/hsp_glass_gloss_start"
+                                android:endColor="@color/hsp_glass_gloss_end" />
+                        </shape>
+                    </item>
+                </layer-list>
+            </item>
+        </ripple>
+    </item>
+</selector>

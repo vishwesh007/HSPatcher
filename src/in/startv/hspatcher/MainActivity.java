@@ -7,6 +7,12 @@ import android.content.Intent;
 import android.util.Log;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.animation.Animator;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
+import android.animation.PropertyValuesHolder;
+import android.view.animation.AccelerateDecelerateInterpolator;
+import android.view.animation.LinearInterpolator;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -24,6 +30,7 @@ import android.content.SharedPreferences;
 
 import java.io.*;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
 
@@ -45,6 +52,9 @@ public class MainActivity extends Activity {
     private ScrollView logScroll;
     private ProgressBar progressBar;
     private LinearLayout apkInfoPanel;
+    private View headerContainer;
+    private TextView titleText;
+    private TextView subtitleText;
 
     private File selectedApk;
     private File patchedApk;
@@ -57,11 +67,44 @@ public class MainActivity extends Activity {
     private boolean autoPatchAfterLoad = false;
     private String selectedApkPatchedVersion = null; // non-null if APK is already patched
 
+    private boolean pendingLogAutoScroll = false;
+    private final Runnable logAutoScrollRunnable = new Runnable() {
+        @Override
+        public void run() {
+            pendingLogAutoScroll = false;
+            if (logScroll == null || logOutput == null) return;
+
+            int contentHeight = logOutput.getHeight();
+            int containerHeight = logScroll.getHeight();
+            int targetY = Math.max(0, contentHeight - containerHeight);
+            logScroll.smoothScrollTo(0, targetY);
+        }
+    };
+
+    private final Handler entertainmentHandler = new Handler(Looper.getMainLooper());
+    private boolean patchEntertainmentRunning = false;
+    private int entertainmentTick = 0;
+    private int lastProgressPct = 0;
+    private String lastProgressStep = "";
+    private AnimatorSet patchAnimatorSet;
+
+    private final Runnable patchEntertainmentRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!patchEntertainmentRunning) return;
+            entertainmentTick++;
+            renderProgressText();
+            entertainmentHandler.postDelayed(this, 420);
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         mainHandler = new Handler(Looper.getMainLooper());
+
+        applyModernSystemUi();
 
         btnSelect = findViewById(R.id.btn_select);
         btnPatch = findViewById(R.id.btn_patch);
@@ -76,6 +119,9 @@ public class MainActivity extends Activity {
         progressBar = findViewById(R.id.progress_bar);
         apkInfoPanel = findViewById(R.id.apk_info_panel);
         versionText = findViewById(R.id.version_text);
+        headerContainer = findViewById(R.id.header_container);
+        titleText = findViewById(R.id.title_text);
+        subtitleText = findViewById(R.id.subtitle_text);
 
         // Display app version
         try {
@@ -116,6 +162,21 @@ public class MainActivity extends Activity {
                 log("📂 Auto-loading APK from intent: " + intentPath);
                 autoLoadApk(f);
             }
+        }
+    }
+
+    private void applyModernSystemUi() {
+        try {
+            getWindow().setStatusBarColor(getColor(R.color.hsp_bg));
+            getWindow().setNavigationBarColor(getColor(R.color.hsp_bg));
+
+            View decorView = getWindow().getDecorView();
+            int flags = decorView.getSystemUiVisibility();
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decorView.setSystemUiVisibility(flags);
+        } catch (Throwable ignored) {
+            // Best-effort only.
         }
     }
 
@@ -242,6 +303,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (isPatching) {
+            startPatchEntertainment();
+        } else {
+            stopPatchEntertainment();
+        }
         // Fallback: detect uninstall completion when onActivityResult doesn't fire
         if (pendingInstallAfterUninstall && targetPackageName != null) {
             mainHandler.postDelayed(() -> {
@@ -256,6 +322,183 @@ public class MainActivity extends Activity {
                 }
             }, 500);
         }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // Avoid animating in background; patch thread continues regardless.
+        stopPatchEntertainment();
+    }
+
+    @Override
+    protected void onDestroy() {
+        stopPatchEntertainment();
+        super.onDestroy();
+    }
+
+    private void startPatchEntertainment() {
+        if (patchEntertainmentRunning) return;
+        patchEntertainmentRunning = true;
+        entertainmentTick = 0;
+
+        // Ensure some sane defaults
+        if (headerContainer != null) {
+            headerContainer.setPivotX(headerContainer.getWidth() * 0.5f);
+            headerContainer.setPivotY(headerContainer.getHeight() * 0.5f);
+        }
+        if (titleText != null) {
+            titleText.setPivotX(titleText.getWidth() * 0.5f);
+            titleText.setPivotY(titleText.getHeight() * 0.5f);
+        }
+        if (versionText != null) {
+            versionText.setPivotX(versionText.getWidth() * 0.5f);
+            versionText.setPivotY(versionText.getHeight() * 0.5f);
+        }
+        if (progressBar != null) {
+            progressBar.setPivotY(progressBar.getHeight() * 0.5f);
+        }
+
+        // Build a small "show" using lightweight property animations.
+        // Keep it subtle to avoid jank on low-end devices.
+        try {
+            ArrayList<Animator> anims = new ArrayList<>();
+
+            ObjectAnimator headerFloat = null;
+            if (headerContainer != null) {
+                headerFloat = ObjectAnimator.ofFloat(headerContainer, "translationY", 0f, -6f, 0f);
+                headerFloat.setDuration(1800);
+                headerFloat.setRepeatCount(ObjectAnimator.INFINITE);
+                headerFloat.setInterpolator(new AccelerateDecelerateInterpolator());
+                anims.add(headerFloat);
+            }
+
+            ObjectAnimator titleWiggle = null;
+            if (titleText != null) {
+                PropertyValuesHolder rot = PropertyValuesHolder.ofFloat("rotation", -1.2f, 1.2f, -1.2f);
+                PropertyValuesHolder sx = PropertyValuesHolder.ofFloat("scaleX", 1.0f, 1.03f, 1.0f);
+                PropertyValuesHolder sy = PropertyValuesHolder.ofFloat("scaleY", 1.0f, 1.03f, 1.0f);
+                titleWiggle = ObjectAnimator.ofPropertyValuesHolder(titleText, rot, sx, sy);
+                titleWiggle.setDuration(1400);
+                titleWiggle.setRepeatCount(ObjectAnimator.INFINITE);
+                titleWiggle.setInterpolator(new AccelerateDecelerateInterpolator());
+                anims.add(titleWiggle);
+            }
+
+            ObjectAnimator subtitlePulse = null;
+            if (subtitleText != null) {
+                subtitlePulse = ObjectAnimator.ofFloat(subtitleText, "alpha", 0.75f, 1.0f, 0.75f);
+                subtitlePulse.setDuration(1600);
+                subtitlePulse.setRepeatCount(ObjectAnimator.INFINITE);
+                subtitlePulse.setInterpolator(new LinearInterpolator());
+                anims.add(subtitlePulse);
+            }
+
+            ObjectAnimator chipBreath = null;
+            if (versionText != null) {
+                PropertyValuesHolder csx = PropertyValuesHolder.ofFloat("scaleX", 1.0f, 1.05f, 1.0f);
+                PropertyValuesHolder csy = PropertyValuesHolder.ofFloat("scaleY", 1.0f, 1.05f, 1.0f);
+                chipBreath = ObjectAnimator.ofPropertyValuesHolder(versionText, csx, csy);
+                chipBreath.setDuration(1100);
+                chipBreath.setRepeatCount(ObjectAnimator.INFINITE);
+                chipBreath.setInterpolator(new AccelerateDecelerateInterpolator());
+                anims.add(chipBreath);
+            }
+
+            ObjectAnimator progressPulse = null;
+            if (progressBar != null) {
+                progressPulse = ObjectAnimator.ofFloat(progressBar, "scaleY", 1.0f, 1.12f, 1.0f);
+                progressPulse.setDuration(900);
+                progressPulse.setRepeatCount(ObjectAnimator.INFINITE);
+                progressPulse.setInterpolator(new AccelerateDecelerateInterpolator());
+                anims.add(progressPulse);
+            }
+
+            ObjectAnimator progressTextPulse = null;
+            if (progressText != null) {
+                progressTextPulse = ObjectAnimator.ofFloat(progressText, "alpha", 0.80f, 1.0f, 0.80f);
+                progressTextPulse.setDuration(700);
+                progressTextPulse.setRepeatCount(ObjectAnimator.INFINITE);
+                progressTextPulse.setInterpolator(new LinearInterpolator());
+                anims.add(progressTextPulse);
+            }
+
+            patchAnimatorSet = new AnimatorSet();
+            if (!anims.isEmpty()) {
+                patchAnimatorSet.playTogether(anims);
+                patchAnimatorSet.start();
+            }
+        } catch (Throwable ignored) {
+            // If any vendor ROM breaks animations, keep patching functional.
+        }
+
+        entertainmentHandler.removeCallbacks(patchEntertainmentRunnable);
+        entertainmentHandler.post(patchEntertainmentRunnable);
+    }
+
+    private void stopPatchEntertainment() {
+        patchEntertainmentRunning = false;
+        entertainmentHandler.removeCallbacks(patchEntertainmentRunnable);
+
+        if (patchAnimatorSet != null) {
+            try {
+                patchAnimatorSet.cancel();
+            } catch (Throwable ignored) {}
+            patchAnimatorSet = null;
+        }
+
+        // Reset transforms (avoid leaving the UI skewed)
+        if (headerContainer != null) {
+            headerContainer.setTranslationY(0f);
+        }
+        if (titleText != null) {
+            titleText.setRotation(0f);
+            titleText.setScaleX(1f);
+            titleText.setScaleY(1f);
+        }
+        if (subtitleText != null) {
+            subtitleText.setAlpha(1f);
+        }
+        if (versionText != null) {
+            versionText.setScaleX(1f);
+            versionText.setScaleY(1f);
+        }
+        if (progressBar != null) {
+            progressBar.setScaleY(1f);
+        }
+        if (progressText != null) {
+            progressText.setAlpha(1f);
+            renderProgressText();
+        }
+    }
+
+    private void renderProgressText() {
+        if (progressText == null) return;
+        if (progressText.getVisibility() != View.VISIBLE) return;
+
+        if (!patchEntertainmentRunning) {
+            String step = (lastProgressStep == null || lastProgressStep.isEmpty()) ? "Working" : lastProgressStep;
+            progressText.setText(step + " (" + lastProgressPct + "%)");
+            return;
+        }
+
+        String[] spinner = {"◐", "◓", "◑", "◒"};
+        String spin = spinner[Math.abs(entertainmentTick) % spinner.length];
+        int dotCount = Math.abs(entertainmentTick) % 4;
+        String dots = dotCount == 0 ? "" : (dotCount == 1 ? "." : (dotCount == 2 ? ".." : "..."));
+
+        String flair;
+        int pct = lastProgressPct;
+        if (pct < 15) flair = "Booting tools";
+        else if (pct < 35) flair = "Merging / unpacking";
+        else if (pct < 55) flair = "Rewriting internals";
+        else if (pct < 75) flair = "Injecting patches";
+        else if (pct < 92) flair = "Optimizing output";
+        else if (pct < 100) flair = "Zipalign + signing";
+        else flair = "Complete";
+
+        String step = (lastProgressStep == null || lastProgressStep.isEmpty()) ? "Working" : lastProgressStep;
+        progressText.setText(step + " (" + pct + "%)  " + spin + dots + "  " + flair);
     }
 
     @Override
@@ -534,6 +777,15 @@ public class MainActivity extends Activity {
         progressText.setVisibility(View.VISIBLE);
         logClear();
 
+        lastProgressPct = 0;
+        lastProgressStep = "Starting";
+        renderProgressText();
+        if (progressText != null) {
+            progressText.post(this::startPatchEntertainment);
+        } else {
+            startPatchEntertainment();
+        }
+
         log("⚡ HSPatcher v3.42 — Starting one-click patch");
         log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
@@ -706,6 +958,7 @@ public class MainActivity extends Activity {
                     btnInstall.setVisibility(View.VISIBLE);
                     btnUninstall.setVisibility(View.VISIBLE);
                     isPatching = false;
+                    stopPatchEntertainment();
                     btnSelect.setEnabled(true);
                     btnPatch.setEnabled(true);
                 });
@@ -730,6 +983,7 @@ public class MainActivity extends Activity {
                 }
                 mainHandler.post(() -> {
                     isPatching = false;
+                    stopPatchEntertainment();
                     btnSelect.setEnabled(true);
                     btnPatch.setEnabled(true);
                     progressBar.setVisibility(View.GONE);
@@ -1185,7 +1439,11 @@ public class MainActivity extends Activity {
         Log.d("HSPatcher", msg);
         mainHandler.post(() -> {
             logOutput.append(msg + "\n");
-            logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+            if (!pendingLogAutoScroll) {
+                pendingLogAutoScroll = true;
+                logScroll.removeCallbacks(logAutoScrollRunnable);
+                logScroll.post(logAutoScrollRunnable);
+            }
         });
     }
 
@@ -1195,8 +1453,14 @@ public class MainActivity extends Activity {
 
     private void updateProgress(int pct, String step) {
         mainHandler.post(() -> {
-            progressBar.setProgress(pct);
-            progressText.setText(step);
+            lastProgressPct = pct;
+            lastProgressStep = step;
+            if (Build.VERSION.SDK_INT >= 24) {
+                progressBar.setProgress(pct, true);
+            } else {
+                progressBar.setProgress(pct);
+            }
+            renderProgressText();
         });
     }
 
@@ -1218,12 +1482,12 @@ public class MainActivity extends Activity {
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             String name = prefs.getString(PREF_CERT_NAME, "CA cert");
             btnCert.setText("\u2705 " + name);
-            btnCert.setBackgroundColor(0xFF2E7D32); // dark green
-            btnCert.setTextColor(0xFFFFFFFF);
+            btnCert.setBackgroundResource(R.drawable.btn_success);
+            btnCert.setTextColor(getColor(R.color.hsp_text_dark));
         } else {
-            btnCert.setText("📜 CA CERT");
-            btnCert.setBackgroundColor(0xFF795548); // brown
-            btnCert.setTextColor(0xFFFFFFFF);
+            btnCert.setText("\uD83D\uDCDC CA CERT");
+            btnCert.setBackgroundResource(R.drawable.btn_primary_cert);
+            btnCert.setTextColor(getColor(R.color.hsp_text));
         }
     }
 

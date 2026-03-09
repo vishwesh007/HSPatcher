@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="hsp_bg">#FF0D1117</color>
+    <color name="hsp_surface">#FF151A21</color>
+    <color name="hsp_surface_alt">#FF0F141B</color>
+    <color name="hsp_border">#FF303640</color>
+
+    <color name="hsp_text">#FFFFFFFF</color>
+    <color name="hsp_text_muted">#B3FFFFFF</color>
+    <color name="hsp_text_faint">#80FFFFFF</color>
+    <color name="hsp_text_mono">#FFCBD5E1</color>
+
+    <color name="hsp_accent_green">#FF00E676</color>
+    <color name="hsp_accent_purple">#FF7C4DFF</color>
+    <color name="hsp_accent_teal">#FF00BCD4</color>
+    <color name="hsp_accent_amber">#FFFFC107</color>
+    <color name="hsp_accent_red">#FFFF5252</color>
+    <color name="hsp_accent_blue">#FF448AFF</color>
+    <color name="hsp_accent_indigo">#FF5C6BC0</color>
+
+    <!-- Legacy UI colors (keep existing color coding) -->
+    <color name="hsp_legacy_purple">#FF6200EA</color>
+    <color name="hsp_legacy_teal">#FF00796B</color>
+    <color name="hsp_legacy_amber">#FFFFAB00</color>
+    <color name="hsp_legacy_danger">#FFB00020</color>
+    <color name="hsp_legacy_success">#FF2E7D32</color>
+    <!-- Harmonized tool colors for consistent design -->
+    <color name="hsp_legacy_backup">#FF3F51B5</color>
+    <color name="hsp_legacy_signer">#FF2196F3</color>
+    <color name="hsp_legacy_cert">#FF795548</color>
+
+    <color name="hsp_ripple">#33FFFFFF</color>
+
+    <!-- Dark text for bright-colored buttons (green, amber, teal) -->
+    <color name="hsp_text_dark">#FF0B0F14</color>
+
+    <!-- Liquid-glass (glassmorphism) tokens -->
+    <color name="hsp_glass_fill">#1AFFFFFF</color>
+    <color name="hsp_glass_fill_strong">#26FFFFFF</color>
+    <color name="hsp_glass_stroke">#33FFFFFF</color>
+    <color name="hsp_glass_highlight">#40FFFFFF</color>
+    <color name="hsp_glass_shadow">#26000000</color>
+    <color name="hsp_glass_disabled">#14FFFFFF</color>
+    <color name="hsp_glass_gloss_start">#22FFFFFF</color>
+    <color name="hsp_glass_gloss_end">#00FFFFFF</color>
+</resources>

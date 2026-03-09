@@ -3,7 +3,13 @@ package in.startv.hspatcher;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.res.ColorStateList;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
+import android.animation.AnimatorInflater;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -57,7 +63,7 @@ public class ApkSignerActivity extends Activity {
 
     private void buildUI() {
         ScrollView root = new ScrollView(this);
-        root.setBackgroundColor(0xFF121212);
+        root.setBackgroundResource(R.drawable.bg_glass_root);
         root.setFillViewport(true);
 
         LinearLayout main = new LinearLayout(this);
@@ -68,7 +74,7 @@ public class ApkSignerActivity extends Activity {
         TextView header = new TextView(this);
         header.setText("🔐 APK Signer");
         header.setTextSize(28);
-        header.setTextColor(0xFF448AFF);
+        header.setTextColor(getColor(R.color.hsp_legacy_signer));
         header.setTypeface(null, android.graphics.Typeface.BOLD);
         header.setGravity(Gravity.CENTER);
         header.setPadding(0, dp(16), 0, dp(8));
@@ -77,7 +83,7 @@ public class ApkSignerActivity extends Activity {
         TextView sub = new TextView(this);
         sub.setText("Sign APKs with custom certificates (v1+v2+v3)");
         sub.setTextSize(13);
-        sub.setTextColor(0x99FFFFFF);
+        sub.setTextColor(getColor(R.color.hsp_text_muted));
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0, 0, 0, dp(16));
         main.addView(sub);
@@ -121,7 +127,7 @@ public class ApkSignerActivity extends Activity {
             new String[]{"2048", "4096"});
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinnerKeySize.setAdapter(adapter);
-        spinnerKeySize.setBackgroundColor(0xFF2A2A2A);
+        spinnerKeySize.setBackgroundResource(R.drawable.bg_glass_input);
         keySizeCol.addView(spinnerKeySize);
         row4.addView(keySizeCol);
         main.addView(row4);
@@ -141,11 +147,11 @@ public class ApkSignerActivity extends Activity {
         main.addView(sectionLabel("Keystore Management"));
         LinearLayout ksRow = hRow();
 
-        btnSaveKeystore = makeButton("💾 SAVE KEYSTORE", 0xFF00796B);
+        btnSaveKeystore = makeButton("💾 SAVE KEYSTORE", getColor(R.color.hsp_legacy_teal));
         btnSaveKeystore.setOnClickListener(v -> onSaveKeystore());
         ksRow.addView(btnSaveKeystore, new LinearLayout.LayoutParams(0, dp(44), 1));
 
-        btnLoadKeystore = makeButton("📂 LOAD KEYSTORE", 0xFF5C6BC0);
+        btnLoadKeystore = makeButton("📂 LOAD KEYSTORE", getColor(R.color.hsp_legacy_backup));
         btnLoadKeystore.setOnClickListener(v -> onLoadKeystore());
         ksRow.addView(btnLoadKeystore, new LinearLayout.LayoutParams(0, dp(44), 1));
         main.addView(ksRow);
@@ -156,18 +162,18 @@ public class ApkSignerActivity extends Activity {
         tvSelectedApk = new TextView(this);
         tvSelectedApk.setText("No APK selected");
         tvSelectedApk.setTextSize(14);
-        tvSelectedApk.setTextColor(0xCCCCCCCC);
+        tvSelectedApk.setTextColor(getColor(R.color.hsp_text_mono));
         tvSelectedApk.setPadding(dp(12), dp(8), dp(12), dp(8));
-        tvSelectedApk.setBackgroundColor(0xFF1E1E1E);
+        tvSelectedApk.setBackgroundResource(R.drawable.bg_card);
         main.addView(tvSelectedApk);
 
-        btnSelectApk = makeButton("📱 SELECT APK TO SIGN", 0xFF00E676);
+        btnSelectApk = makeButton("📱 SELECT APK TO SIGN", getColor(R.color.hsp_accent_green));
         btnSelectApk.setTextColor(0xFF000000);
         btnSelectApk.setOnClickListener(v -> onSelectApk());
         main.addView(btnSelectApk, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
-        btnSign = makeButton("🔐 SIGN APK", 0xFF6200EA);
+        btnSign = makeButton("🔐 SIGN APK", getColor(R.color.hsp_legacy_purple));
         btnSign.setEnabled(false);
         btnSign.setOnClickListener(v -> onSignClick());
         main.addView(btnSign, new LinearLayout.LayoutParams(
@@ -181,7 +187,7 @@ public class ApkSignerActivity extends Activity {
 
         // Log output
         logScroll = new ScrollView(this);
-        logScroll.setBackgroundColor(0xFF1A1A1A);
+        logScroll.setBackgroundResource(R.drawable.bg_log);
         logScroll.setPadding(dp(12), dp(8), dp(12), dp(8));
         logScroll.setLayoutParams(new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(200)));
@@ -189,13 +195,13 @@ public class ApkSignerActivity extends Activity {
         tvLog = new TextView(this);
         tvLog.setText("Ready. Configure certificate and select an APK.");
         tvLog.setTextSize(12);
-        tvLog.setTextColor(0xFFCCCCCC);
+        tvLog.setTextColor(getColor(R.color.hsp_text_mono));
         tvLog.setTypeface(android.graphics.Typeface.MONOSPACE);
         logScroll.addView(tvLog);
         main.addView(logScroll);
 
         // Back button
-        Button btnBack = makeButton("← BACK", 0xFF424242);
+        Button btnBack = makeButton("← BACK", getColor(R.color.hsp_surface));
         btnBack.setOnClickListener(v -> finish());
         main.addView(btnBack, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(44)));
@@ -605,16 +611,16 @@ public class ApkSignerActivity extends Activity {
         TextView lbl = new TextView(this);
         lbl.setText(label);
         lbl.setTextSize(12);
-        lbl.setTextColor(0x99FFFFFF);
+        lbl.setTextColor(getColor(R.color.hsp_text_muted));
         col.addView(lbl);
 
         EditText et = new EditText(this);
         et.setHint(hint);
         et.setText(hint);
         et.setTextSize(14);
-        et.setTextColor(0xFFFFFFFF);
-        et.setHintTextColor(0x66FFFFFF);
-        et.setBackgroundColor(0xFF2A2A2A);
+        et.setTextColor(getColor(R.color.hsp_text));
+        et.setHintTextColor(getColor(R.color.hsp_text_faint));
+        et.setBackgroundResource(R.drawable.bg_glass_input);
         et.setPadding(dp(8), dp(6), dp(8), dp(6));
         et.setSingleLine(true);
         col.addView(et);
@@ -626,10 +632,13 @@ public class ApkSignerActivity extends Activity {
     private Button makeButton(String text, int bgColor) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextColor(0xFFFFFFFF);
+        btn.setTextColor(getColor(R.color.hsp_text));
         btn.setTextSize(13);
         btn.setTypeface(null, android.graphics.Typeface.BOLD);
-        btn.setBackgroundColor(bgColor);
+        btn.setBackground(makeGlassButtonBackground(bgColor));
+        try {
+            btn.setStateListAnimator(AnimatorInflater.loadStateListAnimator(this, R.xml.press_scale));
+        } catch (Throwable ignored) {}
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
         lp.topMargin = dp(6);
@@ -637,12 +646,37 @@ public class ApkSignerActivity extends Activity {
         return btn;
     }
 
+    private Drawable makeGlassButtonBackground(int solidColor) {
+        float r = dp(14);
+
+        GradientDrawable base = new GradientDrawable();
+        base.setColor(solidColor);
+        base.setCornerRadius(r);
+        base.setStroke(dp(1), getColor(R.color.hsp_glass_stroke));
+
+        GradientDrawable gloss = new GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[]{getColor(R.color.hsp_glass_highlight), 0x00FFFFFF});
+        gloss.setCornerRadius(r);
+
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{base, gloss});
+
+        return new RippleDrawable(
+            ColorStateList.valueOf(getColor(R.color.hsp_ripple)),
+            layers,
+            null
+        );
+    }
+
     private CheckBox makeCheckbox(String text, boolean checked) {
         CheckBox cb = new CheckBox(this);
         cb.setText(text);
         cb.setChecked(checked);
         cb.setTextSize(13);
-        cb.setTextColor(0xFFFFFFFF);
+        cb.setTextColor(getColor(R.color.hsp_text));
+        try {
+            cb.setButtonTintList(ColorStateList.valueOf(getColor(R.color.hsp_accent_green)));
+        } catch (Throwable ignored) {}
         cb.setLayoutParams(new LinearLayout.LayoutParams(0,
             LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         return cb;
