@@ -863,7 +863,9 @@ Java.performNow(function() {
         var rewriteRules = [];
         var apiDumpEnabled = false;
         var trafficMonitorEnabled = true; // Toggled via in-app notification, persisted via flag file
+        var blockingNotificationEnabled = true; // Toggled via HostFilterActivity switch, persisted via prefs
         var toggleReceiverRegistered = false;
+        var refreshNotifReceiverRegistered = false;
         var NOTIF_ID = 19730;
         var NOTIF_CHANNEL = 'hspatch_block';
         var apiDumpMaxBytes = 10 * 1024 * 1024;
@@ -1171,6 +1173,21 @@ Java.performNow(function() {
             Log.w(netLogTag, '[TOGGLE] Could not read preferences: ' + ep);
         }
 
+        // Restore blocking notification visibility preference (default ON)
+        function loadBlockingNotificationPref() {
+            try {
+                var ctxN = Java.use('android.app.ActivityThread').currentApplication();
+                if (ctxN === null) return;
+                var prefsN = ctxN.getSharedPreferences(
+                    Java.use('java.lang.String').$new('hspatch_config'), 0);
+                blockingNotificationEnabled = prefsN.getBoolean(
+                    Java.use('java.lang.String').$new('blocking_notification'), true);
+            } catch (eN) {
+                // Keep default true on errors
+            }
+        }
+        loadBlockingNotificationPref();
+
         // =================== IN-APP BLOCKING TOGGLE (Notification) ===================
         function saveBlockingState(enabled) {
             try {
@@ -1192,6 +1209,18 @@ Java.performNow(function() {
                 var ctx = Java.use('android.app.ActivityThread').currentApplication();
                 if (ctx === null) return;
                 var context = Java.cast(ctx, Java.use('android.content.Context'));
+
+                // Reload preference (allows live toggling from HostFilterActivity)
+                try { loadBlockingNotificationPref(); } catch(ePref) {}
+
+                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
+                                   Java.use('android.app.NotificationManager'));
+
+                // If disabled, cancel existing notif and exit.
+                if (!blockingNotificationEnabled) {
+                    try { nm.cancel(NOTIF_ID); } catch(eCancel) {}
+                    return;
+                }
 
                 var Intent = Java.use('android.content.Intent');
                 var PendingIntent = Java.use('android.app.PendingIntent');
@@ -1225,9 +1254,6 @@ Java.performNow(function() {
                 builder.addAction(iconId,
                     Java.cast(Java.use('java.lang.String').$new(actionLabel), Java.use('java.lang.CharSequence')),
                     togglePi);
-
-                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
-                                   Java.use('android.app.NotificationManager'));
                 nm.notify(NOTIF_ID, builder.build());
             } catch(e) {
                 Log.e(netLogTag, '[TOGGLE] Notification error: ' + e);
@@ -1303,6 +1329,44 @@ Java.performNow(function() {
                         }
                     }
                     toggleReceiverRegistered = true;
+                }
+
+                // Receiver to refresh/cancel notification when preference changes
+                if (!refreshNotifReceiverRegistered) {
+                    try {
+                        var BroadcastReceiver2 = Java.use('android.content.BroadcastReceiver');
+                        var RefreshClass = Java.registerClass({
+                            name: 'hspatch.BlockNotifRefreshReceiver',
+                            superClass: BroadcastReceiver2,
+                            methods: {
+                                onReceive: [{
+                                    returnType: 'void',
+                                    argumentTypes: ['android.content.Context', 'android.content.Intent'],
+                                    implementation: function(c, i) {
+                                        try {
+                                            updateBlockingNotification();
+                                        } catch (eR) {
+                                            Log.e(netLogTag, '[TOGGLE] Refresh receiver error: ' + eR);
+                                        }
+                                    }
+                                }]
+                            }
+                        });
+
+                        var filter2 = Java.use('android.content.IntentFilter').$new(
+                            Java.use('java.lang.String').$new('hspatch.REFRESH_BLOCK_NOTIF'));
+                        var receiver2 = RefreshClass.$new();
+
+                        try {
+                            context.registerReceiver(receiver2, filter2, 4); // RECEIVER_NOT_EXPORTED
+                        } catch(eR0) {
+                            try { context.registerReceiver(receiver2, filter2); } catch(eR1) {}
+                        }
+
+                        refreshNotifReceiverRegistered = true;
+                    } catch(eRR) {
+                        Log.e(netLogTag, '[TOGGLE] Cannot register refresh receiver: ' + eRR);
+                    }
                 }
 
                 // Show initial notification

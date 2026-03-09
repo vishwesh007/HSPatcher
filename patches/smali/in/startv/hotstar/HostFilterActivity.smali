@@ -309,6 +309,49 @@
     invoke-virtual {v2, v4, v4, v4, v4}, Landroid/view/View;->setPadding(IIII)V
     invoke-virtual {v1, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
 
+    # --- Blocking Notification Toggle (Switch) ---
+    new-instance v2, Landroid/widget/LinearLayout;
+    invoke-direct {v2, v12}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V
+    const/4 v3, 0x0
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setOrientation(I)V
+    const/16 v3, 0x10
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->setGravity(I)V
+    const/16 v3, 0xc
+    int-to-float v4, v3
+    mul-float/2addr v4, v5
+    float-to-int v4, v4
+    invoke-virtual {v2, v4, v4, v4, v4}, Landroid/view/View;->setPadding(IIII)V
+    const v3, -0xebe6e1
+    invoke-virtual {v2, v3}, Landroid/view/View;->setBackgroundColor(I)V
+
+    new-instance v3, Landroid/widget/TextView;
+    invoke-direct {v3, v12}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    const-string v4, "\ud83d\udd14 Show Blocking Notification"
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const/high16 v4, 0x41500000
+    const/4 v6, 0x0
+    invoke-virtual {v3, v6, v4}, Landroid/widget/TextView;->setTextSize(IF)V
+    const v4, -0x1
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextColor(I)V
+    new-instance v4, Landroid/widget/LinearLayout$LayoutParams;
+    const/4 v6, 0x0
+    const/4 v7, -0x2
+    const/high16 v8, 0x3f800000
+    invoke-direct {v4, v6, v7, v8}, Landroid/widget/LinearLayout$LayoutParams;-><init>(IIF)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setLayoutParams(Landroid/view/ViewGroup$LayoutParams;)V
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    new-instance v3, Landroid/widget/Switch;
+    invoke-direct {v3, v12}, Landroid/widget/Switch;-><init>(Landroid/content/Context;)V
+    sget-boolean v4, Lin/startv/hotstar/HSPatchConfig;->blockingNotificationEnabled:Z
+    invoke-virtual {v3, v4}, Landroid/widget/Switch;->setChecked(Z)V
+    new-instance v4, Lin/startv/hotstar/HostFilterActivity$NotifToggleListener;
+    invoke-direct {v4, v12}, Lin/startv/hotstar/HostFilterActivity$NotifToggleListener;-><init>(Lin/startv/hotstar/HostFilterActivity;)V
+    invoke-virtual {v3, v4}, Landroid/widget/CompoundButton;->setOnCheckedChangeListener(Landroid/widget/CompoundButton$OnCheckedChangeListener;)V
+    invoke-virtual {v2, v3}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
+    invoke-virtual {v1, v2}, Landroid/widget/LinearLayout;->addView(Landroid/view/View;)V
+
     # HOST LIST CONTAINER (inside a ScrollView)
     new-instance v2, Landroid/widget/LinearLayout;
     invoke-direct {v2, v12}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V
