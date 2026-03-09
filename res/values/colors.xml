@@ -22,8 +22,9 @@
     <color name="hsp_legacy_amber">#FFFFAB00</color>
     <color name="hsp_legacy_danger">#FFB00020</color>
     <color name="hsp_legacy_success">#FF2E7D32</color>
-    <color name="hsp_legacy_backup">#FF5C6BC0</color>
-    <color name="hsp_legacy_signer">#FF448AFF</color>
+    <!-- Harmonized tool colors for consistent design -->
+    <color name="hsp_legacy_backup">#FF3F51B5</color>
+    <color name="hsp_legacy_signer">#FF2196F3</color>
     <color name="hsp_legacy_cert">#FF795548</color>
 
     <color name="hsp_ripple">#33FFFFFF</color>
