@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.44
+ * HSPatch Universal Frida Script v3.50
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -11,6 +11,7 @@ import Java from "frida-java-bridge";
  * - Network Traffic Monitoring, Blocking & Modification
  * - URL Preparation-Time Content Blocker (URL.$init, URI.create, Uri.parse,
  *   HttpUrl.parse/get, Retrofit.baseUrl, OkHttp3, Cronet, WebView, DNS)
+ * - WebSocket Kill Switch (toggle via Debug Panel)
  *
  * NOTE: Java.performNow() is used for Android 16+ compatibility.
  * Java bridge imported via frida-java-bridge for Frida 17+ support.
@@ -29,8 +30,36 @@ Java.performNow(function() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.44              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.50              [#]');
         console.log('======================================================');
+
+        // =====================================================
+        // CACHED CLASS REFERENCES (performance optimization)
+        // Java.use() does ART class resolution on every call.
+        // Caching eliminates microseconds of overhead per lookup
+        // in hot-path functions called 100s of times/sec.
+        // =====================================================
+        var _classCache = {};
+        function _cls(name) {
+            if (!_classCache[name]) _classCache[name] = Java.use(name);
+            return _classCache[name];
+        }
+
+        // Cached app context (lazy-init, survives app lifetime)
+        var _appCtx = null;
+        function _getCtx() {
+            if (_appCtx === null) {
+                try { _appCtx = _cls('android.app.ActivityThread').currentApplication(); } catch(e) {}
+            }
+            return _appCtx;
+        }
+
+        // Pre-cached Java strings for SharedPreferences keys (avoid allocation per read)
+        var _jStr = {};
+        function _jstr(s) {
+            if (!_jStr[s]) _jStr[s] = Java.use('java.lang.String').$new(s);
+            return _jStr[s];
+        }
 
 
         // =====================================================
@@ -879,27 +908,27 @@ Java.performNow(function() {
 
         function getInternalFilePath(fileName) {
             try {
-                var HSConfig = Java.use('in.startv.hotstar.HSPatchConfig');
-                return HSConfig.getFilePath(fileName);
+                return _cls('in.startv.hotstar.HSPatchConfig').getFilePath(fileName);
             } catch (e) { }
             try {
-                var ctx2 = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx2 = _getCtx();
                 if (ctx2 !== null) return ctx2.getFilesDir().getAbsolutePath() + '/' + fileName;
             } catch (e2) { }
             return null;
         }
 
+        // Cached SimpleDateFormat for apiDumpWrite (avoid creating per-event)
+        var _apiDumpSdf = null;
         function apiDumpWrite(line) {
             if (!apiDumpEnabled) return;
             try {
                 var path = getInternalFilePath('api_dump.txt');
                 if (path === null) return;
-                var File2 = Java.use('java.io.File');
-                var f2 = File2.$new(path);
+                var f2 = _cls('java.io.File').$new(path);
                 if (f2.exists() && f2.length() > apiDumpMaxBytes) return;
-                var ts2 = Java.use('java.text.SimpleDateFormat').$new('HH:mm:ss.SSS')
-                    .format(Java.use('java.util.Date').$new());
-                var fw2 = Java.use('java.io.FileWriter').$new(path, true);
+                if (_apiDumpSdf === null) _apiDumpSdf = _cls('java.text.SimpleDateFormat').$new('HH:mm:ss.SSS');
+                var ts2 = _apiDumpSdf.format(_cls('java.util.Date').$new());
+                var fw2 = _cls('java.io.FileWriter').$new(path, true);
                 fw2.write(ts2 + ' ' + line + '\n');
                 fw2.flush();
                 fw2.close();
@@ -911,12 +940,9 @@ Java.performNow(function() {
             try {
                 var path = getInternalFilePath('host_rules.txt');
                 if (path === null) return;
-                var File = Java.use('java.io.File');
-                var f = File.$new(path);
+                var f = _cls('java.io.File').$new(path);
                 if (!f.exists()) { hostRulesLoaded = true; return; }
-                var BufferedReader = Java.use('java.io.BufferedReader');
-                var FileReader = Java.use('java.io.FileReader');
-                var reader = BufferedReader.$new(FileReader.$new(path));
+                var reader = _cls('java.io.BufferedReader').$new(_cls('java.io.FileReader').$new(path));
                 var line;
                 var count = 0;
                 while ((line = reader.readLine()) !== null) {
@@ -952,15 +978,15 @@ Java.performNow(function() {
                     return;
                 }
                 Log.i(netLogTag, '[HOSTS] Saving ' + Object.keys(discoveredHosts).length + ' hosts to ' + path);
-                var sb = Java.use('java.lang.StringBuilder').$new();
+                var sb = _cls('java.lang.StringBuilder').$new();
                 sb.append('# Host rules - format: hostname ALLOW/DENY\n');
                 sb.append('# Auto-generated by HSPatch host discovery\n');
                 var hosts = Object.keys(discoveredHosts).sort();
                 for (var i = 0; i < hosts.length; i++) {
                     sb.append(hosts[i] + ' ' + discoveredHosts[hosts[i]] + '\n');
                 }
-                var fw = Java.use('java.io.PrintWriter').$new(
-                    Java.use('java.io.File').$new(path)
+                var fw = _cls('java.io.PrintWriter').$new(
+                    _cls('java.io.File').$new(path)
                 );
                 fw.print(sb.toString());
                 fw.flush();
@@ -1026,13 +1052,11 @@ Java.performNow(function() {
 
         function loadFilterMode() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
-                var prefs = ctx.getSharedPreferences(
-                    Java.use('java.lang.String').$new('hspatch_config'), 0);
-                if (prefs.contains(Java.use('java.lang.String').$new('network_filter_mode'))) {
-                    networkFilterMode = prefs.getInt(
-                        Java.use('java.lang.String').$new('network_filter_mode'), 0);
+                var prefs = ctx.getSharedPreferences(_jstr('hspatch_config'), 0);
+                if (prefs.contains(_jstr('network_filter_mode'))) {
+                    networkFilterMode = prefs.getInt(_jstr('network_filter_mode'), 0);
                     Log.i(netLogTag, '[FILTER] Mode loaded: ' + (networkFilterMode === 0 ? 'Only Block' : 'Only Allow'));
                 }
             } catch(e) {
@@ -1046,7 +1070,7 @@ Java.performNow(function() {
 
         function loadBlockingRules() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
                 var pkgName = ctx.getPackageName();
                 var fileNames = ['blocking_' + pkgName + '.txt', 'blocking_rules.txt', 'blocking_hotstar.txt'];
@@ -1068,7 +1092,7 @@ Java.performNow(function() {
                 // Flag file is only a fallback for first-run or manual override
                 var flagFileDisabled = false;
                 try {
-                    var File0 = Java.use('java.io.File');
+                    var File0 = _cls('java.io.File');
                     for (var dti = 0; dti < dirs.length; dti++) {
                         if (File0.$new(dirs[dti] + '/api_dump_enabled.txt').exists()) { apiDumpEnabled = true; break; }
                     }
@@ -1081,9 +1105,9 @@ Java.performNow(function() {
                     }
                 } catch (eDump) { }
 
-                var File = Java.use('java.io.File');
-                var BufferedReader = Java.use('java.io.BufferedReader');
-                var FileReader = Java.use('java.io.FileReader');
+                var File = _cls('java.io.File');
+                var BufferedReader = _cls('java.io.BufferedReader');
+                var FileReader = _cls('java.io.FileReader');
                 var found = false;
                 for (var fi = 0; fi < fileNames.length && !found; fi++) {
                     for (var di = 0; di < dirs.length && !found; di++) {
@@ -1133,6 +1157,7 @@ Java.performNow(function() {
                     var ob = blockPatterns.length, or2 = rewriteRules.length, od = apiDumpEnabled;
                     blockPatterns = []; rewriteRules = [];
                     loadBlockingRules();
+                    _buildBlockIndex();
                     if (blockPatterns.length !== ob || rewriteRules.length !== or2 || apiDumpEnabled !== od) {
                         Log.i(netLogTag, '[RULES] Reloaded: ' + blockPatterns.length + ' block, ' + rewriteRules.length + ' rewrite, dump=' + (apiDumpEnabled?'ON':'OFF'));
                     }
@@ -1151,19 +1176,18 @@ Java.performNow(function() {
             }, 120000); // v3.42: 120s instead of 5s to reduce GC pressure
         }
         loadBlockingRules();
+        _buildBlockIndex();
         loadHostRules();
         loadFilterMode();
         scheduleRuleReload();
 
         // Restore toggle state from SharedPreferences (primary), flag file (fallback)
         try {
-            var ctx0 = Java.use('android.app.ActivityThread').currentApplication();
+            var ctx0 = _getCtx();
             if (ctx0 !== null) {
-                var prefs = ctx0.getSharedPreferences(
-                    Java.use('java.lang.String').$new('hspatch_config'), 0);
-                if (prefs.contains(Java.use('java.lang.String').$new('blocking_enabled'))) {
-                    trafficMonitorEnabled = prefs.getBoolean(
-                        Java.use('java.lang.String').$new('blocking_enabled'), true);
+                var prefs = ctx0.getSharedPreferences(_jstr('hspatch_config'), 0);
+                if (prefs.contains(_jstr('blocking_enabled'))) {
+                    trafficMonitorEnabled = prefs.getBoolean(_jstr('blocking_enabled'), true);
                     Log.i(netLogTag, '[TOGGLE] State restored from preferences: ' + (trafficMonitorEnabled ? 'ON' : 'OFF'));
                 } else {
                     Log.i(netLogTag, '[TOGGLE] No saved preference, using default (ON)');
@@ -1176,12 +1200,10 @@ Java.performNow(function() {
         // Restore blocking notification visibility preference (default ON)
         function loadBlockingNotificationPref() {
             try {
-                var ctxN = Java.use('android.app.ActivityThread').currentApplication();
+                var ctxN = _getCtx();
                 if (ctxN === null) return;
-                var prefsN = ctxN.getSharedPreferences(
-                    Java.use('java.lang.String').$new('hspatch_config'), 0);
-                blockingNotificationEnabled = prefsN.getBoolean(
-                    Java.use('java.lang.String').$new('blocking_notification'), true);
+                var prefsN = ctxN.getSharedPreferences(_jstr('hspatch_config'), 0);
+                blockingNotificationEnabled = prefsN.getBoolean(_jstr('blocking_notification'), true);
             } catch (eN) {
                 // Keep default true on errors
             }
@@ -1191,12 +1213,11 @@ Java.performNow(function() {
         // =================== IN-APP BLOCKING TOGGLE (Notification) ===================
         function saveBlockingState(enabled) {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
-                var prefs = ctx.getSharedPreferences(
-                    Java.use('java.lang.String').$new('hspatch_config'), 0);
+                var prefs = ctx.getSharedPreferences(_jstr('hspatch_config'), 0);
                 prefs.edit()
-                    .putBoolean(Java.use('java.lang.String').$new('blocking_enabled'), enabled)
+                    .putBoolean(_jstr('blocking_enabled'), enabled)
                     .apply();
                 Log.i(netLogTag, '[TOGGLE] State saved to preferences: ' + (enabled ? 'ON' : 'OFF'));
             } catch(e) {
@@ -1206,15 +1227,15 @@ Java.performNow(function() {
 
         function updateBlockingNotification() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
-                var context = Java.cast(ctx, Java.use('android.content.Context'));
+                var context = Java.cast(ctx, _cls('android.content.Context'));
 
                 // Reload preference (allows live toggling from HostFilterActivity)
                 try { loadBlockingNotificationPref(); } catch(ePref) {}
 
-                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
-                                   Java.use('android.app.NotificationManager'));
+                var nm = Java.cast(context.getSystemService(_jstr('notification')),
+                                   _cls('android.app.NotificationManager'));
 
                 // If disabled, cancel existing notif and exit.
                 if (!blockingNotificationEnabled) {
@@ -1222,15 +1243,15 @@ Java.performNow(function() {
                     return;
                 }
 
-                var Intent = Java.use('android.content.Intent');
-                var PendingIntent = Java.use('android.app.PendingIntent');
-                var toggleIntent = Intent.$new(Java.use('java.lang.String').$new('hspatch.TOGGLE_BLOCK'));
+                var Intent = _cls('android.content.Intent');
+                var PendingIntent = _cls('android.app.PendingIntent');
+                var toggleIntent = Intent.$new(_jstr('hspatch.TOGGLE_BLOCK'));
                 // FLAG_UPDATE_CURRENT | FLAG_IMMUTABLE
                 var piFlags = 0x08000000 | 0x04000000;
                 var togglePi = PendingIntent.getBroadcast(context, 0, toggleIntent, piFlags);
 
-                var Builder = Java.use('android.app.Notification$Builder');
-                var builder = Builder.$new(context, Java.use('java.lang.String').$new(NOTIF_CHANNEL));
+                var Builder = _cls('android.app.Notification$Builder');
+                var builder = Builder.$new(context, _jstr(NOTIF_CHANNEL));
 
                 var title = trafficMonitorEnabled
                     ? '\uD83D\uDEE1 Blocking: ON'
@@ -1245,14 +1266,14 @@ Java.performNow(function() {
                 try { iconId = ctx.getApplicationInfo().icon.value; } catch(e) {}
 
                 builder.setSmallIcon(iconId);
-                builder.setContentTitle(Java.use('java.lang.String').$new(title));
-                builder.setContentText(Java.use('java.lang.String').$new(text));
+                builder.setContentTitle(_jstr(title));
+                builder.setContentText(_jstr(text));
                 builder.setOngoing(true);
                 builder.setContentIntent(togglePi);
                 // Add explicit action button
                 var actionLabel = trafficMonitorEnabled ? '\u274C Turn OFF' : '\u2705 Turn ON';
                 builder.addAction(iconId,
-                    Java.cast(Java.use('java.lang.String').$new(actionLabel), Java.use('java.lang.CharSequence')),
+                    Java.cast(_jstr(actionLabel), _cls('java.lang.CharSequence')),
                     togglePi);
                 nm.notify(NOTIF_ID, builder.build());
             } catch(e) {
@@ -1262,23 +1283,23 @@ Java.performNow(function() {
 
         function setupBlockingToggleUI() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) {
                     Log.w(netLogTag, '[TOGGLE] No context yet, retrying in 3s...');
                     setTimeout(function() { Java.perform(function() { setupBlockingToggleUI(); }); }, 3000);
                     return;
                 }
-                var context = Java.cast(ctx, Java.use('android.content.Context'));
+                var context = Java.cast(ctx, _cls('android.content.Context'));
 
                 // Create notification channel (Android O+)
-                var NotificationChannel = Java.use('android.app.NotificationChannel');
-                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
-                                   Java.use('android.app.NotificationManager'));
+                var NotificationChannel = _cls('android.app.NotificationChannel');
+                var nm = Java.cast(context.getSystemService(_jstr('notification')),
+                                   _cls('android.app.NotificationManager'));
                 var ch = NotificationChannel.$new(
-                    Java.use('java.lang.String').$new(NOTIF_CHANNEL),
-                    Java.cast(Java.use('java.lang.String').$new('HSPatch Blocking Control'), Java.use('java.lang.CharSequence')),
+                    _jstr(NOTIF_CHANNEL),
+                    Java.cast(_jstr('HSPatch Blocking Control'), _cls('java.lang.CharSequence')),
                     2); // IMPORTANCE_LOW — no sound
-                ch.setDescription(Java.use('java.lang.String').$new('Toggle ad/tracker blocking on or off'));
+                ch.setDescription(_jstr('Toggle ad/tracker blocking on or off'));
                 nm.createNotificationChannel(ch);
 
                 // Register BroadcastReceiver for toggle action
@@ -1301,10 +1322,10 @@ Java.performNow(function() {
                                         updateBlockingNotification();
                                         // Show toast
                                         try {
-                                            var ctx2 = Java.use('android.app.ActivityThread').currentApplication();
-                                            var Toast = Java.use('android.widget.Toast');
+                                            var ctx2 = _getCtx();
+                                            var Toast = _cls('android.widget.Toast');
                                             var msg = trafficMonitorEnabled ? 'Blocking ON' : 'Blocking OFF';
-                                            Toast.makeText(ctx2, Java.cast(Java.use('java.lang.String').$new(msg), Java.use('java.lang.CharSequence')), 0).show();
+                                            Toast.makeText(ctx2, Java.cast(_jstr(msg), _cls('java.lang.CharSequence')), 0).show();
                                         } catch(et) {}
                                     } catch(e) {
                                         Log.e(netLogTag, '[TOGGLE] onReceive error: ' + e);
@@ -1314,8 +1335,8 @@ Java.performNow(function() {
                         }
                     });
 
-                    var filter = Java.use('android.content.IntentFilter').$new(
-                        Java.use('java.lang.String').$new('hspatch.TOGGLE_BLOCK'));
+                    var filter = _cls('android.content.IntentFilter').$new(
+                        _jstr('hspatch.TOGGLE_BLOCK'));
                     var receiver = ReceiverClass.$new();
 
                     // API 33+ requires RECEIVER_NOT_EXPORTED flag
@@ -1353,8 +1374,8 @@ Java.performNow(function() {
                             }
                         });
 
-                        var filter2 = Java.use('android.content.IntentFilter').$new(
-                            Java.use('java.lang.String').$new('hspatch.REFRESH_BLOCK_NOTIF'));
+                        var filter2 = _cls('android.content.IntentFilter').$new(
+                            _jstr('hspatch.REFRESH_BLOCK_NOTIF'));
                         var receiver2 = RefreshClass.$new();
 
                         try {
@@ -1387,12 +1408,10 @@ Java.performNow(function() {
 
         function loadWebsocketKillPref() {
             try {
-                var ctxWS = Java.use('android.app.ActivityThread').currentApplication();
+                var ctxWS = _getCtx();
                 if (ctxWS === null) return;
-                var prefsWS = ctxWS.getSharedPreferences(
-                    Java.use('java.lang.String').$new('hspatch_config'), 0);
-                websocketKillEnabled = prefsWS.getBoolean(
-                    Java.use('java.lang.String').$new('websocket_kill'), false);
+                var prefsWS = ctxWS.getSharedPreferences(_jstr('hspatch_config'), 0);
+                websocketKillEnabled = prefsWS.getBoolean(_jstr('websocket_kill'), false);
                 Log.i(wsKillTag, '[WS-KILL] Pref loaded: ' + (websocketKillEnabled ? 'ON' : 'OFF'));
             } catch (eWS) {
                 // Keep default false on errors
@@ -1411,10 +1430,10 @@ Java.performNow(function() {
                     Log.i(wsKillTag, '[WS-KILL] BLOCKED OkHttp3 WebSocket: ' + url);
                     // Call listener.onFailure with an IOException to cleanly notify the caller
                     try {
-                        var IOException = Java.use('java.io.IOException');
+                        var IOException = _cls('java.io.IOException');
                         var failEx = IOException.$new('HSPatch: WebSocket killed by user toggle');
-                        var Response_WS = Java.use('okhttp3.Response');
-                        listener.onFailure(Java.cast(Java.use('java.lang.Object').$new(), Java.use('okhttp3.WebSocket')), failEx, null);
+                        var Response_WS = _cls('okhttp3.Response');
+                        listener.onFailure(Java.cast(_cls('java.lang.Object').$new(), _cls('okhttp3.WebSocket')), failEx, null);
                     } catch(eFail) {
                         // If onFailure fails, just log it
                         Log.d(wsKillTag, '[WS-KILL] onFailure callback error (non-critical): ' + eFail);
@@ -1453,7 +1472,7 @@ Java.performNow(function() {
                 loadWebsocketKillPref();
                 if (websocketKillEnabled) {
                     Log.i(wsKillTag, '[WS-KILL] BLOCKED WebSocketContainer creation');
-                    throw Java.use('java.lang.RuntimeException').$new('HSPatch: WebSocket killed by user toggle');
+                    throw _cls('java.lang.RuntimeException').$new('HSPatch: WebSocket killed by user toggle');
                 }
                 return _getContainer.call(this);
             };
@@ -1465,50 +1484,85 @@ Java.performNow(function() {
 
         Log.i(wsKillTag, '[*] WebSocket kill switch installed (state: ' + (websocketKillEnabled ? 'ON' : 'OFF') + ')');
 
-        // Separate domain-only rules from path rules for smarter matching
-        // Domain rules: no '/' → apply to DNS + URL hooks
-        // Path rules: contain '/' → apply to URL hooks only (not DNS)
-        function isDomainRule(pattern) {
-            return pattern.indexOf('/') === -1;
+        // =====================================================
+        // OPTIMIZED BLOCKING ENGINE
+        // Domain-only patterns stored in hash for O(1) lookup.
+        // Path patterns kept in array for substring matching.
+        // =====================================================
+        var _domainBlockSet = {};    // exact domain patterns → O(1)
+        var _pathBlockPatterns = []; // patterns with '/' → substring scan
+
+        function _buildBlockIndex() {
+            _domainBlockSet = {};
+            _pathBlockPatterns = [];
+            for (var i = 0; i < blockPatterns.length; i++) {
+                var p = blockPatterns[i];
+                if (p.indexOf('/') === -1) {
+                    // Domain-only pattern: store lowercase for O(1) lookup
+                    _domainBlockSet[p.toLowerCase()] = p;
+                } else {
+                    _pathBlockPatterns.push(p);
+                }
+            }
+        }
+
+        // Extract host from URL (fast, no regex)
+        function _extractHost(url) {
+            var protoEnd = url.indexOf('://');
+            if (protoEnd === -1) return null;
+            var hostStart = protoEnd + 3;
+            var hostEnd = url.indexOf('/', hostStart);
+            if (hostEnd === -1) hostEnd = url.indexOf('?', hostStart);
+            if (hostEnd === -1) hostEnd = url.length;
+            var host = url.substring(hostStart, hostEnd);
+            var colonIdx = host.indexOf(':');
+            if (colonIdx !== -1) host = host.substring(0, colonIdx);
+            return host;
         }
 
         function shouldBlock(url) {
             if (!trafficMonitorEnabled) return null;
-            // Check traditional block patterns first
-            for (var i = 0; i < blockPatterns.length; i++) {
-                if (url.indexOf(blockPatterns[i]) !== -1) return blockPatterns[i];
+
+            // Fast path: check domain hash O(1)
+            var host = _extractHost(url);
+            if (host) {
+                var hostLower = host.toLowerCase();
+                // Check exact domain match in hash
+                if (_domainBlockSet[hostLower]) return _domainBlockSet[hostLower];
+                // Check domain substring match (e.g. pattern "ads.example" matches "cdn.ads.example.com")
+                var domainKeys = Object.keys(_domainBlockSet);
+                for (var d = 0; d < domainKeys.length; d++) {
+                    if (hostLower.indexOf(domainKeys[d]) !== -1) return _domainBlockSet[domainKeys[d]];
+                }
             }
-            // Check host-based rules
-            try {
-                var host = null;
-                var protoEnd = url.indexOf('://');
-                if (protoEnd !== -1) {
-                    var hostStart = protoEnd + 3;
-                    var hostEnd = url.indexOf('/', hostStart);
-                    if (hostEnd === -1) hostEnd = url.indexOf('?', hostStart);
-                    if (hostEnd === -1) hostEnd = url.length;
-                    host = url.substring(hostStart, hostEnd);
-                    // Strip port
-                    var colonIdx = host.indexOf(':');
-                    if (colonIdx !== -1) host = host.substring(0, colonIdx);
-                }
-                if (host) {
-                    var hostResult = shouldBlockByHostRules(host);
-                    if (hostResult) return hostResult;
-                }
-            } catch(e) {}
+
+            // Check path-containing patterns (substring match on full URL)
+            for (var i = 0; i < _pathBlockPatterns.length; i++) {
+                if (url.indexOf(_pathBlockPatterns[i]) !== -1) return _pathBlockPatterns[i];
+            }
+
+            // Check host-based rules (discoveredHosts ALLOW/DENY)
+            if (host) {
+                var hostResult = shouldBlockByHostRules(host);
+                if (hostResult) return hostResult;
+            }
             return null;
         }
 
         // DNS-safe version: only checks domain-level rules (no path patterns)
         function shouldBlockDNS(hostname) {
             if (!trafficMonitorEnabled) return null;
-            // Check traditional domain-level block patterns
-            for (var i = 0; i < blockPatterns.length; i++) {
-                if (isDomainRule(blockPatterns[i]) && hostname.indexOf(blockPatterns[i]) !== -1) {
-                    return blockPatterns[i];
-                }
+            var hostLower = hostname.toLowerCase();
+
+            // Fast path: exact domain hash match
+            if (_domainBlockSet[hostLower]) return _domainBlockSet[hostLower];
+
+            // Substring match on domain patterns only
+            var domainKeys = Object.keys(_domainBlockSet);
+            for (var d = 0; d < domainKeys.length; d++) {
+                if (hostLower.indexOf(domainKeys[d]) !== -1) return _domainBlockSet[domainKeys[d]];
             }
+
             // Check host-based rules
             var hostResult = shouldBlockByHostRules(hostname);
             if (hostResult) return hostResult;
@@ -1528,26 +1582,49 @@ Java.performNow(function() {
 
         function ensureNetworkLoggerInitialized() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
-                Java.use('in.startv.hotstar.NetworkLogger').init(ctx);
+                _cls('in.startv.hotstar.NetworkLogger').init(ctx);
             } catch (e) { }
         }
         function safeNetworkLoggerLog(line) {
-            try { ensureNetworkLoggerInitialized(); Java.use('in.startv.hotstar.NetworkLogger').log(line); } catch (e) { }
+            try { ensureNetworkLoggerInitialized(); _cls('in.startv.hotstar.NetworkLogger').log(line); } catch (e) { }
         }
         function logRewritten(source, method, before, after) {
             Log.i(netLogTag, '[REWRITE] [' + source + '] ' + method + ' ' + before + ' -> ' + after);
             safeNetworkLoggerLog('[REWRITE] [' + source + '] ' + method + ' ' + before + ' -> ' + after);
             apiDumpEvent(source, method, before + ' -> ' + after);
         }
+        // Batched blocked URL file writer (reduces sync I/O from per-event to periodic flush)
+        var _blockedUrlBuffer = [];
+        var _blockedUrlFlushTimer = null;
+
+        function _flushBlockedUrls() {
+            _blockedUrlFlushTimer = null;
+            if (_blockedUrlBuffer.length === 0) return;
+            var batch = _blockedUrlBuffer.splice(0);
+            Java.perform(function() {
+                try {
+                    var bp = getInternalFilePath('blocked_urls.txt');
+                    if (bp) {
+                        var fw = _cls('java.io.FileWriter').$new(bp, true);
+                        for (var i = 0; i < batch.length; i++) {
+                            fw.write(batch[i] + '\n');
+                        }
+                        fw.flush();
+                        fw.close();
+                    }
+                } catch(e2) {}
+            });
+        }
+
         function logBlocked(source, method, url, pattern) {
             Log.i(netLogTag, '[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
             safeNetworkLoggerLog('[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
-            try {
-                var bp = getInternalFilePath('blocked_urls.txt');
-                if (bp) { var fw = Java.use('java.io.FileWriter').$new(bp, true); fw.write(url + '\n'); fw.flush(); fw.close(); }
-            } catch(e2) {}
+            _blockedUrlBuffer.push(url);
+            if (_blockedUrlFlushTimer === null) {
+                _blockedUrlFlushTimer = setTimeout(_flushBlockedUrls, 3000);
+            }
             apiDumpEvent(source, method, 'BLOCK ' + url + ' (matched: ' + pattern + ')');
         }
 
@@ -1856,9 +1933,9 @@ Java.performNow(function() {
                 if (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) {
                     try {
                         var bm = shouldBlock(u);
-                        if (bm !== null) { logBlocked('URL', 'OPEN', u, bm); return _urlOpen0.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked')); }
+                        if (bm !== null) { logBlocked('URL', 'OPEN', u, bm); return _urlOpen0.call(_cls('java.net.URL').$new('http://127.0.0.1:1/blocked')); }
                         var rw = applyRewrites(u);
-                        if (rw.changed) { logRewritten('URL', 'OPEN', u, rw.url); return _urlOpen0.call(Java.use('java.net.URL').$new(rw.url)); }
+                        if (rw.changed) { logRewritten('URL', 'OPEN', u, rw.url); return _urlOpen0.call(_cls('java.net.URL').$new(rw.url)); }
                     } catch (hookErr) { Log.w(netLogTag, '[!] URL.openConnection hook err: ' + hookErr); }
                 }
                 return _urlOpen0.call(this);
@@ -1870,9 +1947,9 @@ Java.performNow(function() {
                     if (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) {
                         try {
                             var bm = shouldBlock(u);
-                            if (bm !== null) { logBlocked('URL', 'OPEN_PROXY', u, bm); return _urlOpenProxy.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked'), proxy); }
+                            if (bm !== null) { logBlocked('URL', 'OPEN_PROXY', u, bm); return _urlOpenProxy.call(_cls('java.net.URL').$new('http://127.0.0.1:1/blocked'), proxy); }
                             var rw = applyRewrites(u);
-                            if (rw.changed) { logRewritten('URL', 'OPEN_PROXY', u, rw.url); return _urlOpenProxy.call(Java.use('java.net.URL').$new(rw.url), proxy); }
+                            if (rw.changed) { logRewritten('URL', 'OPEN_PROXY', u, rw.url); return _urlOpenProxy.call(_cls('java.net.URL').$new(rw.url), proxy); }
                         } catch (hookErr) { Log.w(netLogTag, '[!] URL.openConnection(Proxy) hook err: ' + hookErr); }
                     }
                     return _urlOpenProxy.call(this, proxy);
@@ -1927,8 +2004,8 @@ Java.performNow(function() {
                 if (bm !== null) {
                     logBlocked('OkHttp3', method, url, bm);
                     // v3.44: null-safe blocked URL — parse() can return null for some OkHttp builds
-                    var _blockedHU = Java.use('okhttp3.HttpUrl').parse('http://127.0.0.1:1/blocked');
-                    if (_blockedHU === null) _blockedHU = Java.use('okhttp3.HttpUrl').parse('http://0.0.0.0/blocked');
+                    var _blockedHU = _cls('okhttp3.HttpUrl').parse('http://127.0.0.1:1/blocked');
+                    if (_blockedHU === null) _blockedHU = _cls('okhttp3.HttpUrl').parse('http://0.0.0.0/blocked');
                     if (_blockedHU !== null) {
                         var blockedReq = request.newBuilder().url(_blockedHU).build();
                         return _okNewCall.call(this, blockedReq);
@@ -1938,8 +2015,8 @@ Java.performNow(function() {
                 var rw = applyRewrites(url);
                 if (rw.changed) {
                     logRewritten('OkHttp3', method, url, rw.url);
-                    var newHttpUrl = Java.use('okhttp3.HttpUrl').parse(rw.url);
-                    if (newHttpUrl !== null) return _okNewCall.call(this, request.newBuilder().url(newHttpUrl).build());
+                    var newHttpUrl = _cls('okhttp3.HttpUrl').parse(rw.url);
+                if (newHttpUrl !== null) return _okNewCall.call(this, request.newBuilder().url(newHttpUrl).build());
                 }
                 return _okNewCall.call(this, request);
             };
@@ -2075,7 +2152,7 @@ Java.performNow(function() {
             _hucConnect.implementation = function() {
                 var u = this.getURL().toString();
                 var bm = shouldBlock(u);
-                if (bm !== null) { logBlocked('HttpConn', 'CONN', u, bm); throw Java.use('java.io.IOException').$new('HSPatch: blocked: ' + bm); }
+                if (bm !== null) { logBlocked('HttpConn', 'CONN', u, bm); throw _cls('java.io.IOException').$new('HSPatch: blocked: ' + bm); }
                 return _hucConnect.call(this);
             };
         } catch (err) { }
@@ -2092,7 +2169,7 @@ Java.performNow(function() {
                     var bm = shouldBlockDNS(h);
                     if (bm !== null) {
                         logBlocked('InetAddress', 'getByName', h, bm);
-                        throw Java.use('java.net.UnknownHostException').$new(h);
+                        throw _cls('java.net.UnknownHostException').$new(h);
                     }
                     var rw = applyRewrites(h);
                     if (rw.changed) { logRewritten('InetAddress','getByName',h,rw.url); return _inetGetByName.call(this, rw.url); }
@@ -2107,7 +2184,7 @@ Java.performNow(function() {
                         var bm = shouldBlockDNS(h);
                         if (bm !== null) {
                             logBlocked('InetAddress', 'getAllByName', h, bm);
-                            throw Java.use('java.net.UnknownHostException').$new(h);
+                            throw _cls('java.net.UnknownHostException').$new(h);
                         }
                         var rw = applyRewrites(h);
                         if (rw.changed) { logRewritten('InetAddress','getAllByName',h,rw.url); return _inetGetAll.call(this, rw.url); }
@@ -2160,15 +2237,15 @@ Java.performNow(function() {
                                 logBlocked('OkHttp-Interceptor', request.method(), url, bm);
                                 advBlockCount++;
                                 // Return empty 204 No Content response via Builder (stable API)
-                                var ResponseBuilder = Java.use('okhttp3.Response$Builder');
+                                var ResponseBuilder = _cls('okhttp3.Response$Builder');
                                 return ResponseBuilder.$new()
                                     .request(request)
                                     .protocol(Protocol.HTTP_1_1.value)
                                     .code(204)
-                                    .message(Java.use('java.lang.String').$new('Blocked by HSPatch'))
+                                    .message(_jstr('Blocked by HSPatch'))
                                     .body(ResponseBody.create(
                                         MediaType.parse('text/plain'),
-                                        Java.use('java.lang.String').$new('')
+                                        _jstr('')
                                     ))
                                     .build();
                             }
@@ -2206,7 +2283,7 @@ Java.performNow(function() {
                     if (bm !== null) {
                         logBlocked('RealCall', 'EXECUTE', url, bm);
                         advBlockCount++;
-                        throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + bm);
+                        throw _cls('java.io.IOException').$new('HSPatch: blocked by rule: ' + bm);
                     }
                     return _rcExecute.call(this);
                 };
@@ -2382,7 +2459,7 @@ Java.performNow(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.44: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.50: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2392,13 +2469,10 @@ Java.performNow(function() {
         Log.i(advBlockTag, '======================================================');
 
         // Count domain vs path rules for summary
-        var domainRuleCount = 0, pathRuleCount = 0;
-        for (var ri = 0; ri < blockPatterns.length; ri++) {
-            if (isDomainRule(blockPatterns[ri])) domainRuleCount++;
-            else pathRuleCount++;
-        }
+        var domainRuleCount = Object.keys(_domainBlockSet).length;
+        var pathRuleCount = _pathBlockPatterns.length;
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.44: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.50: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
