@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.52
+ * HSPatch Universal Frida Script v3.53
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -12,6 +12,7 @@ import Java from "frida-java-bridge";
  * - URL Preparation-Time Content Blocker (URL.$init, URI.create, Uri.parse,
  *   HttpUrl.parse/get, Retrofit.baseUrl, OkHttp3, Cronet, WebView, DNS)
  * - WebSocket Kill Switch (toggle via Debug Panel)
+ * - Frida Stealth (anti-detection: /proc/maps, threads, ports, files)
  *
  * NOTE: Uses performNow() on Android 16+ (ART already attached to thread),
  * falls back to Java.perform() on older versions (Android 10+) where ART
@@ -688,6 +689,331 @@ function _hspatchMain() {
         } catch (err) { }
 
         console.log('[*] Piracy/License/Root bypass hooks installed');
+
+
+        // =====================================================
+        // 3a. FRIDA STEALTH — Anti-Detection Bypass
+        //     Hides Frida gadget from apps that scan for it.
+        //     Detection vectors covered:
+        //       1. /proc/self/maps — strips lines containing frida/gadget
+        //       2. /proc/self/status — hides TracerPid
+        //       3. Thread enumeration — hides frida thread names
+        //       4. File existence checks — hides frida-related files
+        //       5. Port 27042 — hides frida-server default port
+        //       6. Native openat/open — intercepts /proc/self/maps reads
+        //     Ref: github.com/AeonLucid/frida-anti-detection patterns
+        // =====================================================
+        var _stealthTag = 'HSPatch-Stealth';
+        var _stealthCount = 0;
+
+        // --- Native hooks: hide frida from /proc/self/maps and /proc/self/status ---
+        try {
+            // Patterns that indicate frida presence in maps lines
+            var _fridaPatterns = ['frida', 'gadget', 'gum-js', 'gmain', 'linjector'];
+
+            var _isFridaLine = function(line) {
+                var lower = line.toLowerCase();
+                for (var i = 0; i < _fridaPatterns.length; i++) {
+                    if (lower.indexOf(_fridaPatterns[i]) !== -1) return true;
+                }
+                return false;
+            };
+
+            var _safeReadPath = function(p) {
+                try { return p.readUtf8String(); } catch(e2) { return null; }
+            };
+
+            // Use Process.getModuleByName for Frida gadget compatibility
+            var _libc = Process.getModuleByName('libc.so');
+
+            // Hook libc open/openat to track FDs for /proc/self/maps and /proc/self/status
+            var _mapsTrackedFds = {};
+
+            var _openPtr = _libc.findExportByName('open');
+            var _openatPtr = _libc.findExportByName('openat');
+            var _readPtr = _libc.findExportByName('read');
+            var _closePtr = _libc.findExportByName('close');
+
+            if (_openPtr) {
+                try {
+                    Interceptor.attach(_openPtr, {
+                        onEnter: function(args) {
+                            this._path = _safeReadPath(args[0]);
+                        },
+                        onLeave: function(retval) {
+                            var fd = retval.toInt32();
+                            if (fd > 0 && this._path) {
+                                if (this._path.indexOf('/proc/self/maps') !== -1 ||
+                                    this._path.indexOf('/proc/' + Process.id + '/maps') !== -1) {
+                                    _mapsTrackedFds[fd] = 'maps';
+                                } else if (this._path.indexOf('/proc/self/status') !== -1 ||
+                                           this._path.indexOf('/proc/' + Process.id + '/status') !== -1) {
+                                    _mapsTrackedFds[fd] = 'status';
+                                }
+                            }
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eOpen) {
+                    Log.w(_stealthTag, '[-] open() hook: ' + eOpen);
+                }
+            }
+
+            if (_openatPtr) {
+                try {
+                    Interceptor.attach(_openatPtr, {
+                        onEnter: function(args) {
+                            this._path = _safeReadPath(args[1]);
+                        },
+                        onLeave: function(retval) {
+                            var fd = retval.toInt32();
+                            if (fd > 0 && this._path) {
+                                if (this._path.indexOf('/proc/self/maps') !== -1 ||
+                                    this._path.indexOf('/proc/' + Process.id + '/maps') !== -1) {
+                                    _mapsTrackedFds[fd] = 'maps';
+                                } else if (this._path.indexOf('/proc/self/status') !== -1 ||
+                                           this._path.indexOf('/proc/' + Process.id + '/status') !== -1) {
+                                    _mapsTrackedFds[fd] = 'status';
+                                }
+                            }
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eOpenat) {
+                    Log.w(_stealthTag, '[-] openat() hook: ' + eOpenat);
+                }
+            }
+
+            // Hook read() to filter out frida-related lines from /proc/self/maps
+            // and spoof TracerPid in /proc/self/status
+            if (_readPtr) {
+                try {
+                    Interceptor.attach(_readPtr, {
+                        onEnter: function(args) {
+                            this._fd = args[0].toInt32();
+                            this._buf = args[1];
+                            this._size = args[2].toInt32();
+                        },
+                        onLeave: function(retval) {
+                            var fd = this._fd;
+                            var bytesRead = retval.toInt32();
+                            if (bytesRead <= 0 || !_mapsTrackedFds[fd]) return;
+
+                            try {
+                                var content = this._buf.readUtf8String(bytesRead);
+                                if (!content) return;
+
+                                if (_mapsTrackedFds[fd] === 'maps') {
+                                    var lines = content.split('\n');
+                                    var filtered = [];
+                                    var removed = 0;
+                                    for (var i = 0; i < lines.length; i++) {
+                                        if (!_isFridaLine(lines[i])) {
+                                            filtered.push(lines[i]);
+                                        } else {
+                                            removed++;
+                                        }
+                                    }
+                                    if (removed > 0) {
+                                        var clean = filtered.join('\n');
+                                        this._buf.writeUtf8String(clean);
+                                        retval.replace(clean.length);
+                                    }
+                                } else if (_mapsTrackedFds[fd] === 'status') {
+                                    var patched = content.replace(/TracerPid:\s*\d+/g, 'TracerPid:\t0');
+                                    if (patched !== content) {
+                                        this._buf.writeUtf8String(patched);
+                                        retval.replace(patched.length);
+                                    }
+                                }
+                            } catch (e) {
+                                // Ignore read errors (binary data, etc.)
+                            }
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eRead) {
+                    Log.w(_stealthTag, '[-] read() hook: ' + eRead);
+                }
+            }
+
+            // Track close() for cleanup
+            if (_closePtr) {
+                try {
+                    Interceptor.attach(_closePtr, {
+                        onEnter: function(args) {
+                            var fd = args[0].toInt32();
+                            if (_mapsTrackedFds[fd]) {
+                                delete _mapsTrackedFds[fd];
+                            }
+                        }
+                    });
+                } catch (eClose) {
+                    Log.w(_stealthTag, '[-] close() hook: ' + eClose);
+                }
+            }
+
+
+        } catch (eNativeStealth) {
+            Log.w(_stealthTag, '[-] Native stealth hooks failed: ' + eNativeStealth);
+        }
+
+        // --- Java-level: hide frida artifacts from File.exists(), file list, thread enum ---
+        try {
+            // Additional paths that indicate frida (beyond root paths already hooked)
+            var _fridaFileSet = {};
+            ['/data/local/tmp/frida-server', '/data/local/tmp/re.frida.server',
+             '/data/local/tmp/frida-server-arm64', '/data/local/tmp/frida-server-arm',
+             '/data/local/tmp/frida-agent', '/data/local/tmp/frida-gadget',
+             '/data/local/tmp/frida-helper'].forEach(function(p) { _fridaFileSet[p] = true; });
+
+            // Extend the existing File.exists() hook to also catch frida paths
+            // (the root path set is already hooked above in section 3)
+            // We hook File.exists() again — Frida merges hooks, so both fire
+            var FileS = Java.use('java.io.File');
+            var _origExistsS = FileS.exists;
+            FileS.exists.implementation = function() {
+                var path = this.getAbsolutePath();
+                if (_fridaFileSet[path]) {
+                    Log.d(_stealthTag, '[+] Hiding frida file: ' + path);
+                    return false;
+                }
+                // Also catch any path containing 'frida' in /data/local/tmp/
+                if (path.indexOf('/data/local/tmp/') === 0 && path.toLowerCase().indexOf('frida') !== -1) {
+                    return false;
+                }
+                return _origExistsS.call(this);
+            };
+            _stealthCount++;
+        } catch (eFileS) {
+            Log.w(_stealthTag, '[-] File.exists stealth hook: ' + eFileS);
+        }
+
+        // --- Hide frida thread names ---
+        try {
+            var Thread = Java.use('java.lang.Thread');
+            var _origGetName = Thread.getName;
+            var _fridaThreadNames = { 'gum-js-loop': true, 'gmain': true, 'gdbus': true,
+                                       'linjector': true, 'frida': true };
+            Thread.getName.implementation = function() {
+                var name = _origGetName.call(this);
+                if (name) {
+                    var lower = name.toLowerCase();
+                    for (var key in _fridaThreadNames) {
+                        if (lower.indexOf(key) !== -1) {
+                            return 'Thread-' + this.getId();
+                        }
+                    }
+                }
+                return name;
+            };
+            _stealthCount++;
+        } catch (eThread) {
+            Log.w(_stealthTag, '[-] Thread stealth hook: ' + eThread);
+        }
+
+        // --- Hide frida's default port (27042) from socket scans ---
+        try {
+            var InetSockAddr = Java.use('java.net.InetSocketAddress');
+            var _origISA = InetSockAddr.$init.overload('int');
+            _origISA.implementation = function(port) {
+                // Just let it through — we catch at connect level
+                return _origISA.call(this, port);
+            };
+
+            // ServerSocket / Socket.connect — block connections TO port 27042
+            var Socket = Java.use('java.net.Socket');
+            var _origConnect4 = Socket.connect.overload('java.net.SocketAddress', 'int');
+            _origConnect4.implementation = function(addr, timeout) {
+                try {
+                    var sa = Java.cast(addr, InetSockAddr);
+                    if (sa.getPort() === 27042) {
+                        Log.d(_stealthTag, '[+] Blocked connection to port 27042 (frida-server)');
+                        throw Java.use('java.net.ConnectException').$new('Connection refused');
+                    }
+                } catch (e) {
+                    if (('' + e).indexOf('Connection refused') !== -1) throw e;
+                }
+                return _origConnect4.call(this, addr, timeout);
+            };
+            _stealthCount++;
+        } catch (ePort) {
+            Log.w(_stealthTag, '[-] Port stealth hook: ' + ePort);
+        }
+
+        // --- Hide Frida from native stat/access checks ---
+        try {
+            if (!_libc) _libc = Process.getModuleByName('libc.so');
+            var _statPtr = _libc.findExportByName('stat');
+            var _accessPtr = _libc.findExportByName('access');
+
+            var _isFridaNativePath = function(path) {
+                if (!path) return false;
+                var lower = path.toLowerCase();
+                return (lower.indexOf('frida') !== -1 || lower.indexOf('gadget') !== -1) &&
+                       (lower.indexOf('/data/local/tmp/') !== -1 || lower.indexOf('/data/local/') !== -1);
+            }
+
+            if (_statPtr) {
+                try {
+                    Interceptor.attach(_statPtr, {
+                        onEnter: function(args) {
+                            try { var path = args[0].readUtf8String(); if (_isFridaNativePath(path)) this._hide = true; } catch(e) {}
+                        },
+                        onLeave: function(retval) {
+                            if (this._hide) retval.replace(-1);
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eStat) {
+                    Log.w(_stealthTag, '[-] stat() hook: ' + eStat);
+                }
+            }
+
+            if (_accessPtr) {
+                try {
+                    Interceptor.attach(_accessPtr, {
+                        onEnter: function(args) {
+                            try { var path = args[0].readUtf8String(); if (_isFridaNativePath(path)) this._hide = true; } catch(e) {}
+                        },
+                        onLeave: function(retval) {
+                            if (this._hide) retval.replace(-1);
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eAccess) {
+                    Log.w(_stealthTag, '[-] access() hook: ' + eAccess);
+                }
+            }
+
+        } catch (eStatStealth) {
+            Log.w(_stealthTag, '[-] Native stat/access stealth: ' + eStatStealth);
+        }
+
+        Log.i(_stealthTag, '[*] Frida stealth: ' + _stealthCount + ' hooks installed');
+        console.log('[*] Frida stealth: ' + _stealthCount + ' anti-detection hooks installed');
+
+        // Self-test: verify /proc/self/maps filtering works from within the process
+        try {
+            var BufferedReader = Java.use('java.io.BufferedReader');
+            var FileReader = Java.use('java.io.FileReader');
+            var br = BufferedReader.$new(FileReader.$new('/proc/self/maps'));
+            var line, fridaFound = false, totalLines = 0;
+            while ((line = br.readLine()) !== null) {
+                totalLines++;
+                var lower = line.toLowerCase();
+                if (lower.indexOf('frida') !== -1 || lower.indexOf('gadget') !== -1) {
+                    fridaFound = true;
+                    Log.w(_stealthTag, '[!] SELF-TEST FAIL: maps still shows: ' + line);
+                }
+            }
+            br.close();
+            if (!fridaFound) {
+                Log.i(_stealthTag, '[+] SELF-TEST PASS: /proc/self/maps clean (' + totalLines + ' lines, no frida references)');
+            }
+        } catch (eSelfTest) {
+            Log.w(_stealthTag, '[-] Self-test error: ' + eSelfTest);
+        }
 
 
         // =====================================================
@@ -2214,7 +2540,7 @@ function _hspatchMain() {
             var OkHttpClientBuilder = Java.use('okhttp3.OkHttpClient$Builder');
 
             // Register an interceptor class that checks URLs at execution time
-            var Interceptor = Java.use('okhttp3.Interceptor');
+            var OkInterceptor = Java.use('okhttp3.Interceptor');
             var Chain = Java.use('okhttp3.Interceptor$Chain');
             var Response = Java.use('okhttp3.Response');
             var ResponseBody = Java.use('okhttp3.ResponseBody');
@@ -2223,7 +2549,7 @@ function _hspatchMain() {
 
             var BlockInterceptor = Java.registerClass({
                 name: 'hspatch.BlockingInterceptor',
-                implements: [Interceptor],
+                implements: [OkInterceptor],
                 methods: {
                     intercept: [{
                         returnType: 'okhttp3.Response',

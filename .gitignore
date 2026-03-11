@@ -54,3 +54,7 @@ ui_dump*.xml
 # Screenshots
 screen.png
 patch_net201.py
+
+# Instruction files (user communication)
+instructions.txt
+INSTRUCTIONS.txt
