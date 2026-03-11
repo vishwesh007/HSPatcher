@@ -84,9 +84,9 @@
     move-result v1
     sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->autoResetFingerprint:Z
 
-    # Load debug notification persistence toggle from SharedPreferences
+    # Load debug notification persistence toggle from SharedPreferences (default: ON)
     const-string v1, "debug_notification_persistent"
-    const/4 v2, 0x0
+    const/4 v2, 0x1
     invoke-interface {v0, v1, v2}, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
     move-result v1
     sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->debugNotificationPersistent:Z
@@ -105,9 +105,9 @@
     move-result v1
     sput v1, Lin/startv/hotstar/HSPatchConfig;->networkFilterMode:I
 
-    # Load blocking notification toggle (default: true = ON)
+    # Load blocking notification toggle (default: false = OFF)
     const-string v1, "blocking_notification"
-    const/4 v2, 0x1
+    const/4 v2, 0x0
     invoke-interface {v0, v1, v2}, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
     move-result v1
     sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->blockingNotificationEnabled:Z

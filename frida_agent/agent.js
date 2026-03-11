@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.51
+ * HSPatch Universal Frida Script v3.52
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -13,24 +13,23 @@ import Java from "frida-java-bridge";
  *   HttpUrl.parse/get, Retrofit.baseUrl, OkHttp3, Cronet, WebView, DNS)
  * - WebSocket Kill Switch (toggle via Debug Panel)
  *
- * NOTE: Java.performNow() is used for Android 16+ compatibility.
- * Java bridge imported via frida-java-bridge for Frida 17+ support.
- * performNow() runs synchronously on the current thread which already
- * has ART attached, ensuring hooks install before Application.onCreate().
+ * NOTE: Uses performNow() on Android 16+ (ART already attached to thread),
+ * falls back to Java.perform() on older versions (Android 10+) where ART
+ * may not yet be attached. Java bridge imported for Frida 17+ support.
  */
 
-Java.performNow(function() {
+function _hspatchMain() {
     var TAG = "HSPatch-Frida";
 
     // Diagnostic: log Frida script engine status
     try {
         var AndroidLog = Java.use('android.util.Log');
-        AndroidLog.i(TAG, 'Java.performNow() callback FIRED - SDK=' + Java.use('android.os.Build$VERSION').SDK_INT.value);
+        AndroidLog.i(TAG, 'HSPatch callback FIRED - SDK=' + Java.use('android.os.Build$VERSION').SDK_INT.value);
     } catch(e) {}
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.51              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.52              [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -892,7 +891,7 @@ Java.performNow(function() {
         var rewriteRules = [];
         var apiDumpEnabled = false;
         var trafficMonitorEnabled = true; // Toggled via in-app notification, persisted via flag file
-        var blockingNotificationEnabled = true; // Toggled via HostFilterActivity switch, persisted via prefs
+        var blockingNotificationEnabled = false; // Toggled via HostFilterActivity switch, persisted via prefs
         var toggleReceiverRegistered = false;
         var refreshNotifReceiverRegistered = false;
         var NOTIF_ID = 19730;
@@ -1197,15 +1196,15 @@ Java.performNow(function() {
             Log.w(netLogTag, '[TOGGLE] Could not read preferences: ' + ep);
         }
 
-        // Restore blocking notification visibility preference (default ON)
+        // Restore blocking notification visibility preference (default OFF)
         function loadBlockingNotificationPref() {
             try {
                 var ctxN = _getCtx();
                 if (ctxN === null) return;
                 var prefsN = ctxN.getSharedPreferences(_jstr('hspatch_config'), 0);
-                blockingNotificationEnabled = prefsN.getBoolean(_jstr('blocking_notification'), true);
+                blockingNotificationEnabled = prefsN.getBoolean(_jstr('blocking_notification'), false);
             } catch (eN) {
-                // Keep default true on errors
+                // Keep default false on errors
             }
         }
         loadBlockingNotificationPref();
@@ -2459,7 +2458,7 @@ Java.performNow(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.51: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.52: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2472,7 +2471,7 @@ Java.performNow(function() {
         var domainRuleCount = Object.keys(_domainBlockSet).length;
         var pathRuleCount = _pathBlockPatterns.length;
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.51: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.52: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
@@ -2486,4 +2485,13 @@ Java.performNow(function() {
 
         // Set up in-app blocking toggle notification
         setupBlockingToggleUI();
-    });
+}
+
+// Android version-aware launcher:
+// - Android 16+ (SDK 36+): Java.performNow() — ART is already attached to the thread
+// - Android 10+ (SDK 29+): Java.perform() — waits for ART runtime to be ready
+try {
+    Java.performNow(_hspatchMain);
+} catch (e) {
+    Java.perform(_hspatchMain);
+}
