@@ -539,7 +539,7 @@
     invoke-virtual {v2, v3}, Landroid/widget/TextView;->setGravity(I)V
     sget-object v3, Landroid/graphics/Typeface;->MONOSPACE:Landroid/graphics/Typeface;
     invoke-virtual {v2, v3}, Landroid/widget/TextView;->setTypeface(Landroid/graphics/Typeface;)V
-    const-string v3, "ads:bds\ntrack:truck\nBLOCK:doubleclick"
+    const-string v3, "pattern=>replacement\nBLOCK:doubleclick\nBLOCK:ads.example.com"
     invoke-virtual {v2, v3}, Landroid/widget/EditText;->setHint(Ljava/lang/CharSequence;)V
 
     new-instance v3, Landroid/widget/LinearLayout$LayoutParams;

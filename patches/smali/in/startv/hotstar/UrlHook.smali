@@ -11,58 +11,7 @@
 
     move-result-object v0
 
-    # Step 2: Replace "ads" -> "bds"
-    const-string v1, "ads"
-
-    invoke-virtual {v0, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-
-    move-result v2
-
-    if-eqz v2, :no_ads
-
-    const-string v2, "bds"
-
-    invoke-virtual {v0, v1, v2}, Ljava/lang/String;->replace(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;
-
-    move-result-object v0
-
-    :no_ads
-
-    # Step 3: Replace "track" -> "truck"
-    const-string v1, "track"
-
-    invoke-virtual {v0, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-
-    move-result v2
-
-    if-eqz v2, :no_track
-
-    const-string v2, "truck"
-
-    invoke-virtual {v0, v1, v2}, Ljava/lang/String;->replace(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;
-
-    move-result-object v0
-
-    :no_track
-
-    # Step 4: Replace "bifrost" -> "bisfrost"
-    const-string v1, "bifrost"
-
-    invoke-virtual {v0, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-
-    move-result v2
-
-    if-eqz v2, :no_bifrost
-
-    const-string v2, "bisfrost"
-
-    invoke-virtual {v0, v1, v2}, Ljava/lang/String;->replace(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;
-
-    move-result-object v0
-
-    :no_bifrost
-
-    # Step 5: Read blocking file for custom replacements / blocks
+    # Step 2: Read blocking file for custom replacements / blocks
     # Uses per-app file search: blocking_<pkg>.txt > blocking_rules.txt > blocking_hotstar.txt
     :try_start_block
     invoke-static {}, Lin/startv/hotstar/HSPatchConfig;->getBlockingFilePath()Ljava/lang/String;
