@@ -44,10 +44,12 @@ public class AppListActivity extends Activity {
     private List<AppExtractor.AppInfo> allApps = new ArrayList<>();
     private List<AppExtractor.AppInfo> filteredApps = new ArrayList<>();
     private Handler handler = new Handler(Looper.getMainLooper());
+    private boolean isBackupMode = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        isBackupMode = getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false);
         buildUI();
         loadApps(false);
     }
@@ -75,10 +77,25 @@ public class AppListActivity extends Activity {
 
         TextView title = new TextView(this);
         boolean bkMode = getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false);
-        title.setText(bkMode ? "💾 Select App to Backup" : "📱 Extract from Installed Apps");
+        title.setText("📱 Extract from Installed Apps");
         title.setTextSize(20);
         title.setTextColor(getColor(R.color.hsp_accent_green));
-        titleBar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        titleBar.addView(title, titleLp);
+
+        // Backup button in title bar
+        Button backupBtn = new Button(this);
+        backupBtn.setText("💾");
+        backupBtn.setTextSize(18);
+        backupBtn.setTextColor(getColor(R.color.hsp_text));
+        backupBtn.setBackgroundResource(R.drawable.btn_surface);
+        backupBtn.setPadding(0, 0, 0, 0);
+        backupBtn.setOnClickListener(v -> {
+            isBackupMode = !isBackupMode;
+            backupBtn.setTextColor(getColor(isBackupMode ? R.color.hsp_accent_amber : R.color.hsp_text));
+            title.setText(isBackupMode ? "💾 Select App to Backup" : "📱 Extract from Installed Apps");
+        });
+        titleBar.addView(backupBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         root.addView(titleBar);
 
@@ -264,12 +281,13 @@ public class AppListActivity extends Activity {
 
     private void onAppSelected(AppExtractor.AppInfo app) {
         // Backup mode: skip temp extraction, return original APK paths directly
-        if (getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false)) {
+        if (isBackupMode || getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false)) {
             Intent resultIntent = new Intent();
             resultIntent.putExtra(EXTRA_APK_PATH, app.sourceDir);
             resultIntent.putExtra(EXTRA_IS_SPLIT, app.isSplit);
             resultIntent.putExtra(EXTRA_APP_LABEL, app.label);
             resultIntent.putExtra(EXTRA_PACKAGE_NAME, app.packageName);
+            resultIntent.putExtra(EXTRA_BACKUP_MODE, true);
             if (app.splitSourceDirs != null) {
                 resultIntent.putExtra(EXTRA_SPLIT_DIRS, app.splitSourceDirs);
             }

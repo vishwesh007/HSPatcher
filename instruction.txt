@@ -1,0 +1,16 @@
+═══════════════════════════════════════════════════════════════
+  HSPatcher — instruction.txt
+  Talk to me here! (safe to overwrite)
+═══════════════════════════════════════════════════════════════
+
+HidE frida gadget make it stealth for apps ,do research on youtube for exact method and dont push instruction.txt file to cloud
+
+ensure you test everything on android 16 device also ,there is a script that auto accepts the install requests on miui use that script please so that you can do testing smoothly
+
+
+i see in multiple scenario it says patchable patterns found and disassembling and then it says no patching pattern found , is it reassembled or earlier reassembled version is kept see if we have room for optimisation over here
+
+
+i guess there is please search for v2.identity.shenwavideo.cn and v2.identit.tiled.media if these are part of signature killer library please neutralise such api calls and test if nothing fails , no calls should go from this library outside
+
+create memory files within the code that you can use next time to get back the context and memory on the code you are working on that way ,you might have clearer  context all the time

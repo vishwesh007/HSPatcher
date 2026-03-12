@@ -6,13 +6,21 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.util.Log;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
 import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.animation.PropertyValuesHolder;
+import android.animation.ValueAnimator;
+import android.view.ViewAnimationUtils;
+import android.view.ViewGroup;
 import android.view.animation.AccelerateDecelerateInterpolator;
+import android.view.animation.AccelerateInterpolator;
+import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -21,6 +29,7 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -33,6 +42,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Random;
 
 public class MainActivity extends Activity {
 
@@ -47,7 +57,7 @@ public class MainActivity extends Activity {
     private static final int PICK_CERT = 1009;
 
     private Button btnSelect, btnPatch, btnInstall, btnExtract, btnUninstall;
-    private Button btnBackup, btnSigner, btnCert, btnDbEditor;
+    private Button btnCancel, btnMod, btnTools, btnCert;
     private TextView logOutput, apkName, apkSize, progressText, versionText;
     private ScrollView logScroll;
     private ProgressBar progressBar;
@@ -55,6 +65,15 @@ public class MainActivity extends Activity {
     private View headerContainer;
     private TextView titleText;
     private TextView subtitleText;
+    private LinearLayout phase1Buttons, phase2Buttons, phase4Buttons;
+    private View colorOverlay;
+    private FrameLayout particleContainer;
+
+    private static final int PHASE_INITIAL = 0;
+    private static final int PHASE_SELECTED = 1;
+    private static final int PHASE_PATCHING = 2;
+    private static final int PHASE_COMPLETE = 3;
+    private int currentPhase = PHASE_INITIAL;
 
     private File selectedApk;
     private File patchedApk;
@@ -111,6 +130,9 @@ public class MainActivity extends Activity {
         btnInstall = findViewById(R.id.btn_install);
         btnExtract = findViewById(R.id.btn_extract);
         btnUninstall = findViewById(R.id.btn_uninstall);
+        btnCancel = findViewById(R.id.btn_cancel);
+        btnMod = findViewById(R.id.btn_mod);
+        btnTools = findViewById(R.id.btn_tools);
         logOutput = findViewById(R.id.log_output);
         apkName = findViewById(R.id.apk_name);
         apkSize = findViewById(R.id.apk_size);
@@ -122,6 +144,11 @@ public class MainActivity extends Activity {
         headerContainer = findViewById(R.id.header_container);
         titleText = findViewById(R.id.title_text);
         subtitleText = findViewById(R.id.subtitle_text);
+        phase1Buttons = findViewById(R.id.phase1_buttons);
+        phase2Buttons = findViewById(R.id.phase2_buttons);
+        phase4Buttons = findViewById(R.id.phase4_buttons);
+        colorOverlay = findViewById(R.id.color_overlay);
+        particleContainer = findViewById(R.id.particle_container);
 
         // Display app version
         try {
@@ -132,28 +159,26 @@ public class MainActivity extends Activity {
             versionText.setText("v3.10");
         }
 
-        btnSelect.setOnClickListener(v -> onSelectClick());
+        btnSelect.setOnClickListener(v -> { animateButtonPress(v, 0xFF00E676); onSelectClick(); });
         btnPatch.setOnClickListener(v -> onPatchClick());
         btnInstall.setOnClickListener(v -> onInstallClick());
-        btnExtract.setOnClickListener(v -> onExtractClick());
+        btnExtract.setOnClickListener(v -> { animateButtonPress(v, 0xFF00BCD4); onExtractClick(); });
         btnUninstall.setOnClickListener(v -> onUninstallClick());
+        btnCancel.setOnClickListener(v -> onCancelClick());
+        btnMod.setOnClickListener(v -> onModClick());
+        btnTools.setOnClickListener(v -> showToolsMenu());
 
-        // New feature buttons
-        btnBackup = findViewById(R.id.btn_backup);
-        btnSigner = findViewById(R.id.btn_signer);
-
-        btnBackup.setOnClickListener(v -> onBackupClick());
-        btnSigner.setOnClickListener(v -> onSignerClick());
-        btnDbEditor = findViewById(R.id.btn_db_editor);
-        btnDbEditor.setOnClickListener(v -> onDbEditorClick());
-
-        btnCert = findViewById(R.id.btn_cert);
+        // FAB for CA cert
+        btnCert = findViewById(R.id.fab_cert);
         btnCert.setOnClickListener(v -> onCertClick());
         updateCertButton();
 
+        // Entrance animations
+        animateEntrance();
+
         requestStoragePermission();
 
-        // Auto-load APK if passed via intent (for testing: adb shell am start -n ... --es apk_path /sdcard/...)
+        // Auto-load APK if passed via intent
         String intentPath = getIntent().getStringExtra("apk_path");
         if (intentPath != null && !intentPath.isEmpty()) {
             autoPatchAfterLoad = getIntent().getBooleanExtra("auto_patch", false);
@@ -163,6 +188,45 @@ public class MainActivity extends Activity {
                 autoLoadApk(f);
             }
         }
+    }
+
+    private void showToolsMenu() {
+        String[] items = {"🔐 APK Signer", "🗄️ DB Editor"};
+        new AlertDialog.Builder(this)
+            .setTitle("⚙ Tools")
+            .setItems(items, (dialog, which) -> {
+                if (which == 0) {
+                    startActivity(new Intent(this, ApkSignerActivity.class));
+                } else if (which == 1) {
+                    startActivity(new Intent(this, DbEditorActivity.class));
+                }
+            })
+            .show();
+    }
+
+    private void onCancelClick() {
+        if (isPatching) return;
+        selectedApk = null;
+        patchedApk = null;
+        isSplitBundle = false;
+        originalFileName = "";
+        selectedApkPatchedVersion = null;
+        switchToPhase(PHASE_INITIAL);
+        apkInfoPanel.setVisibility(View.GONE);
+        logClear();
+        log("Ready. Select an APK to patch.");
+    }
+
+    private void onModClick() {
+        patchedApk = null;
+        selectedApk = null;
+        isSplitBundle = false;
+        originalFileName = "";
+        selectedApkPatchedVersion = null;
+        switchToPhase(PHASE_INITIAL);
+        apkInfoPanel.setVisibility(View.GONE);
+        logClear();
+        log("Ready. Select an APK to patch.");
     }
 
     private void applyModernSystemUi() {
@@ -248,8 +312,7 @@ public class MainActivity extends Activity {
                     apkName.setText(fName + (isBundle ? " [SPLIT BUNDLE]" : "")
                         + (selectedApkPatchedVersion != null ? " \u26a0\ufe0f ALREADY PATCHED" : ""));
                     apkSize.setText(fSize);
-                    btnPatch.setEnabled(true);
-                    btnInstall.setVisibility(View.GONE);
+                    switchToPhase(PHASE_SELECTED);
 
                     // If launched with --ez auto_patch true, patch only after load completes
                     if (autoPatchAfterLoad) {
@@ -335,6 +398,295 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         stopPatchEntertainment();
         super.onDestroy();
+    }
+
+    // ======================== UI PHASE MANAGEMENT ========================
+
+    private void switchToPhase(int phase) {
+        currentPhase = phase;
+        try {
+            switch (phase) {
+                case PHASE_INITIAL:
+                    animatePhaseTransition(phase1Buttons, phase2Buttons, phase4Buttons);
+                    progressBar.setVisibility(View.GONE);
+                    progressText.setVisibility(View.GONE);
+                    btnCert.setVisibility(View.VISIBLE);
+                    break;
+                case PHASE_SELECTED:
+                    animatePhaseTransition(phase2Buttons, phase1Buttons, phase4Buttons);
+                    progressBar.setVisibility(View.GONE);
+                    progressText.setVisibility(View.GONE);
+                    btnCert.setVisibility(View.VISIBLE);
+                    break;
+                case PHASE_PATCHING:
+                    // Phase 2 buttons hidden by explosion; show progress
+                    phase1Buttons.setVisibility(View.GONE);
+                    phase4Buttons.setVisibility(View.GONE);
+                    btnCert.setVisibility(View.GONE);
+                    progressBar.setVisibility(View.VISIBLE);
+                    progressText.setVisibility(View.VISIBLE);
+                    break;
+                case PHASE_COMPLETE:
+                    animatePhaseTransition(phase4Buttons, phase1Buttons, phase2Buttons);
+                    btnCert.setVisibility(View.VISIBLE);
+                    break;
+            }
+        } catch (Throwable t) {
+            // Fallback: just set visibility directly
+            phase1Buttons.setVisibility(phase == PHASE_INITIAL ? View.VISIBLE : View.GONE);
+            phase2Buttons.setVisibility(phase == PHASE_SELECTED ? View.VISIBLE : View.GONE);
+            phase4Buttons.setVisibility(phase == PHASE_COMPLETE ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void animatePhaseTransition(View showGroup, View hideGroup1, View hideGroup2) {
+        try {
+            // Slide out old groups
+            if (hideGroup1.getVisibility() == View.VISIBLE) {
+                hideGroup1.animate()
+                    .translationY(60f).alpha(0f).setDuration(250)
+                    .setInterpolator(new AccelerateInterpolator())
+                    .withEndAction(() -> {
+                        hideGroup1.setVisibility(View.GONE);
+                        hideGroup1.setTranslationY(0f);
+                        hideGroup1.setAlpha(1f);
+                    }).start();
+            } else {
+                hideGroup1.setVisibility(View.GONE);
+            }
+            if (hideGroup2.getVisibility() == View.VISIBLE) {
+                hideGroup2.animate()
+                    .translationY(60f).alpha(0f).setDuration(250)
+                    .setInterpolator(new AccelerateInterpolator())
+                    .withEndAction(() -> {
+                        hideGroup2.setVisibility(View.GONE);
+                        hideGroup2.setTranslationY(0f);
+                        hideGroup2.setAlpha(1f);
+                    }).start();
+            } else {
+                hideGroup2.setVisibility(View.GONE);
+            }
+
+            // Slide in new group after a short delay
+            showGroup.setTranslationY(-40f);
+            showGroup.setAlpha(0f);
+            showGroup.setVisibility(View.VISIBLE);
+            showGroup.animate()
+                .translationY(0f).alpha(1f).setDuration(350)
+                .setStartDelay(200)
+                .setInterpolator(new OvershootInterpolator(1.2f))
+                .start();
+        } catch (Throwable t) {
+            hideGroup1.setVisibility(View.GONE);
+            hideGroup2.setVisibility(View.GONE);
+            showGroup.setVisibility(View.VISIBLE);
+            showGroup.setAlpha(1f);
+            showGroup.setTranslationY(0f);
+        }
+    }
+
+    // ======================== ENTRANCE ANIMATIONS ========================
+
+    private void animateEntrance() {
+        try {
+            // Title slides in from left
+            if (titleText != null) {
+                titleText.setTranslationX(-300f);
+                titleText.setAlpha(0f);
+                titleText.animate().translationX(0f).alpha(1f)
+                    .setDuration(600).setInterpolator(new DecelerateInterpolator(2f)).start();
+            }
+            // Subtitle fades in
+            if (subtitleText != null) {
+                subtitleText.setAlpha(0f);
+                subtitleText.animate().alpha(1f).setDuration(500).setStartDelay(300).start();
+            }
+            // Version chip pops in
+            if (versionText != null) {
+                versionText.setScaleX(0f);
+                versionText.setScaleY(0f);
+                versionText.animate().scaleX(1f).scaleY(1f)
+                    .setDuration(400).setStartDelay(400)
+                    .setInterpolator(new OvershootInterpolator(2f)).start();
+            }
+            // Buttons slide up with stagger
+            if (phase1Buttons != null) {
+                for (int i = 0; i < phase1Buttons.getChildCount(); i++) {
+                    View child = phase1Buttons.getChildAt(i);
+                    child.setTranslationY(120f);
+                    child.setAlpha(0f);
+                    child.animate().translationY(0f).alpha(1f)
+                        .setDuration(500).setStartDelay(500 + i * 150L)
+                        .setInterpolator(new DecelerateInterpolator(2f)).start();
+                }
+            }
+            // FAB scales in
+            if (btnCert != null) {
+                btnCert.setScaleX(0f);
+                btnCert.setScaleY(0f);
+                btnCert.animate().scaleX(1f).scaleY(1f)
+                    .setDuration(400).setStartDelay(900)
+                    .setInterpolator(new OvershootInterpolator(3f)).start();
+            }
+            // Log area fades in
+            if (logScroll != null) {
+                logScroll.setAlpha(0f);
+                logScroll.animate().alpha(1f).setDuration(600).setStartDelay(200).start();
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    // ======================== BUTTON PRESS COLOR FILL ========================
+
+    private void animateButtonPress(View button, int color) {
+        try {
+            if (colorOverlay == null) return;
+            int[] loc = new int[2];
+            button.getLocationInWindow(loc);
+            int cx = loc[0] + button.getWidth() / 2;
+            int cy = loc[1] + button.getHeight() / 2;
+
+            colorOverlay.setBackgroundColor(color);
+            colorOverlay.setVisibility(View.VISIBLE);
+            colorOverlay.setAlpha(0.3f);
+
+            int finalRadius = (int) Math.hypot(
+                colorOverlay.getWidth() > 0 ? colorOverlay.getWidth() : 1080,
+                colorOverlay.getHeight() > 0 ? colorOverlay.getHeight() : 2200);
+
+            Animator reveal = ViewAnimationUtils.createCircularReveal(
+                colorOverlay, cx, cy, 0, finalRadius);
+            reveal.setDuration(500);
+            reveal.setInterpolator(new DecelerateInterpolator());
+            reveal.start();
+
+            // Fade out after reveal
+            colorOverlay.animate().alpha(0f).setDuration(400).setStartDelay(350)
+                .withEndAction(() -> colorOverlay.setVisibility(View.GONE))
+                .start();
+        } catch (Throwable ignored) {
+            if (colorOverlay != null) colorOverlay.setVisibility(View.GONE);
+        }
+    }
+
+    // ======================== PATCH BUTTON EXPLOSION ========================
+
+    private void explodePatchButton(Runnable afterExplosion) {
+        try {
+            if (particleContainer == null || btnPatch == null) {
+                afterExplosion.run();
+                return;
+            }
+
+            // Get patch button center position
+            int[] loc = new int[2];
+            btnPatch.getLocationInWindow(loc);
+            int cx = loc[0] + btnPatch.getWidth() / 2;
+            int cy = loc[1] + btnPatch.getHeight() / 2;
+
+            // Button pulse + scale up before exploding
+            AnimatorSet preExplosion = new AnimatorSet();
+            ObjectAnimator scaleUpX = ObjectAnimator.ofFloat(btnPatch, "scaleX", 1f, 1.3f);
+            ObjectAnimator scaleUpY = ObjectAnimator.ofFloat(btnPatch, "scaleY", 1f, 1.3f);
+            scaleUpX.setDuration(250);
+            scaleUpY.setDuration(250);
+            scaleUpX.setInterpolator(new AccelerateInterpolator());
+            scaleUpY.setInterpolator(new AccelerateInterpolator());
+            preExplosion.playTogether(scaleUpX, scaleUpY);
+
+            preExplosion.addListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    // Hide the patch button
+                    btnPatch.setScaleX(1f);
+                    btnPatch.setScaleY(1f);
+
+                    // Create explosion particles
+                    spawnExplosionParticles(cx, cy);
+
+                    // Hide phase2 buttons immediately
+                    phase2Buttons.setVisibility(View.GONE);
+
+                    // Flash the screen
+                    flashScreen(0xFF7C4DFF);
+
+                    // After particle animation, run the callback
+                    mainHandler.postDelayed(() -> {
+                        particleContainer.removeAllViews();
+                        afterExplosion.run();
+                    }, 800);
+                }
+            });
+
+            preExplosion.start();
+        } catch (Throwable t) {
+            // Fallback: skip animation
+            try { phase2Buttons.setVisibility(View.GONE); } catch (Throwable ignored) {}
+            afterExplosion.run();
+        }
+    }
+
+    private void spawnExplosionParticles(int cx, int cy) {
+        try {
+            Random rand = new Random();
+            int[] colors = {0xFF7C4DFF, 0xFF00E676, 0xFFFF5252, 0xFFFFC107, 0xFF00BCD4, 0xFFFFFFFF};
+            int particleCount = 24;
+
+            for (int i = 0; i < particleCount; i++) {
+                View particle = new View(this);
+                int size = 8 + rand.nextInt(16); // 8-24dp
+                int sizePx = (int) (size * getResources().getDisplayMetrics().density);
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(sizePx, sizePx);
+                lp.leftMargin = cx - sizePx / 2;
+                lp.topMargin = cy - sizePx / 2;
+                particle.setLayoutParams(lp);
+                particle.setBackgroundColor(colors[rand.nextInt(colors.length)]);
+                particle.setAlpha(1f);
+
+                // Make some particles round
+                if (rand.nextBoolean()) {
+                    android.graphics.drawable.GradientDrawable circle =
+                        new android.graphics.drawable.GradientDrawable();
+                    circle.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+                    circle.setColor(colors[rand.nextInt(colors.length)]);
+                    particle.setBackground(circle);
+                }
+
+                particleContainer.addView(particle);
+
+                // Random direction
+                double angle = rand.nextDouble() * 2 * Math.PI;
+                float distance = 300 + rand.nextInt(500); // px
+                float dx = (float) (Math.cos(angle) * distance);
+                float dy = (float) (Math.sin(angle) * distance);
+                float rotation = rand.nextFloat() * 720 - 360;
+
+                particle.animate()
+                    .translationXBy(dx)
+                    .translationYBy(dy)
+                    .rotation(rotation)
+                    .scaleX(0f)
+                    .scaleY(0f)
+                    .alpha(0f)
+                    .setDuration(600 + rand.nextInt(400))
+                    .setInterpolator(new DecelerateInterpolator(1.5f))
+                    .start();
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void flashScreen(int color) {
+        try {
+            if (colorOverlay == null) return;
+            colorOverlay.setBackgroundColor(color);
+            colorOverlay.setAlpha(0.5f);
+            colorOverlay.setVisibility(View.VISIBLE);
+            colorOverlay.animate().alpha(0f).setDuration(500)
+                .withEndAction(() -> colorOverlay.setVisibility(View.GONE))
+                .start();
+        } catch (Throwable ignored) {
+            if (colorOverlay != null) colorOverlay.setVisibility(View.GONE);
+        }
     }
 
     private void startPatchEntertainment() {
@@ -514,7 +866,11 @@ public class MainActivity extends Activity {
             boolean isSplit = data.getBooleanExtra(AppListActivity.EXTRA_IS_SPLIT, false);
             String label = data.getStringExtra(AppListActivity.EXTRA_APP_LABEL);
             if (path != null) {
-                loadExtractedApp(new File(path), isSplit, label);
+                if (data.getBooleanExtra(AppListActivity.EXTRA_BACKUP_MODE, false)) {
+                    handleBackupResult(path, isSplit, label);
+                } else {
+                    loadExtractedApp(new File(path), isSplit, label);
+                }
             }
         } else if (requestCode == BACKUP_APP && resultCode == RESULT_OK && data != null) {
             String path = data.getStringExtra(AppListActivity.EXTRA_APK_PATH);
@@ -621,8 +977,7 @@ public class MainActivity extends Activity {
                         apkInfoPanel.setVisibility(View.VISIBLE);
                         apkName.setText(label + " [SPLIT, " + apkCount + " APKs]");
                         apkSize.setText(fSize);
-                        btnPatch.setEnabled(true);
-                        btnInstall.setVisibility(View.GONE);
+                        switchToPhase(PHASE_SELECTED);
                     });
                     log("✅ Split APK bundle loaded: " + label + " (" + apkCount + " splits, " + fSize + ")");
                     log("📦 Will merge splits → single APK → then patch.");
@@ -645,8 +1000,7 @@ public class MainActivity extends Activity {
                         apkName.setText(label
                             + (selectedApkPatchedVersion != null ? " ⚠️ ALREADY PATCHED" : ""));
                         apkSize.setText(fSize);
-                        btnPatch.setEnabled(true);
-                        btnInstall.setVisibility(View.GONE);
+                        switchToPhase(PHASE_SELECTED);
                     });
                     log("✅ APK loaded: " + label + " (" + fSize + ")");
                 }
@@ -717,8 +1071,7 @@ public class MainActivity extends Activity {
                     apkName.setText(fName + (isBundle ? " [SPLIT BUNDLE]" : "")
                         + (selectedApkPatchedVersion != null ? " ⚠️ ALREADY PATCHED" : ""));
                     apkSize.setText(fSize);
-                    btnPatch.setEnabled(true);
-                    btnInstall.setVisibility(View.GONE);
+                    switchToPhase(PHASE_SELECTED);
                 });
                 if (isBundle) {
                     log("✅ Split APK bundle loaded: " + fName + " (" + fSize + ")");
@@ -769,27 +1122,33 @@ public class MainActivity extends Activity {
     private void doPatch() {
         if (isPatching) return;
         isPatching = true;
-        btnPatch.setEnabled(false);
-        btnSelect.setEnabled(false);
-        btnInstall.setVisibility(View.GONE);
-        progressBar.setVisibility(View.VISIBLE);
-        progressBar.setProgress(0);
-        progressText.setVisibility(View.VISIBLE);
-        logClear();
 
+        logClear();
         lastProgressPct = 0;
         lastProgressStep = "Starting";
-        renderProgressText();
-        if (progressText != null) {
-            progressText.post(this::startPatchEntertainment);
-        } else {
-            startPatchEntertainment();
-        }
 
-        log("⚡ HSPatcher v3.42 — Starting one-click patch");
-        log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // Explosion animation, then start patching
+        explodePatchButton(() -> {
+            switchToPhase(PHASE_PATCHING);
+            progressBar.setProgress(0);
+            renderProgressText();
+            if (progressText != null) {
+                progressText.post(this::startPatchEntertainment);
+            } else {
+                startPatchEntertainment();
+            }
 
-        new Thread(() -> {
+            // Animate progress bar entrance
+            try {
+                progressBar.setScaleX(0f);
+                progressBar.animate().scaleX(1f).setDuration(400)
+                    .setInterpolator(new OvershootInterpolator(1.5f)).start();
+            } catch (Throwable ignored) {}
+
+            log("⚡ HSPatcher v3.55 — Starting one-click patch");
+            log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+            new Thread(() -> {
             try {
                 File workDir = new File(getFilesDir(), "hspatch_work");
 
@@ -960,12 +1319,9 @@ public class MainActivity extends Activity {
                 log("📏 Size: " + (outputFile.length() / 1024 / 1024) + " MB");
 
                 mainHandler.post(() -> {
-                    btnInstall.setVisibility(View.VISIBLE);
-                    btnUninstall.setVisibility(View.VISIBLE);
                     isPatching = false;
                     stopPatchEntertainment();
-                    btnSelect.setEnabled(true);
-                    btnPatch.setEnabled(true);
+                    switchToPhase(PHASE_COMPLETE);
                 });
 
             } catch (Throwable e) {
@@ -989,13 +1345,13 @@ public class MainActivity extends Activity {
                 mainHandler.post(() -> {
                     isPatching = false;
                     stopPatchEntertainment();
-                    btnSelect.setEnabled(true);
-                    btnPatch.setEnabled(true);
+                    switchToPhase(PHASE_SELECTED);
                     progressBar.setVisibility(View.GONE);
                     progressText.setVisibility(View.GONE);
                 });
             }
-        }).start();
+            }).start();
+        }); // end explodePatchButton callback
     }
 
     // ======================== INSTALL ========================
@@ -1286,13 +1642,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ======================== APP BACKUP ========================
-
-    private void onBackupClick() {
-        if (isPatching) return;
-        Intent intent = new Intent(this, AppListActivity.class);
-        startActivityForResult(intent, BACKUP_APP);
-    }
+    // ======================== APP BACKUP (moved to AppListActivity) ========================
 
     private void handleBackupResult(String path, boolean isSplit, String label) {
         logClear();
@@ -1372,17 +1722,7 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    // ======================== APK SIGNER ========================
-
-    private void onSignerClick() {
-        Intent intent = new Intent(this, ApkSignerActivity.class);
-        startActivity(intent);
-    }
-
-    private void onDbEditorClick() {
-        Intent intent = new Intent(this, DbEditorActivity.class);
-        startActivity(intent);
-    }
+    // ======================== APK SIGNER (accessed via Tools menu) ========================
 
     private String sanitizeFileName(String input) {
         if (input == null) return "UnknownApp";
@@ -1484,15 +1824,9 @@ public class MainActivity extends Activity {
 
     private void updateCertButton() {
         if (hasCaCert()) {
-            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-            String name = prefs.getString(PREF_CERT_NAME, "CA cert");
-            btnCert.setText("\u2705 " + name);
-            btnCert.setBackgroundResource(R.drawable.btn_success);
-            btnCert.setTextColor(getColor(R.color.hsp_text_dark));
+            btnCert.setText("✅");
         } else {
-            btnCert.setText("\uD83D\uDCDC CA CERT");
-            btnCert.setBackgroundResource(R.drawable.btn_primary_cert);
-            btnCert.setTextColor(getColor(R.color.hsp_text));
+            btnCert.setText("📜");
         }
     }
 
