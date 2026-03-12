@@ -900,6 +900,11 @@ public class MainActivity extends Activity {
                     engine.setOriginalApkForSignature(bundleBaseApk);
                 }
 
+                // Allow re-patching if user confirmed via dialog
+                if (selectedApkPatchedVersion != null) {
+                    engine.setForceRepatch(true);
+                }
+
                 File result = engine.patch();
 
                 // Keep patchedApk pointing to the internal file (app's private storage)

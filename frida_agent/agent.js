@@ -1213,8 +1213,19 @@ function _hspatchMain() {
         }
 
         // --- Rules engine ---
-        var blockPatterns = [];
-        var rewriteRules = [];
+        // Built-in blocks: tracking/identity endpoints from video SDK libraries
+        // These domains are from the Tiled Media SDK and make external identity
+        // verification calls. Block at DNS + rewrite to unreachable dummy.
+        var blockPatterns = [
+            'v2.identity.tiled.media',
+            'v2.identity.shenwavideo.cn'
+        ];
+        // Built-in rewrites: neutralize SDK identity calls by redirecting to localhost
+        var _builtinRewrites = [
+            { from: 'v2.identity.tiled.media', to: '127.0.0.1' },
+            { from: 'v2.identity.shenwavideo.cn', to: '127.0.0.1' }
+        ];
+        var rewriteRules = _builtinRewrites.slice();
         var apiDumpEnabled = false;
         var trafficMonitorEnabled = true; // Toggled via in-app notification, persisted via flag file
         var blockingNotificationEnabled = false; // Toggled via HostFilterActivity switch, persisted via prefs
@@ -1476,11 +1487,17 @@ function _hspatchMain() {
             } catch (err) { Log.w(netLogTag, '[RULES] Failed: ' + err); }
         }
 
+        // Built-in blocks that persist across rule reloads
+        var _builtinBlocks = [
+            'v2.identity.tiled.media',
+            'v2.identity.shenwavideo.cn'
+        ];
+
         function scheduleRuleReload() {
             setTimeout(function() {
                 Java.perform(function() {
                     var ob = blockPatterns.length, or2 = rewriteRules.length, od = apiDumpEnabled;
-                    blockPatterns = []; rewriteRules = [];
+                    blockPatterns = _builtinBlocks.slice(); rewriteRules = _builtinRewrites.slice();
                     loadBlockingRules();
                     _buildBlockIndex();
                     if (blockPatterns.length !== ob || rewriteRules.length !== or2 || apiDumpEnabled !== od) {
@@ -1808,6 +1825,183 @@ function _hspatchMain() {
         }
 
         Log.i(wsKillTag, '[*] WebSocket kill switch installed (state: ' + (websocketKillEnabled ? 'ON' : 'OFF') + ')');
+
+        // =====================================================
+        // 5c. APP BAR HIDE (Bottom Navigation)
+        //     Hides the bottom navigation bar in JioHotstar
+        //     for a more immersive content viewing experience.
+        //     Toggled via Debug Panel switch, persisted via prefs.
+        // =====================================================
+        var appBarHideEnabled = false;
+        var appBarTag = 'HSPatch-AppBar';
+        var _appBarHideTimer = null;
+
+        function loadAppBarHidePref() {
+            try {
+                var ctxAB = _getCtx();
+                if (ctxAB === null) return;
+                var prefsAB = ctxAB.getSharedPreferences(_jstr('hspatch_config'), 0);
+                appBarHideEnabled = prefsAB.getBoolean(_jstr('appbar_hide'), false);
+            } catch (eAB) {
+                // Keep default false on errors
+            }
+        }
+        loadAppBarHidePref();
+
+        // Traverse view tree and hide/show views matching the target resource-id
+        function _setAppBarVisibility(rootView, visible) {
+            var GONE = 8, VISIBLE = 0;
+            var target = visible ? VISIBLE : GONE;
+            var found = false;
+
+            function traverse(view) {
+                try {
+                    // Check AccessibilityNodeInfo resource name (works for React Native testID)
+                    var nodeInfo = view.createAccessibilityNodeInfo();
+                    if (nodeInfo !== null) {
+                        var resName = nodeInfo.getViewIdResourceName();
+                        if (resName !== null) {
+                            var rn = resName.toString();
+                            if (rn === 'tag_bottom_menu') {
+                                view.setVisibility(target);
+                                found = true;
+                                Log.i(appBarTag, '[APP-BAR] ' + (visible ? 'SHOWN' : 'HIDDEN') + ' bottom nav (tag_bottom_menu)');
+                                nodeInfo.recycle();
+                                return;
+                            }
+                        }
+                        nodeInfo.recycle();
+                    }
+                } catch (eN) {}
+
+                // Recurse into ViewGroup children
+                try {
+                    var ViewGroup = Java.use('android.view.ViewGroup');
+                    var vg = Java.cast(view, ViewGroup);
+                    var count = vg.getChildCount();
+                    for (var i = 0; i < count; i++) {
+                        traverse(vg.getChildAt(i));
+                        if (found) return;
+                    }
+                } catch (eV) {}
+            }
+
+            traverse(rootView);
+            return found;
+        }
+
+        // Apply app bar hide to the current Activity
+        function applyAppBarHide() {
+            loadAppBarHidePref();
+            if (!appBarHideEnabled) return;
+            try {
+                var ActivityThread = Java.use('android.app.ActivityThread');
+                var at = ActivityThread.currentActivityThread();
+                var app = at.getApplication();
+                if (app === null) return;
+
+                // Get current resumed Activity
+                var activities = at.mActivities.value;
+                var keys = activities.keySet().toArray();
+                for (var k = 0; k < keys.length; k++) {
+                    var record = activities.get(keys[k]);
+                    if (record === null) continue;
+                    var paused = record.paused.value;
+                    if (paused) continue;
+                    var act = record.activity.value;
+                    if (act === null) continue;
+
+                    var decor = act.getWindow().getDecorView();
+                    if (_setAppBarVisibility(decor, false)) {
+                        Log.i(appBarTag, '[APP-BAR] Hide applied to ' + act.getClass().getName());
+                    }
+                }
+            } catch (eA) {
+                Log.d(appBarTag, '[APP-BAR] applyAppBarHide error: ' + eA);
+            }
+        }
+
+        // Schedule periodic re-application (React Native may recreate views)
+        function scheduleAppBarHide() {
+            if (_appBarHideTimer !== null) {
+                clearInterval(_appBarHideTimer);
+                _appBarHideTimer = null;
+            }
+            loadAppBarHidePref();
+            if (appBarHideEnabled) {
+                // Initial apply after a short delay for view tree to settle
+                setTimeout(function() { Java.perform(function() { applyAppBarHide(); }); }, 2000);
+                // Re-apply every 5 seconds (handles navigation/recreation)
+                _appBarHideTimer = setInterval(function() {
+                    Java.perform(function() { applyAppBarHide(); });
+                }, 5000);
+                Log.i(appBarTag, '[APP-BAR] Auto-hide scheduled');
+            } else {
+                // Restore visibility when disabled
+                try {
+                    var ActivityThread2 = Java.use('android.app.ActivityThread');
+                    var at2 = ActivityThread2.currentActivityThread();
+                    var activities2 = at2.mActivities.value;
+                    var keys2 = activities2.keySet().toArray();
+                    for (var k2 = 0; k2 < keys2.length; k2++) {
+                        var record2 = activities2.get(keys2[k2]);
+                        if (record2 === null) continue;
+                        var act2 = record2.activity.value;
+                        if (act2 === null) continue;
+                        var decor2 = act2.getWindow().getDecorView();
+                        _setAppBarVisibility(decor2, true);
+                    }
+                } catch (eR) {}
+                Log.i(appBarTag, '[APP-BAR] Auto-hide disabled, bars restored');
+            }
+        }
+
+        // Register broadcast receiver for toggle from DebugPanel
+        function setupAppBarHideToggle() {
+            try {
+                var ctx = _getCtx();
+                if (ctx === null) {
+                    setTimeout(function() { Java.perform(function() { setupAppBarHideToggle(); }); }, 3000);
+                    return;
+                }
+                var context = Java.cast(ctx, _cls('android.content.Context'));
+
+                var BroadcastReceiver = Java.use('android.content.BroadcastReceiver');
+                var ABReceiver = Java.registerClass({
+                    name: 'hspatch.AppBarHideReceiver',
+                    superClass: BroadcastReceiver,
+                    methods: {
+                        onReceive: [{
+                            returnType: 'void',
+                            argumentTypes: ['android.content.Context', 'android.content.Intent'],
+                            implementation: function(c, i) {
+                                try {
+                                    loadAppBarHidePref();
+                                    scheduleAppBarHide();
+                                    Log.i(appBarTag, '[APP-BAR] Toggle received: ' + (appBarHideEnabled ? 'HIDE' : 'SHOW'));
+                                } catch (eT) {
+                                    Log.e(appBarTag, '[APP-BAR] Toggle error: ' + eT);
+                                }
+                            }
+                        }]
+                    }
+                });
+
+                var filter = _cls('android.content.IntentFilter').$new(_jstr('hspatch.TOGGLE_APPBAR_HIDE'));
+                var receiver = ABReceiver.$new();
+                try {
+                    context.registerReceiver(receiver, filter, 4); // RECEIVER_NOT_EXPORTED
+                } catch (e1) {
+                    try { context.registerReceiver(receiver, filter); } catch (e2) {}
+                }
+
+                // Apply initial state
+                scheduleAppBarHide();
+                Log.i(appBarTag, '[APP-BAR] Hide toggle ready (state: ' + (appBarHideEnabled ? 'ON' : 'OFF') + ')');
+            } catch (eS) {
+                Log.e(appBarTag, '[APP-BAR] Setup error: ' + eS);
+            }
+        }
 
         // =====================================================
         // OPTIMIZED BLOCKING ENGINE
@@ -2491,13 +2685,14 @@ function _hspatchMain() {
             _inetGetByName.implementation = function(host) {
                 if (host) {
                     var h = host.toString();
+                    // Rewrite check first: give neutralized domains a dummy value
+                    var rw = applyRewrites(h);
+                    if (rw.changed) { logRewritten('InetAddress','getByName',h,rw.url); return _inetGetByName.call(this, rw.url); }
                     var bm = shouldBlockDNS(h);
                     if (bm !== null) {
                         logBlocked('InetAddress', 'getByName', h, bm);
                         throw _cls('java.net.UnknownHostException').$new(h);
                     }
-                    var rw = applyRewrites(h);
-                    if (rw.changed) { logRewritten('InetAddress','getByName',h,rw.url); return _inetGetByName.call(this, rw.url); }
                 }
                 return _inetGetByName.call(this, host);
             };
@@ -2506,13 +2701,14 @@ function _hspatchMain() {
                 _inetGetAll.implementation = function(host) {
                     if (host) {
                         var h = host.toString();
+                        // Rewrite check first: give neutralized domains a dummy value
+                        var rw = applyRewrites(h);
+                        if (rw.changed) { logRewritten('InetAddress','getAllByName',h,rw.url); return _inetGetAll.call(this, rw.url); }
                         var bm = shouldBlockDNS(h);
                         if (bm !== null) {
                             logBlocked('InetAddress', 'getAllByName', h, bm);
                             throw _cls('java.net.UnknownHostException').$new(h);
                         }
-                        var rw = applyRewrites(h);
-                        if (rw.changed) { logRewritten('InetAddress','getAllByName',h,rw.url); return _inetGetAll.call(this, rw.url); }
                     }
                     return _inetGetAll.call(this, host);
                 };
@@ -2811,6 +3007,9 @@ function _hspatchMain() {
 
         // Set up in-app blocking toggle notification
         setupBlockingToggleUI();
+
+        // Set up app bar hide toggle
+        setupAppBarHideToggle();
 }
 
 // Android version-aware launcher:

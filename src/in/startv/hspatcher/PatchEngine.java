@@ -54,6 +54,7 @@ public class PatchEngine {
     private final Callback cb;
     private byte[] caCertData;  // optional: user CA cert for MITM proxy
     private File originalApkForSignature; // original APK (or base.apk from bundle) for signature extraction
+    private boolean forceRepatch; // allow re-patching already-patched APKs
 
     public PatchEngine(File inputApk, File extraZip, File fridaZip, File sigkillDir, File workDir, Callback cb) {
         this.inputApk = inputApk;
@@ -71,6 +72,9 @@ public class PatchEngine {
     public void setCaCert(byte[] cert) {
         this.caCertData = cert;
     }
+
+    /** Allow re-patching an already-patched APK (force mode). */
+    public void setForceRepatch(boolean force) { this.forceRepatch = force; }
 
     /**
      * Quick static check: is this APK already patched by HSPatcher?
@@ -131,7 +135,10 @@ public class PatchEngine {
             log("   Detected HSPatch artifacts from a previous patching session.");
             log("   Re-patching may cause crashes, duplicate hooks, or bloated APK size.");
             log("");
-            throw new Exception("APK_ALREADY_PATCHED" + verMsg);
+            if (!forceRepatch) {
+                throw new Exception("APK_ALREADY_PATCHED" + verMsg);
+            }
+            log("⚡ Force re-patch enabled — continuing anyway...");
         }
 
         // ======== DexGuard class encryption check ========
@@ -1694,7 +1701,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.52";
+            String version = "3.53";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);
@@ -2006,23 +2013,37 @@ public class PatchEngine {
         extractFileFromApk(apk, dexName, origDex);
 
         // Quick check: does this DEX contain any patchable patterns?
+        // DEX string pool stores type descriptors and method names separately,
+        // so scan for the actual strings that appear in DEX binary:
+        //  - "Ljava/security/Signature;" — type descriptor for Signature class
+        //  - "getInstallerPackageName" — method name string
+        //  - "LicenseValidator" — class name fragment
+        //  - "Ljava/lang/reflect/Method;" — type descriptor for DexGuard reflection
         String[] scanPatterns = info.dexguardEncrypted
             ? new String[]{"Ljava/security/Signature;", "getInstallerPackageName",
-                           "LicenseValidator", "ILicenseResultListener",
+                           "LicenseValidator",
                            "Ljava/lang/reflect/Method;"}
             : new String[]{"Ljava/security/Signature;", "getInstallerPackageName",
-                           "LicenseValidator", "ILicenseResultListener"};
+                           "LicenseValidator"};
         boolean[] found = streamContainsAny(origDex, scanPatterns);
-        boolean hasLicensePatterns = found[0] || found[1] || found[2] || found[3];
+        boolean hasLicensePatterns = found[0] || found[1] || found[2];
         boolean hasReflectPatterns = info.dexguardEncrypted &&
-            scanPatterns.length > 4 && found[4];
+            scanPatterns.length > 3 && found[3];
 
         if (!hasLicensePatterns && !hasReflectPatterns) {
             origDex.delete();
             return;
         }
 
-        log("   " + dexName + ": patchable patterns found, disassembling...");
+        // Build detail string for logging
+        StringBuilder foundDetail = new StringBuilder();
+        for (int i = 0; i < found.length; i++) {
+            if (found[i]) {
+                if (foundDetail.length() > 0) foundDetail.append(", ");
+                foundDetail.append(scanPatterns[i]);
+            }
+        }
+        log("   " + dexName + ": patchable refs found [" + foundDetail + "], disassembling...");
 
         // Baksmali
         File smaliDir = new File(ws, "sp_smali_" + dexName.replace(".dex", ""));
@@ -2036,6 +2057,26 @@ public class PatchEngine {
         }
         container = null;
         System.gc();
+
+        // Quick smali-text pre-check: verify actual patchable invoke patterns exist
+        // before running expensive regex replacements on every file.
+        // This avoids wasted regex compilation when binary scan matched type/method
+        // refs that aren't used in a patchable instruction context.
+        boolean hasSmaliPatterns = smaliDirContainsPatterns(smaliDir,
+            "Signature;->verify([B)Z",
+            "PackageManager;->getInstallerPackageName",
+            "LicenseValidator");
+        if (info.dexguardEncrypted) {
+            hasSmaliPatterns = hasSmaliPatterns ||
+                smaliDirContainsPatterns(smaliDir, "Method;->invoke(");
+        }
+
+        if (!hasSmaliPatterns) {
+            log("   " + dexName + ": refs present but no patchable invoke patterns — skipping");
+            origDex.delete();
+            deleteDir(smaliDir);
+            return;
+        }
 
         // Apply patches
         int patches = applySmaliPatches(smaliDir, info);
@@ -2062,11 +2103,29 @@ public class PatchEngine {
             log("   " + dexName + ": assembled " + ok + " classes" +
                 (fail > 0 ? " (" + fail + " errors)" : ""));
         } else {
-            log("   " + dexName + ": no patterns matched");
+            log("   " + dexName + ": invoke patterns present but regex didn't match — skipping reassembly");
         }
 
         origDex.delete();
         deleteDir(smaliDir);
+    }
+
+    /**
+     * Quick scan of smali files in a directory for any of the given string fragments.
+     * Reads file content and checks for substring presence. Stops at first match.
+     */
+    private boolean smaliDirContainsPatterns(File smaliDir, String... patterns) {
+        List<File> files = new ArrayList<>();
+        collectSmaliFiles(smaliDir, files);
+        for (File f : files) {
+            try {
+                String content = readFileStr(f);
+                for (String p : patterns) {
+                    if (content.contains(p)) return true;
+                }
+            } catch (Exception e) { /* skip */ }
+        }
+        return false;
     }
 
     // ======================== SIGNATURE EXTRACTION ========================

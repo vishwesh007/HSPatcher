@@ -16,6 +16,7 @@
 .field public static networkFilterEnabled:Z
 .field public static blockingNotificationEnabled:Z
 .field public static websocketKillEnabled:Z
+.field public static appBarHideEnabled:Z
 .field public static networkFilterMode:I    # 0 = Only Block (blacklist), 1 = Only Allow (whitelist)
 
 
@@ -119,6 +120,13 @@
     move-result v1
     sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->websocketKillEnabled:Z
 
+    # Load app bar hide toggle (default: false = OFF)
+    const-string v1, "appbar_hide"
+    const/4 v2, 0x0
+    invoke-interface {v0, v1, v2}, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
+    move-result v1
+    sput-boolean v1, Lin/startv/hotstar/HSPatchConfig;->appBarHideEnabled:Z
+
     # Also sync to hspatch_config prefs (used by agent.js)
     const-string v0, "hspatch_config"
     const/4 v2, 0x0
@@ -132,6 +140,10 @@
     move-result-object v0
     const-string v2, "websocket_kill"
     sget-boolean v1, Lin/startv/hotstar/HSPatchConfig;->websocketKillEnabled:Z
+    invoke-interface {v0, v2, v1}, Landroid/content/SharedPreferences$Editor;->putBoolean(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;
+    move-result-object v0
+    const-string v2, "appbar_hide"
+    sget-boolean v1, Lin/startv/hotstar/HSPatchConfig;->appBarHideEnabled:Z
     invoke-interface {v0, v2, v1}, Landroid/content/SharedPreferences$Editor;->putBoolean(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;
     move-result-object v0
     invoke-interface {v0}, Landroid/content/SharedPreferences$Editor;->apply()V
@@ -477,6 +489,39 @@
     invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
     move-result-object v1
     const-string v2, "websocket_kill"
+    invoke-interface {v1, v2, p1}, Landroid/content/SharedPreferences$Editor;->putBoolean(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
+
+    return-void
+.end method
+
+# ================================================================
+# setAppBarHideEnabled(Context, boolean) - Persist toggle
+# Also sync to hspatch_config prefs (used by agent.js)
+# ================================================================
+.method public static setAppBarHideEnabled(Landroid/content/Context;Z)V
+    .locals 3
+
+    sput-boolean p1, Lin/startv/hotstar/HSPatchConfig;->appBarHideEnabled:Z
+
+    const-string v0, "hspatch_settings"
+    const/4 v1, 0x0
+    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v0
+    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+    const-string v2, "appbar_hide"
+    invoke-interface {v1, v2, p1}, Landroid/content/SharedPreferences$Editor;->putBoolean(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;
+    invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
+
+    # Also sync to hspatch_config prefs (used by agent.js)
+    const-string v0, "hspatch_config"
+    const/4 v1, 0x0
+    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
+    move-result-object v0
+    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
+    move-result-object v1
+    const-string v2, "appbar_hide"
     invoke-interface {v1, v2, p1}, Landroid/content/SharedPreferences$Editor;->putBoolean(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;
     invoke-interface {v1}, Landroid/content/SharedPreferences$Editor;->apply()V
 
