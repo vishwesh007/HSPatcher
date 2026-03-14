@@ -1874,17 +1874,36 @@ public class MainActivity extends Activity {
 
     private void updateCertButton() {
         if (hasCaCert()) {
-            btnCert.setText("OK");
-            btnCert.setTextSize(12f);
+            // Stop any idle pulse animation
+            btnCert.clearAnimation();
+
+            btnCert.setText("✓");
+            btnCert.setTextSize(20f);
             btnCert.setTextColor(getColor(R.color.hsp_accent_green));
-            btnCert.setBackgroundResource(R.drawable.fab_cert_ready);
+            btnCert.setBackgroundResource(R.drawable.fab_cert_loaded);
             btnCert.setContentDescription("CA certificate loaded. Tap to manage certificate");
+
+            // Play state transition animation
+            try {
+                android.view.animation.Animation anim = android.view.animation.AnimationUtils
+                    .loadAnimation(this, R.anim.fab_state_transition);
+                btnCert.startAnimation(anim);
+            } catch (Throwable ignored) {}
         } else {
-            btnCert.setText("CA");
-            btnCert.setTextSize(12f);
-            btnCert.setTextColor(getColor(R.color.hsp_text));
-            btnCert.setBackgroundResource(R.drawable.fab_cert);
+            btnCert.clearAnimation();
+
+            btnCert.setText("🔒");
+            btnCert.setTextSize(18f);
+            btnCert.setTextColor(getColor(R.color.hsp_text_muted));
+            btnCert.setBackgroundResource(R.drawable.fab_cert_idle);
             btnCert.setContentDescription("No CA certificate loaded. Tap to import");
+
+            // Start gentle pulse animation to draw attention
+            try {
+                android.view.animation.Animation anim = android.view.animation.AnimationUtils
+                    .loadAnimation(this, R.anim.fab_pulse);
+                btnCert.startAnimation(anim);
+            } catch (Throwable ignored) {}
         }
     }
 

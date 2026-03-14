@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gentle pulsing animation for idle FAB (no cert) -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/linear">
+
+    <objectAnimator
+        android:propertyName="scaleX"
+        android:duration="1500"
+        android:valueType="floatType"
+        android:valueFrom="1.0"
+        android:valueTo="1.08"
+        android:repeatCount="infinite"
+        android:repeatMode="reverse" />
+
+    <objectAnimator
+        android:propertyName="scaleY"
+        android:duration="1500"
+        android:valueType="floatType"
+        android:valueFrom="1.0"
+        android:valueTo="1.08"
+        android:repeatCount="infinite"
+        android:repeatMode="reverse" />
+
+    <objectAnimator
+        android:propertyName="alpha"
+        android:duration="1500"
+        android:valueType="floatType"
+        android:valueFrom="0.8"
+        android:valueTo="1.0"
+        android:repeatCount="infinite"
+        android:repeatMode="reverse" />
+
+</set>

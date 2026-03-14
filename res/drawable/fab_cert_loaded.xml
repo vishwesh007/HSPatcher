@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Loaded state FAB: bright green accent, confident appearance -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Glow halo effect -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#22FF00E6" />
+        </shape>
+    </item>
+
+    <!-- Main glass base with green tint -->
+    <item android:insetLeft="2dp" android:insetTop="2dp" android:insetRight="2dp" android:insetBottom="2dp">
+        <shape android:shape="oval">
+            <solid android:color="@color/hsp_glass_fill_strong" />
+            <stroke android:width="2dp" android:color="#66FF00E6" />
+        </shape>
+    </item>
+
+    <!-- Green highlight glow from top-left -->
+    <item android:insetLeft="6dp" android:insetTop="6dp" android:insetRight="14dp" android:insetBottom="14dp">
+        <shape android:shape="oval">
+            <solid android:color="#44FF00E6" />
+        </shape>
+    </item>
+</layer-list>
