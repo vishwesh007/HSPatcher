@@ -84,43 +84,51 @@ public class ApkSignerActivity extends Activity {
 
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
-        main.setPadding(dp(24), dp(24), dp(24), dp(24));
+        main.setPadding(dp(18), dp(18), dp(18), dp(20));
 
         // Header
         TextView header = new TextView(this);
         header.setText("🔐 APK Signer");
-        header.setTextSize(28);
+        header.setTextSize(30);
         header.setTextColor(getColor(R.color.hsp_legacy_signer));
         header.setTypeface(null, android.graphics.Typeface.BOLD);
-        header.setGravity(Gravity.CENTER);
-        header.setPadding(0, dp(16), 0, dp(8));
+        header.setGravity(Gravity.START);
+        header.setPadding(0, dp(8), 0, dp(4));
         main.addView(header);
 
         TextView sub = new TextView(this);
-        sub.setText("Sign APKs with custom certificates (v1+v2+v3)");
-        sub.setTextSize(13);
+        sub.setText("Professional signing workspace with custom cert controls");
+        sub.setTextSize(12);
         sub.setTextColor(getColor(R.color.hsp_text_muted));
-        sub.setGravity(Gravity.CENTER);
-        sub.setPadding(0, 0, 0, dp(16));
+        sub.setGravity(Gravity.START);
+        sub.setPadding(0, 0, 0, dp(10));
         main.addView(sub);
 
-        // Certificate Config Section
-        main.addView(sectionLabel("Certificate Configuration"));
+        TextView hero = new TextView(this);
+        hero.setText("Use saved keystores or generate secure RSA certs with v1/v2/v3 signing.");
+        hero.setTextSize(12);
+        hero.setTextColor(getColor(R.color.hsp_text));
+        hero.setBackgroundResource(R.drawable.bg_tools_option);
+        hero.setPadding(dp(12), dp(10), dp(12), dp(10));
+        main.addView(hero);
+
+        LinearLayout certCard = sectionCard();
+        certCard.addView(sectionLabel("Certificate Configuration"));
 
         LinearLayout row1 = hRow();
         etCN = addLabeledInput(row1, "Common Name (CN)", "HSPatch Custom");
         etOrg = addLabeledInput(row1, "Organization (O)", "HSPatch");
-        main.addView(row1);
+        certCard.addView(row1);
 
         LinearLayout row2 = hRow();
         etCountry = addLabeledInput(row2, "Country (C)", "US");
         etAlias = addLabeledInput(row2, "Key Alias", "hspatch_key");
-        main.addView(row2);
+        certCard.addView(row2);
 
         LinearLayout row3 = hRow();
         etKeystorePass = addLabeledInput(row3, "Keystore Password", "hspatch123");
         etKeyPass = addLabeledInput(row3, "Key Password", "hspatch123");
-        main.addView(row3);
+        certCard.addView(row3);
 
         LinearLayout row4 = hRow();
         etValidity = addLabeledInput(row4, "Validity (years)", "25");
@@ -134,7 +142,7 @@ public class ApkSignerActivity extends Activity {
         TextView lblKeySize = new TextView(this);
         lblKeySize.setText("Key Size");
         lblKeySize.setTextSize(12);
-        lblKeySize.setTextColor(0x99FFFFFF);
+        lblKeySize.setTextColor(getColor(R.color.hsp_text_muted));
         keySizeCol.addView(lblKeySize);
 
         spinnerKeySize = new Spinner(this);
@@ -146,10 +154,12 @@ public class ApkSignerActivity extends Activity {
         spinnerKeySize.setBackgroundResource(R.drawable.bg_glass_input);
         keySizeCol.addView(spinnerKeySize);
         row4.addView(keySizeCol);
-        main.addView(row4);
+        certCard.addView(row4);
+        main.addView(certCard);
 
-        // Signing scheme checkboxes
-        main.addView(sectionLabel("Signing Schemes"));
+        LinearLayout schemeCard = sectionCard();
+        schemeCard.addView(sectionLabel("Signing Schemes"));
+
         LinearLayout cbRow = hRow();
         cbV1 = makeCheckbox("v1 (JAR)", true);
         cbV2 = makeCheckbox("v2 (APK Sig v2)", true);
@@ -157,10 +167,18 @@ public class ApkSignerActivity extends Activity {
         cbRow.addView(cbV1);
         cbRow.addView(cbV2);
         cbRow.addView(cbV3);
-        main.addView(cbRow);
+        schemeCard.addView(cbRow);
 
-        // Keystore management buttons
-        main.addView(sectionLabel("Keystore Management"));
+        TextView schemeHint = new TextView(this);
+        schemeHint.setText("Recommended: keep all enabled for best compatibility.");
+        schemeHint.setTextSize(11);
+        schemeHint.setTextColor(getColor(R.color.hsp_text_faint));
+        schemeHint.setPadding(dp(2), dp(4), dp(2), 0);
+        schemeCard.addView(schemeHint);
+        main.addView(schemeCard);
+
+        LinearLayout ksCard = sectionCard();
+        ksCard.addView(sectionLabel("Keystore Management"));
         LinearLayout ksRow = hRow();
 
         btnSaveKeystore = makeButton("💾 SAVE KEY", getColor(R.color.hsp_legacy_teal));
@@ -170,36 +188,46 @@ public class ApkSignerActivity extends Activity {
         btnLoadKeystore = makeButton("📂 LOAD KEY", getColor(R.color.hsp_legacy_backup));
         btnLoadKeystore.setOnClickListener(v -> onLoadKeystore());
         ksRow.addView(btnLoadKeystore, new LinearLayout.LayoutParams(0, dp(44), 1));
-        main.addView(ksRow);
+        ksCard.addView(ksRow);
+        main.addView(ksCard);
 
-        // APK selection
-        main.addView(sectionLabel("APK to Sign"));
+        LinearLayout apkCard = sectionCard();
+        apkCard.addView(sectionLabel("APK To Sign"));
 
         tvSelectedApk = new TextView(this);
         tvSelectedApk.setText("No APK selected");
         tvSelectedApk.setTextSize(14);
         tvSelectedApk.setTextColor(getColor(R.color.hsp_text_mono));
-        tvSelectedApk.setPadding(dp(12), dp(8), dp(12), dp(8));
-        tvSelectedApk.setBackgroundResource(R.drawable.bg_card);
-        main.addView(tvSelectedApk);
+        tvSelectedApk.setPadding(dp(12), dp(10), dp(12), dp(10));
+        tvSelectedApk.setBackgroundResource(R.drawable.bg_tools_option);
+        apkCard.addView(tvSelectedApk);
 
         btnSelectApk = makeButton("📱 SELECT APK", getColor(R.color.hsp_accent_green));
         btnSelectApk.setTextColor(0xFF000000);
         btnSelectApk.setOnClickListener(v -> onSelectApk());
-        main.addView(btnSelectApk, new LinearLayout.LayoutParams(
+        apkCard.addView(btnSelectApk, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
         btnSign = makeButton("✅ SIGN APK", getColor(R.color.hsp_legacy_purple));
         btnSign.setEnabled(false);
         btnSign.setOnClickListener(v -> onSignClick());
-        main.addView(btnSign, new LinearLayout.LayoutParams(
+        apkCard.addView(btnSign, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
         // Progress
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progressBar.setMax(100);
+        progressBar.setProgressTintList(ColorStateList.valueOf(getColor(R.color.hsp_accent_green)));
+        progressBar.setProgressBackgroundTintList(ColorStateList.valueOf(getColor(R.color.hsp_glass_fill_strong)));
         progressBar.setVisibility(View.GONE);
-        main.addView(progressBar);
+        LinearLayout.LayoutParams progLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(8));
+        progLp.topMargin = dp(8);
+        apkCard.addView(progressBar, progLp);
+        main.addView(apkCard);
+
+        LinearLayout logCard = sectionCard();
+        logCard.addView(sectionLabel("Signing Log"));
 
         // Log output
         logScroll = new ScrollView(this);
@@ -214,7 +242,8 @@ public class ApkSignerActivity extends Activity {
         tvLog.setTextColor(getColor(R.color.hsp_text_mono));
         tvLog.setTypeface(android.graphics.Typeface.MONOSPACE);
         logScroll.addView(tvLog);
-        main.addView(logScroll);
+        logCard.addView(logScroll);
+        main.addView(logCard);
 
         // Back button
         Button btnBack = makeButton("← BACK TO PATCHER", getColor(R.color.hsp_surface));
@@ -604,10 +633,24 @@ public class ApkSignerActivity extends Activity {
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextSize(14);
-        tv.setTextColor(0xFF448AFF);
+        tv.setTextColor(getColor(R.color.hsp_accent_blue));
         tv.setTypeface(null, android.graphics.Typeface.BOLD);
-        tv.setPadding(0, dp(16), 0, dp(6));
+        tv.setPadding(0, 0, 0, dp(8));
         return tv;
+    }
+
+    private LinearLayout sectionCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackgroundResource(R.drawable.bg_section_panel);
+        card.setPadding(dp(12), dp(12), dp(12), dp(12));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        lp.topMargin = dp(10);
+        card.setLayoutParams(lp);
+        return card;
     }
 
     private LinearLayout hRow() {
