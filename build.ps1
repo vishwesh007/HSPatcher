@@ -229,6 +229,7 @@ if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
 
 # ======================== DONE ========================
 $finalSize = [math]::Round((Get-Item $signedApk).Length / 1024)
+Copy-Item $signedApk (Join-Path $PROJECT "HSPatcher.apk") -Force
 Write-Host ("`n=== BUILD SUCCESSFUL: HSPatcher.apk " + $finalSize + "K ===") -ForegroundColor Green
 
 if ($Install) {
