@@ -64,23 +64,21 @@ jobs:
 
       - name: Pack patches
         shell: pwsh
-        working-directory: HSPatcher
         run: .\pack_patches.ps1
 
       - name: Build APK
         shell: pwsh
-        working-directory: HSPatcher
         run: .\build.ps1
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: HSPatcher.apk
-          path: HSPatcher/build/HSPatcher.apk
+          path: build/HSPatcher.apk
 
       - name: Create GitHub Release and upload APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: HSPatcher/build/HSPatcher.apk
+          files: build/HSPatcher.apk
           generate_release_notes: true
