@@ -11,7 +11,13 @@ $ErrorActionPreference = "Stop"
 
 # ======================== PATHS ========================
 $PROJECT     = $PSScriptRoot
-$SDK         = Join-Path $env:LOCALAPPDATA "Android\Sdk"
+$SDK         = if ($env:ANDROID_SDK_ROOT -and $env:ANDROID_SDK_ROOT.Trim()) {
+    $env:ANDROID_SDK_ROOT
+} elseif ($env:ANDROID_HOME -and $env:ANDROID_HOME.Trim()) {
+    $env:ANDROID_HOME
+} else {
+    Join-Path $env:LOCALAPPDATA "Android\Sdk"
+}
 $BT          = Join-Path $SDK "build-tools\36.1.0"
 $ANDROID_JAR = Join-Path $SDK "platforms\android-36\android.jar"
 $APKTOOL_JAR = Join-Path (Split-Path $PROJECT) "apktool_2.9.3.jar"
