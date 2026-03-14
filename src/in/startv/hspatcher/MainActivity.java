@@ -191,17 +191,59 @@ public class MainActivity extends Activity {
     }
 
     private void showToolsMenu() {
-        String[] items = {"🔐 APK Signer", "🗄️ DB Editor"};
-        new AlertDialog.Builder(this)
-            .setTitle("⚙ Tools")
-            .setItems(items, (dialog, which) -> {
-                if (which == 0) {
-                    startActivity(new Intent(this, ApkSignerActivity.class));
-                } else if (which == 1) {
-                    startActivity(new Intent(this, DbEditorActivity.class));
-                }
-            })
-            .show();
+        View root = getLayoutInflater().inflate(R.layout.dialog_tools, null);
+        View signer = root.findViewById(R.id.dialog_tools_signer);
+        View dbEditor = root.findViewById(R.id.dialog_tools_db);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setView(root)
+            .create();
+
+        signer.setOnClickListener(v -> {
+            dialog.dismiss();
+            startActivity(new Intent(this, ApkSignerActivity.class));
+        });
+
+        dbEditor.setOnClickListener(v -> {
+            dialog.dismiss();
+            startActivity(new Intent(this, DbEditorActivity.class));
+        });
+
+        dialog.setOnShowListener(d -> animateToolsDialog(root, signer, dbEditor));
+        dialog.show();
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            dialog.getWindow().setDimAmount(0.72f);
+        }
+    }
+
+    private void animateToolsDialog(View root, View... cards) {
+        root.setAlpha(0f);
+        root.setScaleX(0.92f);
+        root.setScaleY(0.92f);
+        root.setTranslationY(28f);
+        root.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .translationY(0f)
+            .setDuration(320)
+            .setInterpolator(new OvershootInterpolator(0.9f))
+            .start();
+
+        for (int i = 0; i < cards.length; i++) {
+            View card = cards[i];
+            card.setAlpha(0f);
+            card.setTranslationY(24f);
+            card.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay(70L + (i * 55L))
+                .setDuration(260)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
+        }
     }
 
     private void onCancelClick() {
