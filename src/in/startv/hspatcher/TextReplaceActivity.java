@@ -93,11 +93,27 @@ public class TextReplaceActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        applyModernSystemUi();
         buildUi();
 
         Uri intentData = getIntent() != null ? getIntent().getData() : null;
         if (intentData != null) {
             openUri(intentData, true);
+        }
+    }
+
+    private void applyModernSystemUi() {
+        try {
+            getWindow().setStatusBarColor(getColor(R.color.hsp_bg));
+            getWindow().setNavigationBarColor(getColor(R.color.hsp_bg));
+
+            View decorView = getWindow().getDecorView();
+            int flags = decorView.getSystemUiVisibility();
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decorView.setSystemUiVisibility(flags);
+        } catch (Throwable ignored) {
+            // Best-effort only.
         }
     }
 
@@ -155,7 +171,7 @@ public class TextReplaceActivity extends Activity {
 
         addSpacer(fileRow, 6);
 
-        Button btnSaveAs = makeButton("SAVE AS", getColor(R.color.hsp_accent_indigo));
+        Button btnSaveAs = makeButton("📤 SAVE AS", getColor(R.color.hsp_accent_indigo));
         btnSaveAs.setLayoutParams(new LinearLayout.LayoutParams(0, dp(44), 1));
         btnSaveAs.setOnClickListener(v -> saveAs());
         fileRow.addView(btnSaveAs);
@@ -249,14 +265,14 @@ public class TextReplaceActivity extends Activity {
         actionRow.setOrientation(LinearLayout.HORIZONTAL);
         actionRow.setPadding(0, dp(10), 0, dp(6));
 
-        btnFindNext = makeButton("FIND NEXT", getColor(R.color.hsp_accent_blue));
+        btnFindNext = makeButton("🔎 FIND NEXT", getColor(R.color.hsp_accent_blue));
         btnFindNext.setLayoutParams(new LinearLayout.LayoutParams(0, dp(42), 1));
         btnFindNext.setOnClickListener(v -> findNext(true));
         actionRow.addView(btnFindNext);
 
         addSpacer(actionRow, 6);
 
-        btnReplaceOne = makeButton("REPLACE", getColor(R.color.hsp_accent_amber));
+        btnReplaceOne = makeButton("✏ REPLACE", getColor(R.color.hsp_accent_amber));
         btnReplaceOne.setLayoutParams(new LinearLayout.LayoutParams(0, dp(42), 1));
         btnReplaceOne.setOnClickListener(v -> replaceCurrent());
         actionRow.addView(btnReplaceOne);

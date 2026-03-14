@@ -194,6 +194,10 @@ public class MainActivity extends Activity {
         View root = getLayoutInflater().inflate(R.layout.dialog_tools, null);
         View signer = root.findViewById(R.id.dialog_tools_signer);
         View dbEditor = root.findViewById(R.id.dialog_tools_db);
+        View signerIcon = root.findViewById(R.id.dialog_tools_signer_icon);
+        View dbIcon = root.findViewById(R.id.dialog_tools_db_icon);
+        View signerOk = root.findViewById(R.id.dialog_tools_signer_ok);
+        View dbOk = root.findViewById(R.id.dialog_tools_db_ok);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
             .setView(root)
@@ -209,7 +213,7 @@ public class MainActivity extends Activity {
             startActivity(new Intent(this, DbEditorActivity.class));
         });
 
-        dialog.setOnShowListener(d -> animateToolsDialog(root, signer, dbEditor));
+        dialog.setOnShowListener(d -> animateToolsDialog(root, signer, dbEditor, signerIcon, dbIcon, signerOk, dbOk));
         dialog.show();
 
         if (dialog.getWindow() != null) {
@@ -1866,9 +1870,17 @@ public class MainActivity extends Activity {
 
     private void updateCertButton() {
         if (hasCaCert()) {
-            btnCert.setText("✅");
+            btnCert.setText("OK");
+            btnCert.setTextSize(12f);
+            btnCert.setTextColor(getColor(R.color.hsp_accent_green));
+            btnCert.setBackgroundResource(R.drawable.fab_cert_ready);
+            btnCert.setContentDescription("CA certificate loaded. Tap to manage certificate");
         } else {
-            btnCert.setText("📜");
+            btnCert.setText("CA");
+            btnCert.setTextSize(12f);
+            btnCert.setTextColor(getColor(R.color.hsp_text));
+            btnCert.setBackgroundResource(R.drawable.fab_cert);
+            btnCert.setContentDescription("No CA certificate loaded. Tap to import");
         }
     }
 
@@ -1886,8 +1898,8 @@ public class MainActivity extends Activity {
                     + "This certificate will be embedded into\n"
                     + "every patched APK for MITM proxy support.\n\n"
                     + "What would you like to do?")
-                .setPositiveButton("Replace", (d, w) -> pickCertFile())
-                .setNegativeButton("Delete", (d, w) -> {
+                .setPositiveButton("🔁 Replace", (d, w) -> pickCertFile())
+                .setNegativeButton("🗑 Delete", (d, w) -> {
                     deleteCaCert();
                     Toast.makeText(this, "CA certificate deleted", Toast.LENGTH_SHORT).show();
                 })
@@ -1903,7 +1915,7 @@ public class MainActivity extends Activity {
                     + "\u2022 Dumped to /data/local/tmp/ at runtime\n"
                     + "\u2022 Trusted by the Frida SSL bypass\n\n"
                     + "Supports: Reqable, Charles, mitmproxy, Burp Suite")
-                .setPositiveButton("Import", (d, w) -> pickCertFile())
+                .setPositiveButton("📥 Import", (d, w) -> pickCertFile())
                 .setNegativeButton("Cancel", null)
                 .show();
         }

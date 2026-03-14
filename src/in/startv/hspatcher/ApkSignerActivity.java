@@ -58,7 +58,23 @@ public class ApkSignerActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mainHandler = new Handler(Looper.getMainLooper());
+        applyModernSystemUi();
         buildUI();
+    }
+
+    private void applyModernSystemUi() {
+        try {
+            getWindow().setStatusBarColor(getColor(R.color.hsp_bg));
+            getWindow().setNavigationBarColor(getColor(R.color.hsp_bg));
+
+            View decorView = getWindow().getDecorView();
+            int flags = decorView.getSystemUiVisibility();
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decorView.setSystemUiVisibility(flags);
+        } catch (Throwable ignored) {
+            // Best-effort only.
+        }
     }
 
     private void buildUI() {
@@ -147,11 +163,11 @@ public class ApkSignerActivity extends Activity {
         main.addView(sectionLabel("Keystore Management"));
         LinearLayout ksRow = hRow();
 
-        btnSaveKeystore = makeButton("💾 SAVE KEYSTORE", getColor(R.color.hsp_legacy_teal));
+        btnSaveKeystore = makeButton("💾 SAVE KEY", getColor(R.color.hsp_legacy_teal));
         btnSaveKeystore.setOnClickListener(v -> onSaveKeystore());
         ksRow.addView(btnSaveKeystore, new LinearLayout.LayoutParams(0, dp(44), 1));
 
-        btnLoadKeystore = makeButton("📂 LOAD KEYSTORE", getColor(R.color.hsp_legacy_backup));
+        btnLoadKeystore = makeButton("📂 LOAD KEY", getColor(R.color.hsp_legacy_backup));
         btnLoadKeystore.setOnClickListener(v -> onLoadKeystore());
         ksRow.addView(btnLoadKeystore, new LinearLayout.LayoutParams(0, dp(44), 1));
         main.addView(ksRow);
@@ -167,13 +183,13 @@ public class ApkSignerActivity extends Activity {
         tvSelectedApk.setBackgroundResource(R.drawable.bg_card);
         main.addView(tvSelectedApk);
 
-        btnSelectApk = makeButton("📱 SELECT APK TO SIGN", getColor(R.color.hsp_accent_green));
+        btnSelectApk = makeButton("📱 SELECT APK", getColor(R.color.hsp_accent_green));
         btnSelectApk.setTextColor(0xFF000000);
         btnSelectApk.setOnClickListener(v -> onSelectApk());
         main.addView(btnSelectApk, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
-        btnSign = makeButton("🔐 SIGN APK", getColor(R.color.hsp_legacy_purple));
+        btnSign = makeButton("✅ SIGN APK", getColor(R.color.hsp_legacy_purple));
         btnSign.setEnabled(false);
         btnSign.setOnClickListener(v -> onSignClick());
         main.addView(btnSign, new LinearLayout.LayoutParams(
@@ -201,7 +217,7 @@ public class ApkSignerActivity extends Activity {
         main.addView(logScroll);
 
         // Back button
-        Button btnBack = makeButton("← BACK", getColor(R.color.hsp_surface));
+        Button btnBack = makeButton("← BACK TO PATCHER", getColor(R.color.hsp_surface));
         btnBack.setOnClickListener(v -> finish());
         main.addView(btnBack, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(44)));

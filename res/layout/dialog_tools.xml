@@ -52,6 +52,16 @@
             android:layout_height="42dp"
             android:background="@drawable/btn_primary_signer" />
 
+        <TextView
+            android:id="@+id/dialog_tools_signer_icon"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:text="🔐"
+            android:textSize="14sp" />
+
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -93,6 +103,21 @@
             android:textColor="@color/hsp_text"
             android:textSize="20sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/dialog_tools_signer_ok"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_chip"
+            android:paddingLeft="8dp"
+            android:paddingTop="2dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="2dp"
+            android:text="OK"
+            android:textColor="@color/hsp_accent_green"
+            android:textSize="10sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
     <LinearLayout
@@ -112,6 +137,16 @@
             android:layout_width="6dp"
             android:layout_height="42dp"
             android:background="@drawable/btn_tool_dbeditor" />
+
+        <TextView
+            android:id="@+id/dialog_tools_db_icon"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:text="🗄"
+            android:textSize="14sp" />
 
         <LinearLayout
             android:layout_width="0dp"
@@ -153,6 +188,21 @@
             android:text=">"
             android:textColor="@color/hsp_text"
             android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/dialog_tools_db_ok"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_chip"
+            android:paddingLeft="8dp"
+            android:paddingTop="2dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="2dp"
+            android:text="OK"
+            android:textColor="@color/hsp_accent_green"
+            android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
 </LinearLayout>
