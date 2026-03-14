@@ -1889,39 +1889,87 @@ public class MainActivity extends Activity {
     }
 
     private void onCertClick() {
-        if (hasCaCert()) {
+        boolean hasCert = hasCaCert();
+
+        View root = getLayoutInflater().inflate(R.layout.dialog_cert, null);
+
+        TextView tvStatus       = root.findViewById(R.id.dialog_cert_status);
+        View infoPanelCard      = root.findViewById(R.id.dialog_cert_info_panel);
+        View noCertHint         = root.findViewById(R.id.dialog_cert_no_cert_hint);
+        TextView tvInfoName     = root.findViewById(R.id.dialog_cert_info_name);
+        TextView tvInfoSize     = root.findViewById(R.id.dialog_cert_info_size);
+        View rowImport          = root.findViewById(R.id.dialog_cert_import);
+        View rowDelete          = root.findViewById(R.id.dialog_cert_delete);
+        View rowClose           = root.findViewById(R.id.dialog_cert_close);
+        TextView tvImpCategory  = root.findViewById(R.id.dialog_cert_import_category);
+        TextView tvImpIcon      = root.findViewById(R.id.dialog_cert_import_icon);
+        TextView tvImpTitle     = root.findViewById(R.id.dialog_cert_import_title);
+        TextView tvImpDesc      = root.findViewById(R.id.dialog_cert_import_desc);
+        TextView tvImpBadge     = root.findViewById(R.id.dialog_cert_import_badge);
+
+        if (hasCert) {
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             String certName = prefs.getString(PREF_CERT_NAME, "unknown");
-            long certSize = getCaCertFile().length();
+            long certSize   = getCaCertFile().length();
 
-            new AlertDialog.Builder(this)
-                .setTitle("📜 CA Certificate")
-                .setMessage("Stored certificate:\n\n"
-                    + "\u2022 " + certName + "\n"
-                    + "\u2022 " + certSize + " bytes\n\n"
-                    + "This certificate will be embedded into\n"
-                    + "every patched APK for MITM proxy support.\n\n"
-                    + "What would you like to do?")
-                .setPositiveButton("🔁 Replace", (d, w) -> pickCertFile())
-                .setNegativeButton("🗑 Delete", (d, w) -> {
-                    deleteCaCert();
-                    Toast.makeText(this, "CA certificate deleted", Toast.LENGTH_SHORT).show();
-                })
-                .setNeutralButton("Close", null)
-                .show();
+            tvStatus.setText("Certificate loaded — embedded in all patched APKs");
+            tvStatus.setTextColor(getColor(R.color.hsp_accent_green));
+
+            infoPanelCard.setVisibility(View.VISIBLE);
+            noCertHint.setVisibility(View.GONE);
+            tvInfoName.setText("📄 " + certName);
+            tvInfoSize.setText(certSize + " bytes");
+
+            // Re-label import row as "Replace"
+            tvImpCategory.setText("MANAGE");
+            tvImpCategory.setTextColor(getColor(R.color.hsp_accent_blue));
+            tvImpIcon.setText("🔁");
+            tvImpTitle.setText("Replace Certificate");
+            tvImpDesc.setText("Swap out the current certificate for a new one");
+            tvImpBadge.setText("NEW");
+            tvImpBadge.setTextColor(getColor(R.color.hsp_accent_blue));
+            rowDelete.setVisibility(View.VISIBLE);
         } else {
-            new AlertDialog.Builder(this)
-                .setTitle("📜 Import CA Certificate")
-                .setMessage("Import a proxy CA certificate (.crt / .pem / .cer / .der)\n\n"
-                    + "The certificate will be:\n"
-                    + "\u2022 Stored once in HSPatcher\n"
-                    + "\u2022 Embedded in every patched APK\n"
-                    + "\u2022 Dumped to /data/local/tmp/ at runtime\n"
-                    + "\u2022 Trusted by the Frida SSL bypass\n\n"
-                    + "Supports: Reqable, Charles, mitmproxy, Burp Suite")
-                .setPositiveButton("📥 Import", (d, w) -> pickCertFile())
-                .setNegativeButton("Cancel", null)
-                .show();
+            tvStatus.setText("No certificate loaded — import to enable MITM proxy support");
+            tvStatus.setTextColor(getColor(R.color.hsp_text_muted));
+            infoPanelCard.setVisibility(View.GONE);
+            noCertHint.setVisibility(View.VISIBLE);
+            rowDelete.setVisibility(View.GONE);
+        }
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setView(root)
+            .create();
+
+        rowImport.setOnClickListener(v -> {
+            dialog.dismiss();
+            pickCertFile();
+        });
+
+        rowDelete.setOnClickListener(v -> {
+            dialog.dismiss();
+            deleteCaCert();
+            updateCertButton();
+            Toast.makeText(this, "CA certificate deleted", Toast.LENGTH_SHORT).show();
+        });
+
+        rowClose.setOnClickListener(v -> dialog.dismiss());
+
+        // Stagger-animate the visible action rows only
+        java.util.List<View> animViews = new java.util.ArrayList<>();
+        animViews.add(rowImport);
+        if (hasCert) animViews.add(rowDelete);
+        animViews.add(rowClose);
+        dialog.setOnShowListener(d -> animateToolsDialog(root, animViews.toArray(new View[0])));
+
+        dialog.show();
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            dialog.getWindow().setDimAmount(0.72f);
+            WindowManager.LayoutParams lp = dialog.getWindow().getAttributes();
+            lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.94f);
+            dialog.getWindow().setAttributes(lp);
         }
     }
 
