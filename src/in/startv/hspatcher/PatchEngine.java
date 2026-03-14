@@ -6,6 +6,7 @@ import java.io.*;
 import java.security.*;
 import java.security.cert.*;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.regex.*;
@@ -53,6 +54,7 @@ public class PatchEngine {
     private final Callback cb;
     private byte[] caCertData;  // optional: user CA cert for MITM proxy
     private File originalApkForSignature; // original APK (or base.apk from bundle) for signature extraction
+    private boolean forceRepatch; // allow re-patching already-patched APKs
 
     public PatchEngine(File inputApk, File extraZip, File fridaZip, File sigkillDir, File workDir, Callback cb) {
         this.inputApk = inputApk;
@@ -70,6 +72,9 @@ public class PatchEngine {
     public void setCaCert(byte[] cert) {
         this.caCertData = cert;
     }
+
+    /** Allow re-patching an already-patched APK (force mode). */
+    public void setForceRepatch(boolean force) { this.forceRepatch = force; }
 
     /**
      * Quick static check: is this APK already patched by HSPatcher?
@@ -130,7 +135,10 @@ public class PatchEngine {
             log("   Detected HSPatch artifacts from a previous patching session.");
             log("   Re-patching may cause crashes, duplicate hooks, or bloated APK size.");
             log("");
-            throw new Exception("APK_ALREADY_PATCHED" + verMsg);
+            if (!forceRepatch) {
+                throw new Exception("APK_ALREADY_PATCHED" + verMsg);
+            }
+            log("⚡ Force re-patch enabled — continuing anyway...");
         }
 
         // ======== DexGuard class encryption check ========
@@ -153,36 +161,76 @@ public class PatchEngine {
             log("   ⚠️ Could not extract original signature (unsigned APK?)");
         }
 
-        // ======== Step 2: Build injector DEX ========
-        progress(15, "Building injector DEX...");
-        log("\n📦 Step 2: Building injector DEX...");
-        String injDexName = "classes" + (info.dexCount + 1) + ".dex";
-        File injDex = new File(ws, injDexName);
-        int modCount = buildInjectorDex(injDex, info);
-        log("   ✅ " + injDexName + " (" + (injDex.length() / 1024) + " KB, " + modCount + " modules)");
+        // ======== Steps 2 + 3 + 3.5: PARALLEL DEX processing ========
+        progress(15, "Processing DEX files (parallel)...");
+        log("\n⚡ Steps 2+3+3.5: Parallel DEX processing...");
+        long parallelStart = System.currentTimeMillis();
 
-        // ======== Step 3: Patch hook target DEX ========
-        progress(30, "Patching hook DEX...");
-        log("\n⚡ Step 3: Patching " + info.hookDexName + "...");
-        File patchedDex = patchHookDex(inputApk, info, ws);
-        if (patchedDex != null) {
-            log("   ✅ Patched (" + (patchedDex.length() / 1024) + " KB)");
-        } else {
-            log("   ℹ️ DEX unchanged — ContentProvider bootstrap mode");
+        final String injDexName = "classes" + (info.dexCount + 1) + ".dex";
+        final File injDex = new File(ws, injDexName);
+        final File wsRef = ws;
+        final ApkInfo infoRef = info;
+
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+
+        // Step 2: Build injector DEX (parallel)
+        Future<Integer> injFuture = executor.submit(new Callable<Integer>() {
+            public Integer call() throws Exception {
+                log("📦 [Thread-Inj] Building injector DEX...");
+                int modCount = buildInjectorDex(injDex, infoRef);
+                log("   ✅ " + injDexName + " (" + (injDex.length() / 1024) + " KB, " + modCount + " modules)");
+                return modCount;
+            }
+        });
+
+        // Step 3: Patch hook target DEX (parallel)
+        Future<File> hookFuture = executor.submit(new Callable<File>() {
+            public File call() throws Exception {
+                log("⚡ [Thread-Hook] Patching " + infoRef.hookDexName + "...");
+                File patched = patchHookDex(inputApk, infoRef, wsRef);
+                if (patched != null) {
+                    log("   ✅ Hook DEX patched (" + (patched.length() / 1024) + " KB)");
+                } else {
+                    log("   ℹ️ Hook DEX unchanged — ContentProvider bootstrap mode");
+                }
+                return patched;
+            }
+        });
+
+        // Step 3.5: Smali-level patches on remaining DEXes (parallel)
+        Future<Map<String, File>> remainFuture = executor.submit(new Callable<Map<String, File>>() {
+            public Map<String, File> call() throws Exception {
+                log("🔧 [Thread-Smali] Smali patches (License hack + DexExtractor)...");
+                Map<String, File> extra = patchRemainingDexes(inputApk, infoRef, wsRef);
+                if (!extra.isEmpty()) {
+                    log("   ✅ Patched " + extra.size() + " additional DEX file(s)");
+                } else {
+                    log("   ℹ️ No additional DEX files needed patching");
+                }
+                return extra;
+            }
+        });
+
+        executor.shutdown();
+
+        // Collect results — propagate exceptions from worker threads
+        File patchedDex;
+        Map<String, File> extraPatched;
+        try {
+            injFuture.get();              // Step 2 result
+            patchedDex = hookFuture.get(); // Step 3 result
+            extraPatched = remainFuture.get(); // Step 3.5 result
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception) throw (Exception) cause;
+            throw new Exception("Parallel DEX processing failed", cause);
         }
 
-        // ======== Step 3.5: Smali-level patches on remaining DEXes ========
-        progress(50, "Smali patches...");
-        log("\n🔧 Step 3.5: Smali-level patches (License hack + DexExtractor)...");
-        Map<String, File> extraPatched = patchRemainingDexes(inputApk, info, ws);
-        if (!extraPatched.isEmpty()) {
-            log("   ✅ Patched " + extraPatched.size() + " additional DEX file(s)");
-        } else {
-            log("   ℹ️ No additional DEX files needed patching");
-        }
+        long parallelMs = System.currentTimeMillis() - parallelStart;
+        log("   ⏱️ Parallel DEX processing completed in " + parallelMs + "ms");
 
         // ======== Step 4: Build patched APK ========
-        progress(65, "Building APK...");
+        progress(60, "Building APK...");
         log("\n📦 Step 4: Building patched APK...");
         File unsignedApk = new File(ws, "unsigned.apk");
         buildPatchedApk(inputApk, unsignedApk, info.hookDexName, patchedDex,
@@ -1653,7 +1701,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.44";
+            String version = "3.53";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);
@@ -1925,78 +1973,159 @@ public class PatchEngine {
      * Returns a map of dexName → patchedFile for DEXes that were modified.
      */
     private Map<String, File> patchRemainingDexes(File apk, ApkInfo info, File ws) throws Exception {
-        Map<String, File> patched = new LinkedHashMap<>();
+        Map<String, File> patched = new ConcurrentHashMap<>();
+        List<String> candidates = new ArrayList<>();
         for (String dexName : info.dexNames) {
-            if (dexName.equals(info.hookDexName)) continue; // Already handled in patchHookDex
+            if (dexName.equals(info.hookDexName)) continue;
+            candidates.add(dexName);
+        }
+        if (candidates.isEmpty()) return patched;
 
-            File origDex = new File(ws, "sp_" + dexName);
-            extractFileFromApk(apk, dexName, origDex);
+        ExecutorService dexPool = Executors.newFixedThreadPool(
+            Math.min(candidates.size(), Runtime.getRuntime().availableProcessors()));
+        List<Future<?>> futures = new ArrayList<>();
 
-            // Quick check: does this DEX contain any patchable patterns?
-            // Stream-scan to avoid OOM on large DEX files (300MB+ APKs)
-            String[] scanPatterns = info.dexguardEncrypted
-                ? new String[]{"Ljava/security/Signature;", "getInstallerPackageName",
-                               "LicenseValidator", "ILicenseResultListener",
-                               "Ljava/lang/reflect/Method;"}
-                : new String[]{"Ljava/security/Signature;", "getInstallerPackageName",
-                               "LicenseValidator", "ILicenseResultListener"};
-            boolean[] found = streamContainsAny(origDex, scanPatterns);
-            boolean hasLicensePatterns = found[0] || found[1] || found[2] || found[3];
-            boolean hasReflectPatterns = info.dexguardEncrypted &&
-                scanPatterns.length > 4 && found[4];
-
-            if (!hasLicensePatterns && !hasReflectPatterns) {
-                origDex.delete();
-                continue;
-            }
-
-            log("   " + dexName + ": patchable patterns found, disassembling...");
-
-            // Baksmali
-            File smaliDir = new File(ws, "sp_smali_" + dexName.replace(".dex", ""));
-            smaliDir.mkdirs();
-            MultiDexContainer<? extends DexFile> container =
-                DexFileFactory.loadDexContainer(origDex, Opcodes.forApi(35));
-            for (String en : container.getDexEntryNames()) {
-                BaksmaliOptions opts = new BaksmaliOptions();
-                opts.apiLevel = 35;
-                Baksmali.disassembleDexFile(container.getEntry(en).getDexFile(), smaliDir, 4, opts);
-            }
-            container = null;
-            System.gc();
-
-            // Apply patches
-            int patches = applySmaliPatches(smaliDir, info);
-
-            if (patches > 0) {
-                log("   " + dexName + ": " + patches + " files patched, reassembling...");
-                DexBuilder db = new DexBuilder(Opcodes.forApi(35));
-                List<File> allSmali = new ArrayList<>();
-                collectSmaliFiles(smaliDir, allSmali);
-                int ok = 0, fail = 0;
-                for (File sf : allSmali) {
-                    try {
-                        SmaliMod.assembleSmaliFile(sf, db, 35, false, false);
-                        ok++;
-                    } catch (Exception e) {
-                        fail++;
-                    }
+        for (final String dexName : candidates) {
+            futures.add(dexPool.submit(new Callable<Void>() {
+                public Void call() throws Exception {
+                    patchSingleRemainingDex(apk, info, ws, dexName, patched);
+                    return null;
                 }
-                File outDex = new File(ws, dexName);
-                FileDataStore fds = new FileDataStore(outDex);
-                db.writeTo(fds);
-                fds.close();
-                patched.put(dexName, outDex);
-                log("   " + dexName + ": assembled " + ok + " classes" +
-                    (fail > 0 ? " (" + fail + " errors)" : ""));
-            } else {
-                log("   " + dexName + ": no patterns matched");
-            }
+            }));
+        }
 
-            origDex.delete();
-            deleteDir(smaliDir);
+        dexPool.shutdown();
+        for (Future<?> f : futures) {
+            try {
+                f.get();
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof Exception) throw (Exception) cause;
+                throw new Exception("Remaining DEX patching failed", cause);
+            }
         }
         return patched;
+    }
+
+    private void patchSingleRemainingDex(File apk, ApkInfo info, File ws,
+                                          String dexName, Map<String, File> patched) throws Exception {
+        File origDex = new File(ws, "sp_" + dexName);
+        extractFileFromApk(apk, dexName, origDex);
+
+        // Quick check: does this DEX contain any patchable patterns?
+        // DEX string pool stores type descriptors and method names separately,
+        // so scan for the actual strings that appear in DEX binary:
+        //  - "Ljava/security/Signature;" — type descriptor for Signature class
+        //  - "getInstallerPackageName" — method name string
+        //  - "LicenseValidator" — class name fragment
+        //  - "Ljava/lang/reflect/Method;" — type descriptor for DexGuard reflection
+        String[] scanPatterns = info.dexguardEncrypted
+            ? new String[]{"Ljava/security/Signature;", "getInstallerPackageName",
+                           "LicenseValidator",
+                           "Ljava/lang/reflect/Method;"}
+            : new String[]{"Ljava/security/Signature;", "getInstallerPackageName",
+                           "LicenseValidator"};
+        boolean[] found = streamContainsAny(origDex, scanPatterns);
+        boolean hasLicensePatterns = found[0] || found[1] || found[2];
+        boolean hasReflectPatterns = info.dexguardEncrypted &&
+            scanPatterns.length > 3 && found[3];
+
+        if (!hasLicensePatterns && !hasReflectPatterns) {
+            origDex.delete();
+            return;
+        }
+
+        // Build detail string for logging
+        StringBuilder foundDetail = new StringBuilder();
+        for (int i = 0; i < found.length; i++) {
+            if (found[i]) {
+                if (foundDetail.length() > 0) foundDetail.append(", ");
+                foundDetail.append(scanPatterns[i]);
+            }
+        }
+        log("   " + dexName + ": patchable refs found [" + foundDetail + "], disassembling...");
+
+        // Baksmali
+        File smaliDir = new File(ws, "sp_smali_" + dexName.replace(".dex", ""));
+        smaliDir.mkdirs();
+        MultiDexContainer<? extends DexFile> container =
+            DexFileFactory.loadDexContainer(origDex, Opcodes.forApi(35));
+        for (String en : container.getDexEntryNames()) {
+            BaksmaliOptions opts = new BaksmaliOptions();
+            opts.apiLevel = 35;
+            Baksmali.disassembleDexFile(container.getEntry(en).getDexFile(), smaliDir, 4, opts);
+        }
+        container = null;
+        System.gc();
+
+        // Quick smali-text pre-check: verify actual patchable invoke patterns exist
+        // before running expensive regex replacements on every file.
+        // This avoids wasted regex compilation when binary scan matched type/method
+        // refs that aren't used in a patchable instruction context.
+        boolean hasSmaliPatterns = smaliDirContainsPatterns(smaliDir,
+            "Signature;->verify([B)Z",
+            "PackageManager;->getInstallerPackageName",
+            "LicenseValidator");
+        if (info.dexguardEncrypted) {
+            hasSmaliPatterns = hasSmaliPatterns ||
+                smaliDirContainsPatterns(smaliDir, "Method;->invoke(");
+        }
+
+        if (!hasSmaliPatterns) {
+            log("   " + dexName + ": refs present but no patchable invoke patterns — skipping");
+            origDex.delete();
+            deleteDir(smaliDir);
+            return;
+        }
+
+        // Apply patches
+        int patches = applySmaliPatches(smaliDir, info);
+
+        if (patches > 0) {
+            log("   " + dexName + ": " + patches + " files patched, reassembling...");
+            DexBuilder db = new DexBuilder(Opcodes.forApi(35));
+            List<File> allSmali = new ArrayList<>();
+            collectSmaliFiles(smaliDir, allSmali);
+            int ok = 0, fail = 0;
+            for (File sf : allSmali) {
+                try {
+                    SmaliMod.assembleSmaliFile(sf, db, 35, false, false);
+                    ok++;
+                } catch (Exception e) {
+                    fail++;
+                }
+            }
+            File outDex = new File(ws, dexName);
+            FileDataStore fds = new FileDataStore(outDex);
+            db.writeTo(fds);
+            fds.close();
+            patched.put(dexName, outDex);
+            log("   " + dexName + ": assembled " + ok + " classes" +
+                (fail > 0 ? " (" + fail + " errors)" : ""));
+        } else {
+            log("   " + dexName + ": invoke patterns present but regex didn't match — skipping reassembly");
+        }
+
+        origDex.delete();
+        deleteDir(smaliDir);
+    }
+
+    /**
+     * Quick scan of smali files in a directory for any of the given string fragments.
+     * Reads file content and checks for substring presence. Stops at first match.
+     */
+    private boolean smaliDirContainsPatterns(File smaliDir, String... patterns) {
+        List<File> files = new ArrayList<>();
+        collectSmaliFiles(smaliDir, files);
+        for (File f : files) {
+            try {
+                String content = readFileStr(f);
+                for (String p : patterns) {
+                    if (content.contains(p)) return true;
+                }
+            } catch (Exception e) { /* skip */ }
+        }
+        return false;
     }
 
     // ======================== SIGNATURE EXTRACTION ========================
@@ -2497,12 +2626,12 @@ public class PatchEngine {
         for (File f : fs) { if (f.isDirectory()) collectSmaliFiles(f, out); else if (f.getName().endsWith(".smali")) out.add(f); }
     }
 
-    private void log(String msg) {
+    private synchronized void log(String msg) {
         Log.d(TAG, msg);
         if (cb != null) cb.onLog(msg);
     }
 
-    private void progress(int pct, String step) {
+    private synchronized void progress(int pct, String step) {
         Log.d(TAG, "[" + pct + "%] " + step);
         if (cb != null) cb.onProgress(pct, step);
     }

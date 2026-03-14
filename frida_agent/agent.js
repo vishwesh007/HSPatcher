@@ -1,7 +1,7 @@
 import Java from "frida-java-bridge";
 
 /*
- * HSPatch Universal Frida Script v3.44
+ * HSPatch Universal Frida Script v3.53
  * - SSL Certificate Pinning Bypass (Java + Native BoringSSL + Cronet)
  * - Security Error Dialog Suppression (JSON config + runtime fallback)
  * - Signature Verification Bypass (runtime layer)
@@ -11,26 +11,55 @@ import Java from "frida-java-bridge";
  * - Network Traffic Monitoring, Blocking & Modification
  * - URL Preparation-Time Content Blocker (URL.$init, URI.create, Uri.parse,
  *   HttpUrl.parse/get, Retrofit.baseUrl, OkHttp3, Cronet, WebView, DNS)
+ * - WebSocket Kill Switch (toggle via Debug Panel)
+ * - Frida Stealth (anti-detection: /proc/maps, threads, ports, files)
  *
- * NOTE: Java.performNow() is used for Android 16+ compatibility.
- * Java bridge imported via frida-java-bridge for Frida 17+ support.
- * performNow() runs synchronously on the current thread which already
- * has ART attached, ensuring hooks install before Application.onCreate().
+ * NOTE: Uses performNow() on Android 16+ (ART already attached to thread),
+ * falls back to Java.perform() on older versions (Android 10+) where ART
+ * may not yet be attached. Java bridge imported for Frida 17+ support.
  */
 
-Java.performNow(function() {
+function _hspatchMain() {
     var TAG = "HSPatch-Frida";
 
     // Diagnostic: log Frida script engine status
     try {
         var AndroidLog = Java.use('android.util.Log');
-        AndroidLog.i(TAG, 'Java.performNow() callback FIRED - SDK=' + Java.use('android.os.Build$VERSION').SDK_INT.value);
+        AndroidLog.i(TAG, 'HSPatch callback FIRED - SDK=' + Java.use('android.os.Build$VERSION').SDK_INT.value);
     } catch(e) {}
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.44              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.52              [#]');
         console.log('======================================================');
+
+        // =====================================================
+        // CACHED CLASS REFERENCES (performance optimization)
+        // Java.use() does ART class resolution on every call.
+        // Caching eliminates microseconds of overhead per lookup
+        // in hot-path functions called 100s of times/sec.
+        // =====================================================
+        var _classCache = {};
+        function _cls(name) {
+            if (!_classCache[name]) _classCache[name] = Java.use(name);
+            return _classCache[name];
+        }
+
+        // Cached app context (lazy-init, survives app lifetime)
+        var _appCtx = null;
+        function _getCtx() {
+            if (_appCtx === null) {
+                try { _appCtx = _cls('android.app.ActivityThread').currentApplication(); } catch(e) {}
+            }
+            return _appCtx;
+        }
+
+        // Pre-cached Java strings for SharedPreferences keys (avoid allocation per read)
+        var _jStr = {};
+        function _jstr(s) {
+            if (!_jStr[s]) _jStr[s] = Java.use('java.lang.String').$new(s);
+            return _jStr[s];
+        }
 
 
         // =====================================================
@@ -663,6 +692,331 @@ Java.performNow(function() {
 
 
         // =====================================================
+        // 3a. FRIDA STEALTH — Anti-Detection Bypass
+        //     Hides Frida gadget from apps that scan for it.
+        //     Detection vectors covered:
+        //       1. /proc/self/maps — strips lines containing frida/gadget
+        //       2. /proc/self/status — hides TracerPid
+        //       3. Thread enumeration — hides frida thread names
+        //       4. File existence checks — hides frida-related files
+        //       5. Port 27042 — hides frida-server default port
+        //       6. Native openat/open — intercepts /proc/self/maps reads
+        //     Ref: github.com/AeonLucid/frida-anti-detection patterns
+        // =====================================================
+        var _stealthTag = 'HSPatch-Stealth';
+        var _stealthCount = 0;
+
+        // --- Native hooks: hide frida from /proc/self/maps and /proc/self/status ---
+        try {
+            // Patterns that indicate frida presence in maps lines
+            var _fridaPatterns = ['frida', 'gadget', 'gum-js', 'gmain', 'linjector'];
+
+            var _isFridaLine = function(line) {
+                var lower = line.toLowerCase();
+                for (var i = 0; i < _fridaPatterns.length; i++) {
+                    if (lower.indexOf(_fridaPatterns[i]) !== -1) return true;
+                }
+                return false;
+            };
+
+            var _safeReadPath = function(p) {
+                try { return p.readUtf8String(); } catch(e2) { return null; }
+            };
+
+            // Use Process.getModuleByName for Frida gadget compatibility
+            var _libc = Process.getModuleByName('libc.so');
+
+            // Hook libc open/openat to track FDs for /proc/self/maps and /proc/self/status
+            var _mapsTrackedFds = {};
+
+            var _openPtr = _libc.findExportByName('open');
+            var _openatPtr = _libc.findExportByName('openat');
+            var _readPtr = _libc.findExportByName('read');
+            var _closePtr = _libc.findExportByName('close');
+
+            if (_openPtr) {
+                try {
+                    Interceptor.attach(_openPtr, {
+                        onEnter: function(args) {
+                            this._path = _safeReadPath(args[0]);
+                        },
+                        onLeave: function(retval) {
+                            var fd = retval.toInt32();
+                            if (fd > 0 && this._path) {
+                                if (this._path.indexOf('/proc/self/maps') !== -1 ||
+                                    this._path.indexOf('/proc/' + Process.id + '/maps') !== -1) {
+                                    _mapsTrackedFds[fd] = 'maps';
+                                } else if (this._path.indexOf('/proc/self/status') !== -1 ||
+                                           this._path.indexOf('/proc/' + Process.id + '/status') !== -1) {
+                                    _mapsTrackedFds[fd] = 'status';
+                                }
+                            }
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eOpen) {
+                    Log.w(_stealthTag, '[-] open() hook: ' + eOpen);
+                }
+            }
+
+            if (_openatPtr) {
+                try {
+                    Interceptor.attach(_openatPtr, {
+                        onEnter: function(args) {
+                            this._path = _safeReadPath(args[1]);
+                        },
+                        onLeave: function(retval) {
+                            var fd = retval.toInt32();
+                            if (fd > 0 && this._path) {
+                                if (this._path.indexOf('/proc/self/maps') !== -1 ||
+                                    this._path.indexOf('/proc/' + Process.id + '/maps') !== -1) {
+                                    _mapsTrackedFds[fd] = 'maps';
+                                } else if (this._path.indexOf('/proc/self/status') !== -1 ||
+                                           this._path.indexOf('/proc/' + Process.id + '/status') !== -1) {
+                                    _mapsTrackedFds[fd] = 'status';
+                                }
+                            }
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eOpenat) {
+                    Log.w(_stealthTag, '[-] openat() hook: ' + eOpenat);
+                }
+            }
+
+            // Hook read() to filter out frida-related lines from /proc/self/maps
+            // and spoof TracerPid in /proc/self/status
+            if (_readPtr) {
+                try {
+                    Interceptor.attach(_readPtr, {
+                        onEnter: function(args) {
+                            this._fd = args[0].toInt32();
+                            this._buf = args[1];
+                            this._size = args[2].toInt32();
+                        },
+                        onLeave: function(retval) {
+                            var fd = this._fd;
+                            var bytesRead = retval.toInt32();
+                            if (bytesRead <= 0 || !_mapsTrackedFds[fd]) return;
+
+                            try {
+                                var content = this._buf.readUtf8String(bytesRead);
+                                if (!content) return;
+
+                                if (_mapsTrackedFds[fd] === 'maps') {
+                                    var lines = content.split('\n');
+                                    var filtered = [];
+                                    var removed = 0;
+                                    for (var i = 0; i < lines.length; i++) {
+                                        if (!_isFridaLine(lines[i])) {
+                                            filtered.push(lines[i]);
+                                        } else {
+                                            removed++;
+                                        }
+                                    }
+                                    if (removed > 0) {
+                                        var clean = filtered.join('\n');
+                                        this._buf.writeUtf8String(clean);
+                                        retval.replace(clean.length);
+                                    }
+                                } else if (_mapsTrackedFds[fd] === 'status') {
+                                    var patched = content.replace(/TracerPid:\s*\d+/g, 'TracerPid:\t0');
+                                    if (patched !== content) {
+                                        this._buf.writeUtf8String(patched);
+                                        retval.replace(patched.length);
+                                    }
+                                }
+                            } catch (e) {
+                                // Ignore read errors (binary data, etc.)
+                            }
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eRead) {
+                    Log.w(_stealthTag, '[-] read() hook: ' + eRead);
+                }
+            }
+
+            // Track close() for cleanup
+            if (_closePtr) {
+                try {
+                    Interceptor.attach(_closePtr, {
+                        onEnter: function(args) {
+                            var fd = args[0].toInt32();
+                            if (_mapsTrackedFds[fd]) {
+                                delete _mapsTrackedFds[fd];
+                            }
+                        }
+                    });
+                } catch (eClose) {
+                    Log.w(_stealthTag, '[-] close() hook: ' + eClose);
+                }
+            }
+
+
+        } catch (eNativeStealth) {
+            Log.w(_stealthTag, '[-] Native stealth hooks failed: ' + eNativeStealth);
+        }
+
+        // --- Java-level: hide frida artifacts from File.exists(), file list, thread enum ---
+        try {
+            // Additional paths that indicate frida (beyond root paths already hooked)
+            var _fridaFileSet = {};
+            ['/data/local/tmp/frida-server', '/data/local/tmp/re.frida.server',
+             '/data/local/tmp/frida-server-arm64', '/data/local/tmp/frida-server-arm',
+             '/data/local/tmp/frida-agent', '/data/local/tmp/frida-gadget',
+             '/data/local/tmp/frida-helper'].forEach(function(p) { _fridaFileSet[p] = true; });
+
+            // Extend the existing File.exists() hook to also catch frida paths
+            // (the root path set is already hooked above in section 3)
+            // We hook File.exists() again — Frida merges hooks, so both fire
+            var FileS = Java.use('java.io.File');
+            var _origExistsS = FileS.exists;
+            FileS.exists.implementation = function() {
+                var path = this.getAbsolutePath();
+                if (_fridaFileSet[path]) {
+                    Log.d(_stealthTag, '[+] Hiding frida file: ' + path);
+                    return false;
+                }
+                // Also catch any path containing 'frida' in /data/local/tmp/
+                if (path.indexOf('/data/local/tmp/') === 0 && path.toLowerCase().indexOf('frida') !== -1) {
+                    return false;
+                }
+                return _origExistsS.call(this);
+            };
+            _stealthCount++;
+        } catch (eFileS) {
+            Log.w(_stealthTag, '[-] File.exists stealth hook: ' + eFileS);
+        }
+
+        // --- Hide frida thread names ---
+        try {
+            var Thread = Java.use('java.lang.Thread');
+            var _origGetName = Thread.getName;
+            var _fridaThreadNames = { 'gum-js-loop': true, 'gmain': true, 'gdbus': true,
+                                       'linjector': true, 'frida': true };
+            Thread.getName.implementation = function() {
+                var name = _origGetName.call(this);
+                if (name) {
+                    var lower = name.toLowerCase();
+                    for (var key in _fridaThreadNames) {
+                        if (lower.indexOf(key) !== -1) {
+                            return 'Thread-' + this.getId();
+                        }
+                    }
+                }
+                return name;
+            };
+            _stealthCount++;
+        } catch (eThread) {
+            Log.w(_stealthTag, '[-] Thread stealth hook: ' + eThread);
+        }
+
+        // --- Hide frida's default port (27042) from socket scans ---
+        try {
+            var InetSockAddr = Java.use('java.net.InetSocketAddress');
+            var _origISA = InetSockAddr.$init.overload('int');
+            _origISA.implementation = function(port) {
+                // Just let it through — we catch at connect level
+                return _origISA.call(this, port);
+            };
+
+            // ServerSocket / Socket.connect — block connections TO port 27042
+            var Socket = Java.use('java.net.Socket');
+            var _origConnect4 = Socket.connect.overload('java.net.SocketAddress', 'int');
+            _origConnect4.implementation = function(addr, timeout) {
+                try {
+                    var sa = Java.cast(addr, InetSockAddr);
+                    if (sa.getPort() === 27042) {
+                        Log.d(_stealthTag, '[+] Blocked connection to port 27042 (frida-server)');
+                        throw Java.use('java.net.ConnectException').$new('Connection refused');
+                    }
+                } catch (e) {
+                    if (('' + e).indexOf('Connection refused') !== -1) throw e;
+                }
+                return _origConnect4.call(this, addr, timeout);
+            };
+            _stealthCount++;
+        } catch (ePort) {
+            Log.w(_stealthTag, '[-] Port stealth hook: ' + ePort);
+        }
+
+        // --- Hide Frida from native stat/access checks ---
+        try {
+            if (!_libc) _libc = Process.getModuleByName('libc.so');
+            var _statPtr = _libc.findExportByName('stat');
+            var _accessPtr = _libc.findExportByName('access');
+
+            var _isFridaNativePath = function(path) {
+                if (!path) return false;
+                var lower = path.toLowerCase();
+                return (lower.indexOf('frida') !== -1 || lower.indexOf('gadget') !== -1) &&
+                       (lower.indexOf('/data/local/tmp/') !== -1 || lower.indexOf('/data/local/') !== -1);
+            }
+
+            if (_statPtr) {
+                try {
+                    Interceptor.attach(_statPtr, {
+                        onEnter: function(args) {
+                            try { var path = args[0].readUtf8String(); if (_isFridaNativePath(path)) this._hide = true; } catch(e) {}
+                        },
+                        onLeave: function(retval) {
+                            if (this._hide) retval.replace(-1);
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eStat) {
+                    Log.w(_stealthTag, '[-] stat() hook: ' + eStat);
+                }
+            }
+
+            if (_accessPtr) {
+                try {
+                    Interceptor.attach(_accessPtr, {
+                        onEnter: function(args) {
+                            try { var path = args[0].readUtf8String(); if (_isFridaNativePath(path)) this._hide = true; } catch(e) {}
+                        },
+                        onLeave: function(retval) {
+                            if (this._hide) retval.replace(-1);
+                        }
+                    });
+                    _stealthCount++;
+                } catch (eAccess) {
+                    Log.w(_stealthTag, '[-] access() hook: ' + eAccess);
+                }
+            }
+
+        } catch (eStatStealth) {
+            Log.w(_stealthTag, '[-] Native stat/access stealth: ' + eStatStealth);
+        }
+
+        Log.i(_stealthTag, '[*] Frida stealth: ' + _stealthCount + ' hooks installed');
+        console.log('[*] Frida stealth: ' + _stealthCount + ' anti-detection hooks installed');
+
+        // Self-test: verify /proc/self/maps filtering works from within the process
+        try {
+            var BufferedReader = Java.use('java.io.BufferedReader');
+            var FileReader = Java.use('java.io.FileReader');
+            var br = BufferedReader.$new(FileReader.$new('/proc/self/maps'));
+            var line, fridaFound = false, totalLines = 0;
+            while ((line = br.readLine()) !== null) {
+                totalLines++;
+                var lower = line.toLowerCase();
+                if (lower.indexOf('frida') !== -1 || lower.indexOf('gadget') !== -1) {
+                    fridaFound = true;
+                    Log.w(_stealthTag, '[!] SELF-TEST FAIL: maps still shows: ' + line);
+                }
+            }
+            br.close();
+            if (!fridaFound) {
+                Log.i(_stealthTag, '[+] SELF-TEST PASS: /proc/self/maps clean (' + totalLines + ' lines, no frida references)');
+            }
+        } catch (eSelfTest) {
+            Log.w(_stealthTag, '[-] Self-test error: ' + eSelfTest);
+        }
+
+
+        // =====================================================
         // 3b. CRYPTO EXCEPTION RESILIENCE (Re-signing Safety Net)
         //     When APK is re-signed, encrypted tokens/keys derived
         //     from the original signing cert fail to decrypt.
@@ -859,11 +1213,24 @@ Java.performNow(function() {
         }
 
         // --- Rules engine ---
-        var blockPatterns = [];
-        var rewriteRules = [];
+        // Built-in blocks: tracking/identity endpoints from video SDK libraries
+        // These domains are from the Tiled Media SDK and make external identity
+        // verification calls. Block at DNS + rewrite to unreachable dummy.
+        var blockPatterns = [
+            'v2.identity.tiled.media',
+            'v2.identity.shenwavideo.cn'
+        ];
+        // Built-in rewrites: neutralize SDK identity calls by redirecting to localhost
+        var _builtinRewrites = [
+            { from: 'v2.identity.tiled.media', to: '127.0.0.1' },
+            { from: 'v2.identity.shenwavideo.cn', to: '127.0.0.1' }
+        ];
+        var rewriteRules = _builtinRewrites.slice();
         var apiDumpEnabled = false;
         var trafficMonitorEnabled = true; // Toggled via in-app notification, persisted via flag file
+        var blockingNotificationEnabled = false; // Toggled via HostFilterActivity switch, persisted via prefs
         var toggleReceiverRegistered = false;
+        var refreshNotifReceiverRegistered = false;
         var NOTIF_ID = 19730;
         var NOTIF_CHANNEL = 'hspatch_block';
         var apiDumpMaxBytes = 10 * 1024 * 1024;
@@ -877,27 +1244,27 @@ Java.performNow(function() {
 
         function getInternalFilePath(fileName) {
             try {
-                var HSConfig = Java.use('in.startv.hotstar.HSPatchConfig');
-                return HSConfig.getFilePath(fileName);
+                return _cls('in.startv.hotstar.HSPatchConfig').getFilePath(fileName);
             } catch (e) { }
             try {
-                var ctx2 = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx2 = _getCtx();
                 if (ctx2 !== null) return ctx2.getFilesDir().getAbsolutePath() + '/' + fileName;
             } catch (e2) { }
             return null;
         }
 
+        // Cached SimpleDateFormat for apiDumpWrite (avoid creating per-event)
+        var _apiDumpSdf = null;
         function apiDumpWrite(line) {
             if (!apiDumpEnabled) return;
             try {
                 var path = getInternalFilePath('api_dump.txt');
                 if (path === null) return;
-                var File2 = Java.use('java.io.File');
-                var f2 = File2.$new(path);
+                var f2 = _cls('java.io.File').$new(path);
                 if (f2.exists() && f2.length() > apiDumpMaxBytes) return;
-                var ts2 = Java.use('java.text.SimpleDateFormat').$new('HH:mm:ss.SSS')
-                    .format(Java.use('java.util.Date').$new());
-                var fw2 = Java.use('java.io.FileWriter').$new(path, true);
+                if (_apiDumpSdf === null) _apiDumpSdf = _cls('java.text.SimpleDateFormat').$new('HH:mm:ss.SSS');
+                var ts2 = _apiDumpSdf.format(_cls('java.util.Date').$new());
+                var fw2 = _cls('java.io.FileWriter').$new(path, true);
                 fw2.write(ts2 + ' ' + line + '\n');
                 fw2.flush();
                 fw2.close();
@@ -909,12 +1276,9 @@ Java.performNow(function() {
             try {
                 var path = getInternalFilePath('host_rules.txt');
                 if (path === null) return;
-                var File = Java.use('java.io.File');
-                var f = File.$new(path);
+                var f = _cls('java.io.File').$new(path);
                 if (!f.exists()) { hostRulesLoaded = true; return; }
-                var BufferedReader = Java.use('java.io.BufferedReader');
-                var FileReader = Java.use('java.io.FileReader');
-                var reader = BufferedReader.$new(FileReader.$new(path));
+                var reader = _cls('java.io.BufferedReader').$new(_cls('java.io.FileReader').$new(path));
                 var line;
                 var count = 0;
                 while ((line = reader.readLine()) !== null) {
@@ -950,15 +1314,15 @@ Java.performNow(function() {
                     return;
                 }
                 Log.i(netLogTag, '[HOSTS] Saving ' + Object.keys(discoveredHosts).length + ' hosts to ' + path);
-                var sb = Java.use('java.lang.StringBuilder').$new();
+                var sb = _cls('java.lang.StringBuilder').$new();
                 sb.append('# Host rules - format: hostname ALLOW/DENY\n');
                 sb.append('# Auto-generated by HSPatch host discovery\n');
                 var hosts = Object.keys(discoveredHosts).sort();
                 for (var i = 0; i < hosts.length; i++) {
                     sb.append(hosts[i] + ' ' + discoveredHosts[hosts[i]] + '\n');
                 }
-                var fw = Java.use('java.io.PrintWriter').$new(
-                    Java.use('java.io.File').$new(path)
+                var fw = _cls('java.io.PrintWriter').$new(
+                    _cls('java.io.File').$new(path)
                 );
                 fw.print(sb.toString());
                 fw.flush();
@@ -1024,13 +1388,11 @@ Java.performNow(function() {
 
         function loadFilterMode() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
-                var prefs = ctx.getSharedPreferences(
-                    Java.use('java.lang.String').$new('hspatch_config'), 0);
-                if (prefs.contains(Java.use('java.lang.String').$new('network_filter_mode'))) {
-                    networkFilterMode = prefs.getInt(
-                        Java.use('java.lang.String').$new('network_filter_mode'), 0);
+                var prefs = ctx.getSharedPreferences(_jstr('hspatch_config'), 0);
+                if (prefs.contains(_jstr('network_filter_mode'))) {
+                    networkFilterMode = prefs.getInt(_jstr('network_filter_mode'), 0);
                     Log.i(netLogTag, '[FILTER] Mode loaded: ' + (networkFilterMode === 0 ? 'Only Block' : 'Only Allow'));
                 }
             } catch(e) {
@@ -1044,7 +1406,7 @@ Java.performNow(function() {
 
         function loadBlockingRules() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
                 var pkgName = ctx.getPackageName();
                 var fileNames = ['blocking_' + pkgName + '.txt', 'blocking_rules.txt', 'blocking_hotstar.txt'];
@@ -1066,7 +1428,7 @@ Java.performNow(function() {
                 // Flag file is only a fallback for first-run or manual override
                 var flagFileDisabled = false;
                 try {
-                    var File0 = Java.use('java.io.File');
+                    var File0 = _cls('java.io.File');
                     for (var dti = 0; dti < dirs.length; dti++) {
                         if (File0.$new(dirs[dti] + '/api_dump_enabled.txt').exists()) { apiDumpEnabled = true; break; }
                     }
@@ -1079,9 +1441,9 @@ Java.performNow(function() {
                     }
                 } catch (eDump) { }
 
-                var File = Java.use('java.io.File');
-                var BufferedReader = Java.use('java.io.BufferedReader');
-                var FileReader = Java.use('java.io.FileReader');
+                var File = _cls('java.io.File');
+                var BufferedReader = _cls('java.io.BufferedReader');
+                var FileReader = _cls('java.io.FileReader');
                 var found = false;
                 for (var fi = 0; fi < fileNames.length && !found; fi++) {
                     for (var di = 0; di < dirs.length && !found; di++) {
@@ -1125,12 +1487,19 @@ Java.performNow(function() {
             } catch (err) { Log.w(netLogTag, '[RULES] Failed: ' + err); }
         }
 
+        // Built-in blocks that persist across rule reloads
+        var _builtinBlocks = [
+            'v2.identity.tiled.media',
+            'v2.identity.shenwavideo.cn'
+        ];
+
         function scheduleRuleReload() {
             setTimeout(function() {
                 Java.perform(function() {
                     var ob = blockPatterns.length, or2 = rewriteRules.length, od = apiDumpEnabled;
-                    blockPatterns = []; rewriteRules = [];
+                    blockPatterns = _builtinBlocks.slice(); rewriteRules = _builtinRewrites.slice();
                     loadBlockingRules();
+                    _buildBlockIndex();
                     if (blockPatterns.length !== ob || rewriteRules.length !== or2 || apiDumpEnabled !== od) {
                         Log.i(netLogTag, '[RULES] Reloaded: ' + blockPatterns.length + ' block, ' + rewriteRules.length + ' rewrite, dump=' + (apiDumpEnabled?'ON':'OFF'));
                     }
@@ -1149,19 +1518,18 @@ Java.performNow(function() {
             }, 120000); // v3.42: 120s instead of 5s to reduce GC pressure
         }
         loadBlockingRules();
+        _buildBlockIndex();
         loadHostRules();
         loadFilterMode();
         scheduleRuleReload();
 
         // Restore toggle state from SharedPreferences (primary), flag file (fallback)
         try {
-            var ctx0 = Java.use('android.app.ActivityThread').currentApplication();
+            var ctx0 = _getCtx();
             if (ctx0 !== null) {
-                var prefs = ctx0.getSharedPreferences(
-                    Java.use('java.lang.String').$new('hspatch_config'), 0);
-                if (prefs.contains(Java.use('java.lang.String').$new('blocking_enabled'))) {
-                    trafficMonitorEnabled = prefs.getBoolean(
-                        Java.use('java.lang.String').$new('blocking_enabled'), true);
+                var prefs = ctx0.getSharedPreferences(_jstr('hspatch_config'), 0);
+                if (prefs.contains(_jstr('blocking_enabled'))) {
+                    trafficMonitorEnabled = prefs.getBoolean(_jstr('blocking_enabled'), true);
                     Log.i(netLogTag, '[TOGGLE] State restored from preferences: ' + (trafficMonitorEnabled ? 'ON' : 'OFF'));
                 } else {
                     Log.i(netLogTag, '[TOGGLE] No saved preference, using default (ON)');
@@ -1171,15 +1539,27 @@ Java.performNow(function() {
             Log.w(netLogTag, '[TOGGLE] Could not read preferences: ' + ep);
         }
 
+        // Restore blocking notification visibility preference (default OFF)
+        function loadBlockingNotificationPref() {
+            try {
+                var ctxN = _getCtx();
+                if (ctxN === null) return;
+                var prefsN = ctxN.getSharedPreferences(_jstr('hspatch_config'), 0);
+                blockingNotificationEnabled = prefsN.getBoolean(_jstr('blocking_notification'), false);
+            } catch (eN) {
+                // Keep default false on errors
+            }
+        }
+        loadBlockingNotificationPref();
+
         // =================== IN-APP BLOCKING TOGGLE (Notification) ===================
         function saveBlockingState(enabled) {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
-                var prefs = ctx.getSharedPreferences(
-                    Java.use('java.lang.String').$new('hspatch_config'), 0);
+                var prefs = ctx.getSharedPreferences(_jstr('hspatch_config'), 0);
                 prefs.edit()
-                    .putBoolean(Java.use('java.lang.String').$new('blocking_enabled'), enabled)
+                    .putBoolean(_jstr('blocking_enabled'), enabled)
                     .apply();
                 Log.i(netLogTag, '[TOGGLE] State saved to preferences: ' + (enabled ? 'ON' : 'OFF'));
             } catch(e) {
@@ -1189,19 +1569,31 @@ Java.performNow(function() {
 
         function updateBlockingNotification() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
-                var context = Java.cast(ctx, Java.use('android.content.Context'));
+                var context = Java.cast(ctx, _cls('android.content.Context'));
 
-                var Intent = Java.use('android.content.Intent');
-                var PendingIntent = Java.use('android.app.PendingIntent');
-                var toggleIntent = Intent.$new(Java.use('java.lang.String').$new('hspatch.TOGGLE_BLOCK'));
+                // Reload preference (allows live toggling from HostFilterActivity)
+                try { loadBlockingNotificationPref(); } catch(ePref) {}
+
+                var nm = Java.cast(context.getSystemService(_jstr('notification')),
+                                   _cls('android.app.NotificationManager'));
+
+                // If disabled, cancel existing notif and exit.
+                if (!blockingNotificationEnabled) {
+                    try { nm.cancel(NOTIF_ID); } catch(eCancel) {}
+                    return;
+                }
+
+                var Intent = _cls('android.content.Intent');
+                var PendingIntent = _cls('android.app.PendingIntent');
+                var toggleIntent = Intent.$new(_jstr('hspatch.TOGGLE_BLOCK'));
                 // FLAG_UPDATE_CURRENT | FLAG_IMMUTABLE
                 var piFlags = 0x08000000 | 0x04000000;
                 var togglePi = PendingIntent.getBroadcast(context, 0, toggleIntent, piFlags);
 
-                var Builder = Java.use('android.app.Notification$Builder');
-                var builder = Builder.$new(context, Java.use('java.lang.String').$new(NOTIF_CHANNEL));
+                var Builder = _cls('android.app.Notification$Builder');
+                var builder = Builder.$new(context, _jstr(NOTIF_CHANNEL));
 
                 var title = trafficMonitorEnabled
                     ? '\uD83D\uDEE1 Blocking: ON'
@@ -1216,18 +1608,15 @@ Java.performNow(function() {
                 try { iconId = ctx.getApplicationInfo().icon.value; } catch(e) {}
 
                 builder.setSmallIcon(iconId);
-                builder.setContentTitle(Java.use('java.lang.String').$new(title));
-                builder.setContentText(Java.use('java.lang.String').$new(text));
+                builder.setContentTitle(_jstr(title));
+                builder.setContentText(_jstr(text));
                 builder.setOngoing(true);
                 builder.setContentIntent(togglePi);
                 // Add explicit action button
                 var actionLabel = trafficMonitorEnabled ? '\u274C Turn OFF' : '\u2705 Turn ON';
                 builder.addAction(iconId,
-                    Java.cast(Java.use('java.lang.String').$new(actionLabel), Java.use('java.lang.CharSequence')),
+                    Java.cast(_jstr(actionLabel), _cls('java.lang.CharSequence')),
                     togglePi);
-
-                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
-                                   Java.use('android.app.NotificationManager'));
                 nm.notify(NOTIF_ID, builder.build());
             } catch(e) {
                 Log.e(netLogTag, '[TOGGLE] Notification error: ' + e);
@@ -1236,23 +1625,23 @@ Java.performNow(function() {
 
         function setupBlockingToggleUI() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) {
                     Log.w(netLogTag, '[TOGGLE] No context yet, retrying in 3s...');
                     setTimeout(function() { Java.perform(function() { setupBlockingToggleUI(); }); }, 3000);
                     return;
                 }
-                var context = Java.cast(ctx, Java.use('android.content.Context'));
+                var context = Java.cast(ctx, _cls('android.content.Context'));
 
                 // Create notification channel (Android O+)
-                var NotificationChannel = Java.use('android.app.NotificationChannel');
-                var nm = Java.cast(context.getSystemService(Java.use('java.lang.String').$new('notification')),
-                                   Java.use('android.app.NotificationManager'));
+                var NotificationChannel = _cls('android.app.NotificationChannel');
+                var nm = Java.cast(context.getSystemService(_jstr('notification')),
+                                   _cls('android.app.NotificationManager'));
                 var ch = NotificationChannel.$new(
-                    Java.use('java.lang.String').$new(NOTIF_CHANNEL),
-                    Java.cast(Java.use('java.lang.String').$new('HSPatch Blocking Control'), Java.use('java.lang.CharSequence')),
+                    _jstr(NOTIF_CHANNEL),
+                    Java.cast(_jstr('HSPatch Blocking Control'), _cls('java.lang.CharSequence')),
                     2); // IMPORTANCE_LOW — no sound
-                ch.setDescription(Java.use('java.lang.String').$new('Toggle ad/tracker blocking on or off'));
+                ch.setDescription(_jstr('Toggle ad/tracker blocking on or off'));
                 nm.createNotificationChannel(ch);
 
                 // Register BroadcastReceiver for toggle action
@@ -1275,10 +1664,10 @@ Java.performNow(function() {
                                         updateBlockingNotification();
                                         // Show toast
                                         try {
-                                            var ctx2 = Java.use('android.app.ActivityThread').currentApplication();
-                                            var Toast = Java.use('android.widget.Toast');
+                                            var ctx2 = _getCtx();
+                                            var Toast = _cls('android.widget.Toast');
                                             var msg = trafficMonitorEnabled ? 'Blocking ON' : 'Blocking OFF';
-                                            Toast.makeText(ctx2, Java.cast(Java.use('java.lang.String').$new(msg), Java.use('java.lang.CharSequence')), 0).show();
+                                            Toast.makeText(ctx2, Java.cast(_jstr(msg), _cls('java.lang.CharSequence')), 0).show();
                                         } catch(et) {}
                                     } catch(e) {
                                         Log.e(netLogTag, '[TOGGLE] onReceive error: ' + e);
@@ -1288,8 +1677,8 @@ Java.performNow(function() {
                         }
                     });
 
-                    var filter = Java.use('android.content.IntentFilter').$new(
-                        Java.use('java.lang.String').$new('hspatch.TOGGLE_BLOCK'));
+                    var filter = _cls('android.content.IntentFilter').$new(
+                        _jstr('hspatch.TOGGLE_BLOCK'));
                     var receiver = ReceiverClass.$new();
 
                     // API 33+ requires RECEIVER_NOT_EXPORTED flag
@@ -1305,6 +1694,44 @@ Java.performNow(function() {
                     toggleReceiverRegistered = true;
                 }
 
+                // Receiver to refresh/cancel notification when preference changes
+                if (!refreshNotifReceiverRegistered) {
+                    try {
+                        var BroadcastReceiver2 = Java.use('android.content.BroadcastReceiver');
+                        var RefreshClass = Java.registerClass({
+                            name: 'hspatch.BlockNotifRefreshReceiver',
+                            superClass: BroadcastReceiver2,
+                            methods: {
+                                onReceive: [{
+                                    returnType: 'void',
+                                    argumentTypes: ['android.content.Context', 'android.content.Intent'],
+                                    implementation: function(c, i) {
+                                        try {
+                                            updateBlockingNotification();
+                                        } catch (eR) {
+                                            Log.e(netLogTag, '[TOGGLE] Refresh receiver error: ' + eR);
+                                        }
+                                    }
+                                }]
+                            }
+                        });
+
+                        var filter2 = _cls('android.content.IntentFilter').$new(
+                            _jstr('hspatch.REFRESH_BLOCK_NOTIF'));
+                        var receiver2 = RefreshClass.$new();
+
+                        try {
+                            context.registerReceiver(receiver2, filter2, 4); // RECEIVER_NOT_EXPORTED
+                        } catch(eR0) {
+                            try { context.registerReceiver(receiver2, filter2); } catch(eR1) {}
+                        }
+
+                        refreshNotifReceiverRegistered = true;
+                    } catch(eRR) {
+                        Log.e(netLogTag, '[TOGGLE] Cannot register refresh receiver: ' + eRR);
+                    }
+                }
+
                 // Show initial notification
                 updateBlockingNotification();
                 Log.i(netLogTag, '[TOGGLE] In-app blocking toggle ready (notification)');
@@ -1313,50 +1740,348 @@ Java.performNow(function() {
             }
         }
 
-        // Separate domain-only rules from path rules for smarter matching
-        // Domain rules: no '/' → apply to DNS + URL hooks
-        // Path rules: contain '/' → apply to URL hooks only (not DNS)
-        function isDomainRule(pattern) {
-            return pattern.indexOf('/') === -1;
+        // =====================================================
+        // 5b. WEBSOCKET KILL SWITCH
+        //     Completely blocks all WebSocket connections when enabled.
+        //     Toggled via Debug Panel switch, persisted via prefs.
+        // =====================================================
+        var websocketKillEnabled = false;
+        var wsKillTag = 'HSPatch-WSKill';
+
+        function loadWebsocketKillPref() {
+            try {
+                var ctxWS = _getCtx();
+                if (ctxWS === null) return;
+                var prefsWS = ctxWS.getSharedPreferences(_jstr('hspatch_config'), 0);
+                websocketKillEnabled = prefsWS.getBoolean(_jstr('websocket_kill'), false);
+                Log.i(wsKillTag, '[WS-KILL] Pref loaded: ' + (websocketKillEnabled ? 'ON' : 'OFF'));
+            } catch (eWS) {
+                // Keep default false on errors
+            }
+        }
+        loadWebsocketKillPref();
+
+        // Hook OkHttp3 newWebSocket — the primary WebSocket creation API
+        try {
+            var OkHttpClient_WS = Java.use('okhttp3.OkHttpClient');
+            var _okNewWS = OkHttpClient_WS.newWebSocket.overload('okhttp3.Request', 'okhttp3.WebSocketListener');
+            _okNewWS.implementation = function(request, listener) {
+                loadWebsocketKillPref();
+                if (websocketKillEnabled) {
+                    var url = request.url().toString();
+                    Log.i(wsKillTag, '[WS-KILL] BLOCKED OkHttp3 WebSocket: ' + url);
+                    // Call listener.onFailure with an IOException to cleanly notify the caller
+                    try {
+                        var IOException = _cls('java.io.IOException');
+                        var failEx = IOException.$new('HSPatch: WebSocket killed by user toggle');
+                        var Response_WS = _cls('okhttp3.Response');
+                        listener.onFailure(Java.cast(_cls('java.lang.Object').$new(), _cls('okhttp3.WebSocket')), failEx, null);
+                    } catch(eFail) {
+                        // If onFailure fails, just log it
+                        Log.d(wsKillTag, '[WS-KILL] onFailure callback error (non-critical): ' + eFail);
+                    }
+                    return null;
+                }
+                return _okNewWS.call(this, request, listener);
+            };
+            Log.i(wsKillTag, '[+] OkHttp3 newWebSocket hooked');
+        } catch (e) {
+            Log.d(wsKillTag, '[-] OkHttp3 newWebSocket hook: ' + e);
+        }
+
+        // Hook RealWebSocket.connect — catches internal WebSocket initiation
+        try {
+            var RealWebSocket = Java.use('okhttp3.internal.ws.RealWebSocket');
+            var _rwsConnect = RealWebSocket.connect.overload('okhttp3.OkHttpClient');
+            _rwsConnect.implementation = function(client) {
+                loadWebsocketKillPref();
+                if (websocketKillEnabled) {
+                    Log.i(wsKillTag, '[WS-KILL] BLOCKED RealWebSocket.connect');
+                    return; // Simply don't connect
+                }
+                return _rwsConnect.call(this, client);
+            };
+            Log.i(wsKillTag, '[+] RealWebSocket.connect hooked');
+        } catch (e) {
+            Log.d(wsKillTag, '[-] RealWebSocket.connect hook: ' + e);
+        }
+
+        // Hook java.net WebSocket (JSR 356 / Tyrus)
+        try {
+            var WebSocketContainer = Java.use('javax.websocket.ContainerProvider');
+            var _getContainer = WebSocketContainer.getWebSocketContainer;
+            _getContainer.implementation = function() {
+                loadWebsocketKillPref();
+                if (websocketKillEnabled) {
+                    Log.i(wsKillTag, '[WS-KILL] BLOCKED WebSocketContainer creation');
+                    throw _cls('java.lang.RuntimeException').$new('HSPatch: WebSocket killed by user toggle');
+                }
+                return _getContainer.call(this);
+            };
+            Log.i(wsKillTag, '[+] javax.websocket hooked');
+        } catch (e) {
+            // javax.websocket may not be present — that's fine
+            Log.d(wsKillTag, '[-] javax.websocket hook: ' + e);
+        }
+
+        Log.i(wsKillTag, '[*] WebSocket kill switch installed (state: ' + (websocketKillEnabled ? 'ON' : 'OFF') + ')');
+
+        // =====================================================
+        // 5c. APP BAR HIDE (Bottom Navigation)
+        //     Hides the bottom navigation bar in JioHotstar
+        //     for a more immersive content viewing experience.
+        //     Toggled via Debug Panel switch, persisted via prefs.
+        // =====================================================
+        var appBarHideEnabled = false;
+        var appBarTag = 'HSPatch-AppBar';
+        var _appBarHideTimer = null;
+
+        function loadAppBarHidePref() {
+            try {
+                var ctxAB = _getCtx();
+                if (ctxAB === null) return;
+                var prefsAB = ctxAB.getSharedPreferences(_jstr('hspatch_config'), 0);
+                appBarHideEnabled = prefsAB.getBoolean(_jstr('appbar_hide'), false);
+            } catch (eAB) {
+                // Keep default false on errors
+            }
+        }
+        loadAppBarHidePref();
+
+        // Traverse view tree and hide/show views matching the target resource-id
+        function _setAppBarVisibility(rootView, visible) {
+            var GONE = 8, VISIBLE = 0;
+            var target = visible ? VISIBLE : GONE;
+            var found = false;
+
+            function traverse(view) {
+                try {
+                    // Check AccessibilityNodeInfo resource name (works for React Native testID)
+                    var nodeInfo = view.createAccessibilityNodeInfo();
+                    if (nodeInfo !== null) {
+                        var resName = nodeInfo.getViewIdResourceName();
+                        if (resName !== null) {
+                            var rn = resName.toString();
+                            if (rn === 'tag_bottom_menu') {
+                                view.setVisibility(target);
+                                found = true;
+                                Log.i(appBarTag, '[APP-BAR] ' + (visible ? 'SHOWN' : 'HIDDEN') + ' bottom nav (tag_bottom_menu)');
+                                nodeInfo.recycle();
+                                return;
+                            }
+                        }
+                        nodeInfo.recycle();
+                    }
+                } catch (eN) {}
+
+                // Recurse into ViewGroup children
+                try {
+                    var ViewGroup = Java.use('android.view.ViewGroup');
+                    var vg = Java.cast(view, ViewGroup);
+                    var count = vg.getChildCount();
+                    for (var i = 0; i < count; i++) {
+                        traverse(vg.getChildAt(i));
+                        if (found) return;
+                    }
+                } catch (eV) {}
+            }
+
+            traverse(rootView);
+            return found;
+        }
+
+        // Apply app bar hide to the current Activity
+        function applyAppBarHide() {
+            loadAppBarHidePref();
+            if (!appBarHideEnabled) return;
+            try {
+                var ActivityThread = Java.use('android.app.ActivityThread');
+                var at = ActivityThread.currentActivityThread();
+                var app = at.getApplication();
+                if (app === null) return;
+
+                // Get current resumed Activity
+                var activities = at.mActivities.value;
+                var keys = activities.keySet().toArray();
+                for (var k = 0; k < keys.length; k++) {
+                    var record = activities.get(keys[k]);
+                    if (record === null) continue;
+                    var paused = record.paused.value;
+                    if (paused) continue;
+                    var act = record.activity.value;
+                    if (act === null) continue;
+
+                    var decor = act.getWindow().getDecorView();
+                    if (_setAppBarVisibility(decor, false)) {
+                        Log.i(appBarTag, '[APP-BAR] Hide applied to ' + act.getClass().getName());
+                    }
+                }
+            } catch (eA) {
+                Log.d(appBarTag, '[APP-BAR] applyAppBarHide error: ' + eA);
+            }
+        }
+
+        // Schedule periodic re-application (React Native may recreate views)
+        function scheduleAppBarHide() {
+            if (_appBarHideTimer !== null) {
+                clearInterval(_appBarHideTimer);
+                _appBarHideTimer = null;
+            }
+            loadAppBarHidePref();
+            if (appBarHideEnabled) {
+                // Initial apply after a short delay for view tree to settle
+                setTimeout(function() { Java.perform(function() { applyAppBarHide(); }); }, 2000);
+                // Re-apply every 5 seconds (handles navigation/recreation)
+                _appBarHideTimer = setInterval(function() {
+                    Java.perform(function() { applyAppBarHide(); });
+                }, 5000);
+                Log.i(appBarTag, '[APP-BAR] Auto-hide scheduled');
+            } else {
+                // Restore visibility when disabled
+                try {
+                    var ActivityThread2 = Java.use('android.app.ActivityThread');
+                    var at2 = ActivityThread2.currentActivityThread();
+                    var activities2 = at2.mActivities.value;
+                    var keys2 = activities2.keySet().toArray();
+                    for (var k2 = 0; k2 < keys2.length; k2++) {
+                        var record2 = activities2.get(keys2[k2]);
+                        if (record2 === null) continue;
+                        var act2 = record2.activity.value;
+                        if (act2 === null) continue;
+                        var decor2 = act2.getWindow().getDecorView();
+                        _setAppBarVisibility(decor2, true);
+                    }
+                } catch (eR) {}
+                Log.i(appBarTag, '[APP-BAR] Auto-hide disabled, bars restored');
+            }
+        }
+
+        // Register broadcast receiver for toggle from DebugPanel
+        function setupAppBarHideToggle() {
+            try {
+                var ctx = _getCtx();
+                if (ctx === null) {
+                    setTimeout(function() { Java.perform(function() { setupAppBarHideToggle(); }); }, 3000);
+                    return;
+                }
+                var context = Java.cast(ctx, _cls('android.content.Context'));
+
+                var BroadcastReceiver = Java.use('android.content.BroadcastReceiver');
+                var ABReceiver = Java.registerClass({
+                    name: 'hspatch.AppBarHideReceiver',
+                    superClass: BroadcastReceiver,
+                    methods: {
+                        onReceive: [{
+                            returnType: 'void',
+                            argumentTypes: ['android.content.Context', 'android.content.Intent'],
+                            implementation: function(c, i) {
+                                try {
+                                    loadAppBarHidePref();
+                                    scheduleAppBarHide();
+                                    Log.i(appBarTag, '[APP-BAR] Toggle received: ' + (appBarHideEnabled ? 'HIDE' : 'SHOW'));
+                                } catch (eT) {
+                                    Log.e(appBarTag, '[APP-BAR] Toggle error: ' + eT);
+                                }
+                            }
+                        }]
+                    }
+                });
+
+                var filter = _cls('android.content.IntentFilter').$new(_jstr('hspatch.TOGGLE_APPBAR_HIDE'));
+                var receiver = ABReceiver.$new();
+                try {
+                    context.registerReceiver(receiver, filter, 4); // RECEIVER_NOT_EXPORTED
+                } catch (e1) {
+                    try { context.registerReceiver(receiver, filter); } catch (e2) {}
+                }
+
+                // Apply initial state
+                scheduleAppBarHide();
+                Log.i(appBarTag, '[APP-BAR] Hide toggle ready (state: ' + (appBarHideEnabled ? 'ON' : 'OFF') + ')');
+            } catch (eS) {
+                Log.e(appBarTag, '[APP-BAR] Setup error: ' + eS);
+            }
+        }
+
+        // =====================================================
+        // OPTIMIZED BLOCKING ENGINE
+        // Domain-only patterns stored in hash for O(1) lookup.
+        // Path patterns kept in array for substring matching.
+        // =====================================================
+        var _domainBlockSet = {};    // exact domain patterns → O(1)
+        var _pathBlockPatterns = []; // patterns with '/' → substring scan
+
+        function _buildBlockIndex() {
+            _domainBlockSet = {};
+            _pathBlockPatterns = [];
+            for (var i = 0; i < blockPatterns.length; i++) {
+                var p = blockPatterns[i];
+                if (p.indexOf('/') === -1) {
+                    // Domain-only pattern: store lowercase for O(1) lookup
+                    _domainBlockSet[p.toLowerCase()] = p;
+                } else {
+                    _pathBlockPatterns.push(p);
+                }
+            }
+        }
+
+        // Extract host from URL (fast, no regex)
+        function _extractHost(url) {
+            var protoEnd = url.indexOf('://');
+            if (protoEnd === -1) return null;
+            var hostStart = protoEnd + 3;
+            var hostEnd = url.indexOf('/', hostStart);
+            if (hostEnd === -1) hostEnd = url.indexOf('?', hostStart);
+            if (hostEnd === -1) hostEnd = url.length;
+            var host = url.substring(hostStart, hostEnd);
+            var colonIdx = host.indexOf(':');
+            if (colonIdx !== -1) host = host.substring(0, colonIdx);
+            return host;
         }
 
         function shouldBlock(url) {
             if (!trafficMonitorEnabled) return null;
-            // Check traditional block patterns first
-            for (var i = 0; i < blockPatterns.length; i++) {
-                if (url.indexOf(blockPatterns[i]) !== -1) return blockPatterns[i];
+
+            // Fast path: check domain hash O(1)
+            var host = _extractHost(url);
+            if (host) {
+                var hostLower = host.toLowerCase();
+                // Check exact domain match in hash
+                if (_domainBlockSet[hostLower]) return _domainBlockSet[hostLower];
+                // Check domain substring match (e.g. pattern "ads.example" matches "cdn.ads.example.com")
+                var domainKeys = Object.keys(_domainBlockSet);
+                for (var d = 0; d < domainKeys.length; d++) {
+                    if (hostLower.indexOf(domainKeys[d]) !== -1) return _domainBlockSet[domainKeys[d]];
+                }
             }
-            // Check host-based rules
-            try {
-                var host = null;
-                var protoEnd = url.indexOf('://');
-                if (protoEnd !== -1) {
-                    var hostStart = protoEnd + 3;
-                    var hostEnd = url.indexOf('/', hostStart);
-                    if (hostEnd === -1) hostEnd = url.indexOf('?', hostStart);
-                    if (hostEnd === -1) hostEnd = url.length;
-                    host = url.substring(hostStart, hostEnd);
-                    // Strip port
-                    var colonIdx = host.indexOf(':');
-                    if (colonIdx !== -1) host = host.substring(0, colonIdx);
-                }
-                if (host) {
-                    var hostResult = shouldBlockByHostRules(host);
-                    if (hostResult) return hostResult;
-                }
-            } catch(e) {}
+
+            // Check path-containing patterns (substring match on full URL)
+            for (var i = 0; i < _pathBlockPatterns.length; i++) {
+                if (url.indexOf(_pathBlockPatterns[i]) !== -1) return _pathBlockPatterns[i];
+            }
+
+            // Check host-based rules (discoveredHosts ALLOW/DENY)
+            if (host) {
+                var hostResult = shouldBlockByHostRules(host);
+                if (hostResult) return hostResult;
+            }
             return null;
         }
 
         // DNS-safe version: only checks domain-level rules (no path patterns)
         function shouldBlockDNS(hostname) {
             if (!trafficMonitorEnabled) return null;
-            // Check traditional domain-level block patterns
-            for (var i = 0; i < blockPatterns.length; i++) {
-                if (isDomainRule(blockPatterns[i]) && hostname.indexOf(blockPatterns[i]) !== -1) {
-                    return blockPatterns[i];
-                }
+            var hostLower = hostname.toLowerCase();
+
+            // Fast path: exact domain hash match
+            if (_domainBlockSet[hostLower]) return _domainBlockSet[hostLower];
+
+            // Substring match on domain patterns only
+            var domainKeys = Object.keys(_domainBlockSet);
+            for (var d = 0; d < domainKeys.length; d++) {
+                if (hostLower.indexOf(domainKeys[d]) !== -1) return _domainBlockSet[domainKeys[d]];
             }
+
             // Check host-based rules
             var hostResult = shouldBlockByHostRules(hostname);
             if (hostResult) return hostResult;
@@ -1376,26 +2101,49 @@ Java.performNow(function() {
 
         function ensureNetworkLoggerInitialized() {
             try {
-                var ctx = Java.use('android.app.ActivityThread').currentApplication();
+                var ctx = _getCtx();
                 if (ctx === null) return;
-                Java.use('in.startv.hotstar.NetworkLogger').init(ctx);
+                _cls('in.startv.hotstar.NetworkLogger').init(ctx);
             } catch (e) { }
         }
         function safeNetworkLoggerLog(line) {
-            try { ensureNetworkLoggerInitialized(); Java.use('in.startv.hotstar.NetworkLogger').log(line); } catch (e) { }
+            try { ensureNetworkLoggerInitialized(); _cls('in.startv.hotstar.NetworkLogger').log(line); } catch (e) { }
         }
         function logRewritten(source, method, before, after) {
             Log.i(netLogTag, '[REWRITE] [' + source + '] ' + method + ' ' + before + ' -> ' + after);
             safeNetworkLoggerLog('[REWRITE] [' + source + '] ' + method + ' ' + before + ' -> ' + after);
             apiDumpEvent(source, method, before + ' -> ' + after);
         }
+        // Batched blocked URL file writer (reduces sync I/O from per-event to periodic flush)
+        var _blockedUrlBuffer = [];
+        var _blockedUrlFlushTimer = null;
+
+        function _flushBlockedUrls() {
+            _blockedUrlFlushTimer = null;
+            if (_blockedUrlBuffer.length === 0) return;
+            var batch = _blockedUrlBuffer.splice(0);
+            Java.perform(function() {
+                try {
+                    var bp = getInternalFilePath('blocked_urls.txt');
+                    if (bp) {
+                        var fw = _cls('java.io.FileWriter').$new(bp, true);
+                        for (var i = 0; i < batch.length; i++) {
+                            fw.write(batch[i] + '\n');
+                        }
+                        fw.flush();
+                        fw.close();
+                    }
+                } catch(e2) {}
+            });
+        }
+
         function logBlocked(source, method, url, pattern) {
             Log.i(netLogTag, '[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
             safeNetworkLoggerLog('[BLOCKED] [' + source + '] ' + method + ' ' + url + ' (matched: ' + pattern + ')');
-            try {
-                var bp = getInternalFilePath('blocked_urls.txt');
-                if (bp) { var fw = Java.use('java.io.FileWriter').$new(bp, true); fw.write(url + '\n'); fw.flush(); fw.close(); }
-            } catch(e2) {}
+            _blockedUrlBuffer.push(url);
+            if (_blockedUrlFlushTimer === null) {
+                _blockedUrlFlushTimer = setTimeout(_flushBlockedUrls, 3000);
+            }
             apiDumpEvent(source, method, 'BLOCK ' + url + ' (matched: ' + pattern + ')');
         }
 
@@ -1704,9 +2452,9 @@ Java.performNow(function() {
                 if (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) {
                     try {
                         var bm = shouldBlock(u);
-                        if (bm !== null) { logBlocked('URL', 'OPEN', u, bm); return _urlOpen0.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked')); }
+                        if (bm !== null) { logBlocked('URL', 'OPEN', u, bm); return _urlOpen0.call(_cls('java.net.URL').$new('http://127.0.0.1:1/blocked')); }
                         var rw = applyRewrites(u);
-                        if (rw.changed) { logRewritten('URL', 'OPEN', u, rw.url); return _urlOpen0.call(Java.use('java.net.URL').$new(rw.url)); }
+                        if (rw.changed) { logRewritten('URL', 'OPEN', u, rw.url); return _urlOpen0.call(_cls('java.net.URL').$new(rw.url)); }
                     } catch (hookErr) { Log.w(netLogTag, '[!] URL.openConnection hook err: ' + hookErr); }
                 }
                 return _urlOpen0.call(this);
@@ -1718,9 +2466,9 @@ Java.performNow(function() {
                     if (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) {
                         try {
                             var bm = shouldBlock(u);
-                            if (bm !== null) { logBlocked('URL', 'OPEN_PROXY', u, bm); return _urlOpenProxy.call(Java.use('java.net.URL').$new('http://127.0.0.1:1/blocked'), proxy); }
+                            if (bm !== null) { logBlocked('URL', 'OPEN_PROXY', u, bm); return _urlOpenProxy.call(_cls('java.net.URL').$new('http://127.0.0.1:1/blocked'), proxy); }
                             var rw = applyRewrites(u);
-                            if (rw.changed) { logRewritten('URL', 'OPEN_PROXY', u, rw.url); return _urlOpenProxy.call(Java.use('java.net.URL').$new(rw.url), proxy); }
+                            if (rw.changed) { logRewritten('URL', 'OPEN_PROXY', u, rw.url); return _urlOpenProxy.call(_cls('java.net.URL').$new(rw.url), proxy); }
                         } catch (hookErr) { Log.w(netLogTag, '[!] URL.openConnection(Proxy) hook err: ' + hookErr); }
                     }
                     return _urlOpenProxy.call(this, proxy);
@@ -1775,8 +2523,8 @@ Java.performNow(function() {
                 if (bm !== null) {
                     logBlocked('OkHttp3', method, url, bm);
                     // v3.44: null-safe blocked URL — parse() can return null for some OkHttp builds
-                    var _blockedHU = Java.use('okhttp3.HttpUrl').parse('http://127.0.0.1:1/blocked');
-                    if (_blockedHU === null) _blockedHU = Java.use('okhttp3.HttpUrl').parse('http://0.0.0.0/blocked');
+                    var _blockedHU = _cls('okhttp3.HttpUrl').parse('http://127.0.0.1:1/blocked');
+                    if (_blockedHU === null) _blockedHU = _cls('okhttp3.HttpUrl').parse('http://0.0.0.0/blocked');
                     if (_blockedHU !== null) {
                         var blockedReq = request.newBuilder().url(_blockedHU).build();
                         return _okNewCall.call(this, blockedReq);
@@ -1786,8 +2534,8 @@ Java.performNow(function() {
                 var rw = applyRewrites(url);
                 if (rw.changed) {
                     logRewritten('OkHttp3', method, url, rw.url);
-                    var newHttpUrl = Java.use('okhttp3.HttpUrl').parse(rw.url);
-                    if (newHttpUrl !== null) return _okNewCall.call(this, request.newBuilder().url(newHttpUrl).build());
+                    var newHttpUrl = _cls('okhttp3.HttpUrl').parse(rw.url);
+                if (newHttpUrl !== null) return _okNewCall.call(this, request.newBuilder().url(newHttpUrl).build());
                 }
                 return _okNewCall.call(this, request);
             };
@@ -1923,7 +2671,7 @@ Java.performNow(function() {
             _hucConnect.implementation = function() {
                 var u = this.getURL().toString();
                 var bm = shouldBlock(u);
-                if (bm !== null) { logBlocked('HttpConn', 'CONN', u, bm); throw Java.use('java.io.IOException').$new('HSPatch: blocked: ' + bm); }
+                if (bm !== null) { logBlocked('HttpConn', 'CONN', u, bm); throw _cls('java.io.IOException').$new('HSPatch: blocked: ' + bm); }
                 return _hucConnect.call(this);
             };
         } catch (err) { }
@@ -1937,13 +2685,14 @@ Java.performNow(function() {
             _inetGetByName.implementation = function(host) {
                 if (host) {
                     var h = host.toString();
+                    // Rewrite check first: give neutralized domains a dummy value
+                    var rw = applyRewrites(h);
+                    if (rw.changed) { logRewritten('InetAddress','getByName',h,rw.url); return _inetGetByName.call(this, rw.url); }
                     var bm = shouldBlockDNS(h);
                     if (bm !== null) {
                         logBlocked('InetAddress', 'getByName', h, bm);
-                        throw Java.use('java.net.UnknownHostException').$new(h);
+                        throw _cls('java.net.UnknownHostException').$new(h);
                     }
-                    var rw = applyRewrites(h);
-                    if (rw.changed) { logRewritten('InetAddress','getByName',h,rw.url); return _inetGetByName.call(this, rw.url); }
                 }
                 return _inetGetByName.call(this, host);
             };
@@ -1952,13 +2701,14 @@ Java.performNow(function() {
                 _inetGetAll.implementation = function(host) {
                     if (host) {
                         var h = host.toString();
+                        // Rewrite check first: give neutralized domains a dummy value
+                        var rw = applyRewrites(h);
+                        if (rw.changed) { logRewritten('InetAddress','getAllByName',h,rw.url); return _inetGetAll.call(this, rw.url); }
                         var bm = shouldBlockDNS(h);
                         if (bm !== null) {
                             logBlocked('InetAddress', 'getAllByName', h, bm);
-                            throw Java.use('java.net.UnknownHostException').$new(h);
+                            throw _cls('java.net.UnknownHostException').$new(h);
                         }
-                        var rw = applyRewrites(h);
-                        if (rw.changed) { logRewritten('InetAddress','getAllByName',h,rw.url); return _inetGetAll.call(this, rw.url); }
                     }
                     return _inetGetAll.call(this, host);
                 };
@@ -1986,7 +2736,7 @@ Java.performNow(function() {
             var OkHttpClientBuilder = Java.use('okhttp3.OkHttpClient$Builder');
 
             // Register an interceptor class that checks URLs at execution time
-            var Interceptor = Java.use('okhttp3.Interceptor');
+            var OkInterceptor = Java.use('okhttp3.Interceptor');
             var Chain = Java.use('okhttp3.Interceptor$Chain');
             var Response = Java.use('okhttp3.Response');
             var ResponseBody = Java.use('okhttp3.ResponseBody');
@@ -1995,7 +2745,7 @@ Java.performNow(function() {
 
             var BlockInterceptor = Java.registerClass({
                 name: 'hspatch.BlockingInterceptor',
-                implements: [Interceptor],
+                implements: [OkInterceptor],
                 methods: {
                     intercept: [{
                         returnType: 'okhttp3.Response',
@@ -2008,15 +2758,15 @@ Java.performNow(function() {
                                 logBlocked('OkHttp-Interceptor', request.method(), url, bm);
                                 advBlockCount++;
                                 // Return empty 204 No Content response via Builder (stable API)
-                                var ResponseBuilder = Java.use('okhttp3.Response$Builder');
+                                var ResponseBuilder = _cls('okhttp3.Response$Builder');
                                 return ResponseBuilder.$new()
                                     .request(request)
                                     .protocol(Protocol.HTTP_1_1.value)
                                     .code(204)
-                                    .message(Java.use('java.lang.String').$new('Blocked by HSPatch'))
+                                    .message(_jstr('Blocked by HSPatch'))
                                     .body(ResponseBody.create(
                                         MediaType.parse('text/plain'),
-                                        Java.use('java.lang.String').$new('')
+                                        _jstr('')
                                     ))
                                     .build();
                             }
@@ -2054,7 +2804,7 @@ Java.performNow(function() {
                     if (bm !== null) {
                         logBlocked('RealCall', 'EXECUTE', url, bm);
                         advBlockCount++;
-                        throw Java.use('java.io.IOException').$new('HSPatch: blocked by rule: ' + bm);
+                        throw _cls('java.io.IOException').$new('HSPatch: blocked by rule: ' + bm);
                     }
                     return _rcExecute.call(this);
                 };
@@ -2230,7 +2980,7 @@ Java.performNow(function() {
         }
 
         Log.i(advBlockTag, '======================================================');
-        Log.i(advBlockTag, '[#] HSPatch v3.44: Advanced Hooking-Based Blocker      [#]');
+        Log.i(advBlockTag, '[#] HSPatch v3.52: Advanced Hooking-Based Blocker      [#]');
         Log.i(advBlockTag, '[*] Layer 4 hooks (in addition to Layer 3 legacy):');
         Log.i(advBlockTag, '[*]   OkHttp interceptor injection (build-time)');
         Log.i(advBlockTag, '[*]   ExoPlayer DataSpec + MediaPlayer URL blocking');
@@ -2240,13 +2990,10 @@ Java.performNow(function() {
         Log.i(advBlockTag, '======================================================');
 
         // Count domain vs path rules for summary
-        var domainRuleCount = 0, pathRuleCount = 0;
-        for (var ri = 0; ri < blockPatterns.length; ri++) {
-            if (isDomainRule(blockPatterns[ri])) domainRuleCount++;
-            else pathRuleCount++;
-        }
+        var domainRuleCount = Object.keys(_domainBlockSet).length;
+        var pathRuleCount = _pathBlockPatterns.length;
         Log.i(netLogTag, '======================================================');
-        Log.i(netLogTag, '[#] HSPatch v3.44: URL preparation-time blocker       [#]');
+        Log.i(netLogTag, '[#] HSPatch v3.52: URL preparation-time blocker       [#]');
         Log.i(netLogTag, '[*] Hooks: URL.$init(4), URI.create, Uri.parse,');
         Log.i(netLogTag, '[*]        HttpUrl.parse/get, Retrofit.baseUrl,');
         Log.i(netLogTag, '[*]        OkHttp3, Cronet, WebView, HttpURLConn,');
@@ -2260,4 +3007,16 @@ Java.performNow(function() {
 
         // Set up in-app blocking toggle notification
         setupBlockingToggleUI();
-    });
+
+        // Set up app bar hide toggle
+        setupAppBarHideToggle();
+}
+
+// Android version-aware launcher:
+// - Android 16+ (SDK 36+): Java.performNow() — ART is already attached to the thread
+// - Android 10+ (SDK 29+): Java.perform() — waits for ART runtime to be ready
+try {
+    Java.performNow(_hspatchMain);
+} catch (e) {
+    Java.perform(_hspatchMain);
+}

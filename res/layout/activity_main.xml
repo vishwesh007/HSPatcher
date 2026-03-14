@@ -1,309 +1,328 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/root_container"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root_frame"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="@dimen/hsp_padding_screen"
     android:background="@drawable/bg_glass_root"
-    android:animateLayoutChanges="true"
-    android:clipToPadding="false">
+    android:clipChildren="false">
 
-    <!-- Header -->
     <LinearLayout
-        android:id="@+id/header_container"
+        android:id="@+id/root_container"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:orientation="vertical"
-        android:gravity="start"
-        android:paddingTop="@dimen/hsp_spacing_lg"
-        android:paddingBottom="@dimen/hsp_spacing_md">
+        android:padding="@dimen/hsp_padding_screen"
+        android:clipToPadding="false">
+
+        <!-- Header -->
+        <LinearLayout
+            android:id="@+id/header_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="@dimen/hsp_spacing_lg"
+            android:paddingBottom="@dimen/hsp_spacing_md">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/title_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="⚡ HSPatcher"
+                    android:textSize="28sp"
+                    android:textColor="@color/hsp_accent_green"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/subtitle_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="One-Click Universal APK Patcher"
+                    android:textSize="14sp"
+                    android:textColor="@color/hsp_text_faint"
+                    android:paddingTop="@dimen/hsp_spacing_xs" />
+
+                <TextView
+                    android:id="@+id/version_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textSize="14sp"
+                    android:textColor="@color/hsp_text"
+                    android:textStyle="bold"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:paddingLeft="12dp"
+                    android:paddingRight="12dp"
+                    android:layout_marginTop="@dimen/hsp_spacing_sm"
+                    android:background="@drawable/bg_chip" />
+            </LinearLayout>
+
+            <!-- Tools menu button -->
+            <Button
+                android:id="@+id/btn_tools"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:text="⚙"
+                android:textSize="20sp"
+                android:textColor="@color/hsp_text_muted"
+                android:background="@drawable/btn_surface"
+                android:gravity="center"
+                android:padding="0dp" />
+        </LinearLayout>
+
+        <!-- Selected APK info -->
+        <LinearLayout
+            android:id="@+id/apk_info_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_card"
+            android:padding="@dimen/hsp_spacing_lg"
+            android:layout_marginTop="@dimen/hsp_spacing_md"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Selected APK"
+                android:textSize="12sp"
+                android:textColor="@color/hsp_text_faint" />
+
+            <TextView
+                android:id="@+id/apk_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textSize="16sp"
+                android:textColor="@color/hsp_text"
+                android:textStyle="bold"
+                android:paddingTop="@dimen/hsp_spacing_xs" />
+
+            <TextView
+                android:id="@+id/apk_size"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textSize="13sp"
+                android:textColor="@color/hsp_text_muted"
+                android:paddingTop="2dp" />
+        </LinearLayout>
+
+        <!-- Log output -->
+        <ScrollView
+            android:id="@+id/log_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="@dimen/hsp_spacing_md"
+            android:background="@drawable/bg_log"
+            android:padding="@dimen/hsp_spacing_md"
+            android:fillViewport="true"
+            android:overScrollMode="ifContentScrolls">
+
+            <TextView
+                android:id="@+id/log_output"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Ready. Select an APK to patch."
+                android:textSize="12sp"
+                android:textColor="@color/hsp_text_mono"
+                android:fontFamily="monospace"
+                android:lineSpacingExtra="2dp" />
+        </ScrollView>
+
+        <!-- Progress bar -->
+        <ProgressBar
+            android:id="@+id/progress_bar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/hsp_spacing_md"
+            android:max="100"
+            android:progress="0"
+            android:progressTint="@color/hsp_accent_green"
+            android:progressBackgroundTint="@color/hsp_glass_fill_strong"
+            android:visibility="gone" />
 
         <TextView
-            android:id="@+id/title_text"
-            android:layout_width="wrap_content"
+            android:id="@+id/progress_text"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="⚡ HSPatcher"
-            android:textSize="28sp"
+            android:text=""
+            android:textSize="12sp"
             android:textColor="@color/hsp_accent_green"
-            android:textStyle="bold" />
+            android:gravity="center"
+            android:paddingTop="4dp"
+            android:visibility="gone" />
 
-        <TextView
-            android:id="@+id/subtitle_text"
-            android:layout_width="wrap_content"
+        <!-- Phase 1: Initial — SELECT + EXTRACT -->
+        <LinearLayout
+            android:id="@+id/phase1_buttons"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="One-Click Universal APK Patcher"
-            android:textSize="14sp"
-            android:textColor="@color/hsp_text_faint"
-            android:paddingTop="@dimen/hsp_spacing_xs" />
+            android:orientation="vertical"
+            android:layout_marginTop="@dimen/hsp_spacing_lg">
 
-        <TextView
-            android:id="@+id/version_text"
-            android:layout_width="wrap_content"
+            <Button
+                android:id="@+id/btn_select"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/hsp_btn_h_lg"
+                android:text="🔧  SELECT APK"
+                android:textColor="@color/hsp_text_dark"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.06"
+                android:stateListAnimator="@xml/press_scale"
+                android:background="@drawable/btn_primary_green" />
+
+            <Button
+                android:id="@+id/btn_extract"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/hsp_btn_h_lg"
+                android:text="📱  EXTRACT FROM INSTALLED APP"
+                android:textColor="@color/hsp_text_dark"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.04"
+                android:stateListAnimator="@xml/press_scale"
+                android:background="@drawable/btn_primary_teal"
+                android:layout_marginTop="@dimen/hsp_spacing_sm" />
+        </LinearLayout>
+
+        <!-- Phase 2: APK Selected — PATCH + CANCEL -->
+        <LinearLayout
+            android:id="@+id/phase2_buttons"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text=""
-            android:textSize="14sp"
-            android:textColor="@color/hsp_text"
-            android:textStyle="bold"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp"
-            android:paddingLeft="12dp"
-            android:paddingRight="12dp"
-            android:layout_marginTop="@dimen/hsp_spacing_sm"
-            android:background="@drawable/bg_chip" />
+            android:orientation="horizontal"
+            android:layout_marginTop="@dimen/hsp_spacing_lg"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/btn_patch"
+                android:layout_width="0dp"
+                android:layout_height="@dimen/hsp_btn_h_lg"
+                android:layout_weight="1"
+                android:text="⚡ PATCH"
+                android:textColor="@color/hsp_text"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.06"
+                android:stateListAnimator="@xml/press_scale"
+                android:background="@drawable/btn_primary_purple"
+                android:layout_marginEnd="@dimen/hsp_spacing_sm" />
+
+            <Button
+                android:id="@+id/btn_cancel"
+                android:layout_width="0dp"
+                android:layout_height="@dimen/hsp_btn_h_lg"
+                android:layout_weight="1"
+                android:text="✕ CANCEL"
+                android:textColor="@color/hsp_text"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.04"
+                android:stateListAnimator="@xml/press_scale"
+                android:background="@drawable/btn_cancel"
+                android:layout_marginStart="@dimen/hsp_spacing_sm" />
+        </LinearLayout>
+
+        <!-- Phase 4: Patch Complete — INSTALL + UNINSTALL + MOD -->
+        <LinearLayout
+            android:id="@+id/phase4_buttons"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginTop="@dimen/hsp_spacing_lg"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/btn_install"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/hsp_btn_h_lg"
+                android:text="📲 INSTALL PATCHED APK"
+                android:textColor="@color/hsp_text_dark"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.04"
+                android:stateListAnimator="@xml/press_scale"
+                android:background="@drawable/btn_primary_amber" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="@dimen/hsp_spacing_sm">
+
+                <Button
+                    android:id="@+id/btn_uninstall"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/hsp_btn_h_md"
+                    android:layout_weight="1"
+                    android:text="🗑 UNINSTALL"
+                    android:textColor="@color/hsp_text"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.04"
+                    android:stateListAnimator="@xml/press_scale"
+                    android:background="@drawable/btn_danger"
+                    android:layout_marginEnd="@dimen/hsp_spacing_sm" />
+
+                <Button
+                    android:id="@+id/btn_mod"
+                    android:layout_width="0dp"
+                    android:layout_height="@dimen/hsp_btn_h_md"
+                    android:layout_weight="1"
+                    android:text="🔧 MOD ANOTHER"
+                    android:textColor="@color/hsp_text_dark"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.04"
+                    android:stateListAnimator="@xml/press_scale"
+                    android:background="@drawable/btn_primary_green"
+                    android:layout_marginStart="@dimen/hsp_spacing_sm" />
+            </LinearLayout>
+        </LinearLayout>
+
     </LinearLayout>
 
-    <!-- Selected APK info -->
-    <LinearLayout
-        android:id="@+id/apk_info_panel"
+    <!-- Color fill overlay for button press effects -->
+    <View
+        android:id="@+id/color_overlay"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:background="@drawable/bg_card"
-        android:padding="@dimen/hsp_spacing_lg"
-        android:layout_marginTop="@dimen/hsp_spacing_md"
-        android:visibility="gone">
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        android:elevation="2dp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Selected APK"
-            android:textSize="12sp"
-            android:textColor="@color/hsp_text_faint" />
-
-        <TextView
-            android:id="@+id/apk_name"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text=""
-            android:textSize="16sp"
-            android:textColor="@color/hsp_text"
-            android:textStyle="bold"
-            android:paddingTop="@dimen/hsp_spacing_xs" />
-
-        <TextView
-            android:id="@+id/apk_size"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text=""
-            android:textSize="13sp"
-            android:textColor="@color/hsp_text_muted"
-            android:paddingTop="2dp" />
-    </LinearLayout>
-
-    <!-- Log output -->
-    <ScrollView
-        android:id="@+id/log_scroll"
+    <!-- Particle container for explosion effect -->
+    <FrameLayout
+        android:id="@+id/particle_container"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:layout_marginTop="@dimen/hsp_spacing_md"
-        android:background="@drawable/bg_log"
-        android:padding="@dimen/hsp_spacing_md"
-        android:fillViewport="true"
-        android:overScrollMode="ifContentScrolls">
+        android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:elevation="10dp" />
 
-        <TextView
-            android:id="@+id/log_output"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Ready. Select an APK to patch."
-            android:textSize="12sp"
-            android:textColor="@color/hsp_text_mono"
-            android:fontFamily="monospace"
-            android:lineSpacingExtra="2dp" />
-    </ScrollView>
-
-    <!-- Progress bar -->
-    <ProgressBar
-        android:id="@+id/progress_bar"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/hsp_spacing_md"
-        android:max="100"
-        android:progress="0"
-        android:progressTint="@color/hsp_accent_green"
-        android:progressBackgroundTint="@color/hsp_glass_fill_strong"
-        android:visibility="gone" />
-
-    <TextView
-        android:id="@+id/progress_text"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text=""
-        android:textSize="12sp"
-        android:textColor="@color/hsp_accent_green"
+    <!-- FAB: CA Certificate -->
+    <Button
+        android:id="@+id/fab_cert"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="@dimen/hsp_spacing_lg"
+        android:layout_marginBottom="@dimen/hsp_spacing_lg"
+        android:text="📜"
+        android:textSize="22sp"
         android:gravity="center"
-        android:paddingTop="4dp"
-        android:visibility="gone" />
+        android:padding="0dp"
+        android:background="@drawable/fab_cert"
+        android:elevation="8dp"
+        android:stateListAnimator="@xml/press_scale" />
 
-    <!-- Buttons Row 1: Select / Patch -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="@dimen/hsp_spacing_lg">
-
-        <Button
-            android:id="@+id/btn_select"
-            android:layout_width="0dp"
-            android:layout_height="@dimen/hsp_btn_h_lg"
-            android:layout_weight="1"
-            android:text="SELECT APK"
-            android:textColor="@color/hsp_text_dark"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:letterSpacing="0.06"
-            android:stateListAnimator="@xml/press_scale"
-            android:background="@drawable/btn_primary_green"
-            android:layout_marginEnd="@dimen/hsp_spacing_sm" />
-
-        <Button
-            android:id="@+id/btn_patch"
-            android:layout_width="0dp"
-            android:layout_height="@dimen/hsp_btn_h_lg"
-            android:layout_weight="1"
-            android:text="⚡ PATCH"
-            android:textColor="@color/hsp_text"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:letterSpacing="0.06"
-            android:stateListAnimator="@xml/press_scale"
-            android:background="@drawable/btn_primary_purple"
-            android:enabled="false"
-            android:layout_marginStart="@dimen/hsp_spacing_sm" />
-    </LinearLayout>
-
-    <!-- Extract from installed apps -->
-    <Button
-        android:id="@+id/btn_extract"
-        android:layout_width="match_parent"
-        android:layout_height="@dimen/hsp_btn_h_md"
-        android:text="📱 EXTRACT FROM INSTALLED APP"
-        android:textColor="@color/hsp_text_dark"
-        android:textSize="13sp"
-        android:textStyle="bold"
-        android:letterSpacing="0.04"
-        android:stateListAnimator="@xml/press_scale"
-        android:background="@drawable/btn_primary_teal"
-        android:layout_marginTop="@dimen/hsp_spacing_sm" />
-
-    <Button
-        android:id="@+id/btn_install"
-        android:layout_width="match_parent"
-        android:layout_height="@dimen/hsp_btn_h_md"
-        android:text="INSTALL PATCHED APK"
-        android:textColor="@color/hsp_text_dark"
-        android:textSize="14sp"
-        android:textStyle="bold"
-        android:letterSpacing="0.04"
-        android:stateListAnimator="@xml/press_scale"
-        android:background="@drawable/btn_primary_amber"
-        android:visibility="gone"
-        android:layout_marginTop="@dimen/hsp_spacing_sm"
-        android:layout_marginBottom="@dimen/hsp_spacing_sm" />
-
-    <Button
-        android:id="@+id/btn_uninstall"
-        android:layout_width="match_parent"
-        android:layout_height="@dimen/hsp_btn_h_md"
-        android:text="UNINSTALL TARGET APP"
-        android:textColor="@color/hsp_text"
-        android:textSize="13sp"
-        android:textStyle="bold"
-        android:letterSpacing="0.04"
-        android:stateListAnimator="@xml/press_scale"
-        android:background="@drawable/btn_danger"
-        android:visibility="gone"
-        android:layout_marginTop="0dp"
-        android:layout_marginBottom="@dimen/hsp_spacing_sm" />
-
-    <!-- Tools Row -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="@dimen/hsp_spacing_xs">
-
-        <Button
-            android:id="@+id/btn_backup"
-            android:layout_width="0dp"
-            android:layout_height="@dimen/hsp_btn_h_sm"
-            android:layout_weight="1"
-            android:text="💾 BACKUP"
-            android:gravity="center"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="@color/hsp_text"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:letterSpacing="0.04"
-            android:stateListAnimator="@xml/press_scale"
-            android:background="@drawable/btn_primary_backup"
-            android:layout_marginEnd="@dimen/hsp_spacing_xs" />
-
-        <Button
-            android:id="@+id/btn_cert"
-            android:layout_width="0dp"
-            android:layout_height="@dimen/hsp_btn_h_sm"
-            android:layout_weight="1"
-            android:text="📜 CA CERT"
-            android:gravity="center"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="@color/hsp_text"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:letterSpacing="0.04"
-            android:stateListAnimator="@xml/press_scale"
-            android:background="@drawable/btn_primary_cert"
-            android:layout_marginStart="@dimen/hsp_spacing_xs"
-            android:layout_marginEnd="@dimen/hsp_spacing_xs" />
-
-        <Button
-            android:id="@+id/btn_signer"
-            android:layout_width="0dp"
-            android:layout_height="@dimen/hsp_btn_h_sm"
-            android:layout_weight="1"
-            android:text="🔐 SIGNER"
-            android:gravity="center"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="@color/hsp_text"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:letterSpacing="0.04"
-            android:stateListAnimator="@xml/press_scale"
-            android:background="@drawable/btn_primary_signer"
-            android:layout_marginStart="@dimen/hsp_spacing_xs" />
-    </LinearLayout>
-
-    <!-- Tools Row 2: DB Editor -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="@dimen/hsp_spacing_xs">
-
-        <Button
-            android:id="@+id/btn_db_editor"
-            android:layout_width="match_parent"
-            android:layout_height="@dimen/hsp_btn_h_sm"
-            android:text="🗄️ DB EDITOR"
-            android:gravity="center"
-            android:includeFontPadding="false"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="@color/hsp_text_dark"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:letterSpacing="0.04"
-            android:stateListAnimator="@xml/press_scale"
-            android:background="@drawable/btn_tool_dbeditor" />
-    </LinearLayout>
-
-</LinearLayout>
+</FrameLayout>

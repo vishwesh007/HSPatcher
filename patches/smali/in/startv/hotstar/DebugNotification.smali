@@ -120,7 +120,7 @@
     move-result-object v4
 
     const-string v6, "debug_notification_persistent"
-    const/4 v7, 0x0
+    const/4 v7, 0x1
     invoke-interface {v4, v6, v7}, Landroid/content/SharedPreferences;->getBoolean(Ljava/lang/String;Z)Z
     move-result v4
 
