@@ -334,6 +334,10 @@
     invoke-direct {v0, p0}, Landroid/widget/ScrollView;-><init>(Landroid/content/Context;)V
     iput-object v0, p0, Lin/startv/hotstar/DebugPanelActivity;->scrollView:Landroid/widget/ScrollView;
 
+    # Android 16 edge-to-edge fix
+    const/4 v2, 0x1
+    invoke-virtual {v0, v2}, Landroid/view/View;->setFitsSystemWindows(Z)V
+
     # Root LinearLayout
     new-instance v1, Landroid/widget/LinearLayout;
     invoke-direct {v1, p0}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V

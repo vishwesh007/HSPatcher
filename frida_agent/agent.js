@@ -19,8 +19,718 @@ import Java from "frida-java-bridge";
  * may not yet be attached. Java bridge imported for Frida 17+ support.
  */
 
+// --- Set up sigaltstack so SIGSEGV can be caught even when sp=0 ---
+(function() {
+    try {
+        var libc = Process.findModuleByName('libc.so');
+        var sigaltstackFn = new NativeFunction(libc.findExportByName('sigaltstack'), 'int', ['pointer', 'pointer']);
+        var altStackMem = Memory.alloc(0x20000); // 128KB alternate stack
+        // ARM64 stack_t: {void* ss_sp, int ss_flags, padding, size_t ss_size}
+        var ssStruct = Memory.alloc(24);
+        ssStruct.writePointer(altStackMem);
+        ssStruct.add(8).writeU32(0); // ss_flags = 0 (enable)
+        ssStruct.add(16).writeU64(0x20000); // ss_size
+        sigaltstackFn(ssStruct, ptr(0));
+    } catch(e) {}
+})();
+
+// Pre-allocate native logging for use in signal handler
+var _excLogTag = Memory.allocUtf8String("HSPatch-Exc");
+var _excLogFn = null;
+var _excLogFmtFn = null;
+try {
+    var _liblog = Process.findModuleByName('liblog.so');
+    if (_liblog) {
+        _excLogFn = new NativeFunction(_liblog.findExportByName('__android_log_print'), 'int', ['int', 'pointer', 'pointer']);
+        _excLogFmtFn = new NativeFunction(_liblog.findExportByName('__android_log_print'), 'int', ['int', 'pointer', 'pointer', 'pointer', 'pointer', 'pointer', 'pointer']);
+    }
+} catch(e) {}
+
+function _excLog(msg) {
+    if (_excLogFn) _excLogFn(4, _excLogTag, Memory.allocUtf8String(msg));
+}
+
+// --- Native exception handler to survive SecShell anti-tamper SIGBUS ---
+var _sigbusCount = 0;
+var _castleRecoveryStack = Memory.alloc(0x40000); // Pre-allocate 256KB stack
+var _patchedAddrs = {}; // Track already-patched call sites
+var ARM64_NOP = [0x1f, 0x20, 0x03, 0xd5]; // NOP instruction bytes
+var _secShellBase = null;
+var _secShellEnd = null;
+Process.setExceptionHandler(function(details) {
+    if (details.type === 'access-violation' || details.type === 'bus-error') {
+        _sigbusCount++;
+        var pc = details.context.pc;
+        _excLog('EXC #' + _sigbusCount + ' type=' + details.type + ' pc=' + pc + ' sp=' + details.context.sp);
+        if (_sigbusCount > 20) {
+            _excLog('Too many exceptions, giving up');
+            return false;
+        }
+
+        // Check if crash is from SecShell (death-trap target or within module range)
+        var isSecShellCrash = false;
+        if (pc.equals(ptr(0x7b0)) || pc.equals(ptr(0xa01))) {
+            isSecShellCrash = true;
+        } else if (_secShellBase && pc.compare(_secShellBase) >= 0 && pc.compare(_secShellEnd) < 0) {
+            isSecShellCrash = true;
+        } else {
+            // Try to detect SecShell module if not yet cached
+            try {
+                var secMod = Process.findModuleByName('libSecShell.so');
+                if (secMod) {
+                    _secShellBase = secMod.base;
+                    _secShellEnd = secMod.base.add(secMod.size);
+                    if (pc.compare(_secShellBase) >= 0 && pc.compare(_secShellEnd) < 0) {
+                        isSecShellCrash = true;
+                    }
+                }
+            } catch(e) {}
+        }
+
+        var tid = Process.getCurrentThreadId();
+        if (tid === Process.id) {
+            _excLog('Main thread, isSecShell=' + isSecShellCrash);
+
+            if (isSecShellCrash) {
+                // SecShell anti-tamper: use frame-chain recovery + NOP patching
+                var fp = details.context.fp;
+                _excLog('Main: fp=' + fp + ' lr=' + details.context.lr);
+
+                if (fp && !fp.isNull() && fp.compare(ptr(0x10000)) > 0) {
+                    try {
+                        var savedLr = fp.add(8).readPointer();
+                        var savedFp = fp.readPointer();
+                        if (!savedLr.isNull() && savedLr.compare(ptr(0x10000)) > 0) {
+                            if (globalThis._xhookRefreshFn) {
+                                try { globalThis._xhookRefreshFn(); } catch(e) {}
+                            }
+                            var blAddr = savedLr.sub(4);
+                            var addrKey = blAddr.toString();
+                            if (!_patchedAddrs[addrKey]) {
+                                try {
+                                    var origInstr = blAddr.readU32();
+                                    _excLog('Patching call-site at ' + blAddr + ' (was 0x' + origInstr.toString(16) + ')');
+                                    Memory.protect(blAddr, 4, 'rwx');
+                                    blAddr.writeByteArray(ARM64_NOP);
+                                    _patchedAddrs[addrKey] = true;
+                                    _excLog('Patched to NOP');
+                                } catch(patchErr) {
+                                    _excLog('Patch failed: ' + patchErr);
+                                }
+                            }
+                            details.context.sp = fp.add(16);
+                            details.context.fp = savedFp;
+                            details.context.lr = savedLr;
+                            details.context.pc = savedLr;
+                            details.context.x0 = ptr(0);
+                            _excLog('Recovered: PC=' + savedLr);
+                            return true;
+                        }
+                    } catch(e) { _excLog('FP read err: ' + e); }
+                }
+                // Fallback: park on sleep
+                _excLog('Parking main thread on sleep');
+                var libcMod = Process.findModuleByName('libc.so');
+                var sleepFn = libcMod ? libcMod.findExportByName('sleep') : null;
+                if (sleepFn) {
+                    details.context.sp = _castleRecoveryStack.add(0x20000);
+                    details.context.pc = sleepFn;
+                    details.context.x0 = ptr(86400);
+                    return true;
+                }
+            }
+
+            // Non-SecShell main thread crash: don't touch, let default handler run
+            _excLog('Non-SecShell main crash, not handling');
+            return false;
+        } else {
+            // Background thread — terminate cleanly to avoid blocking ART GC
+            _excLog('BG thread crash, isSecShell=' + isSecShellCrash);
+            // Only patch call-sites for SecShell anti-tamper crashes
+            // Patching non-SecShell crashes (e.g. JIT code) corrupts the app
+            if (isSecShellCrash) {
+                var bgFp = details.context.fp;
+                if (bgFp && !bgFp.isNull() && bgFp.compare(ptr(0x10000)) > 0) {
+                    try {
+                        var bgSavedLr = bgFp.add(8).readPointer();
+                        if (!bgSavedLr.isNull() && bgSavedLr.compare(ptr(0x10000)) > 0) {
+                            var bgBlAddr = bgSavedLr.sub(4);
+                            var bgKey = bgBlAddr.toString();
+                            if (!_patchedAddrs[bgKey]) {
+                                try {
+                                    Memory.protect(bgBlAddr, 4, 'rwx');
+                                    bgBlAddr.writeByteArray(ARM64_NOP);
+                                    _patchedAddrs[bgKey] = true;
+                                    _excLog('BG patched call-site at ' + bgBlAddr);
+                                } catch(e) { _excLog('BG patch err: ' + e); }
+                            }
+                        }
+                    } catch(e) {}
+                }
+            }
+            // For SecShell BG crashes: terminate thread cleanly to avoid blocking ART GC
+            // For non-SecShell BG crashes: let the default handler deal with it
+            if (!isSecShellCrash) {
+                _excLog('Non-SecShell BG crash, not handling');
+                return false;
+            }
+            // Use pthread_exit to cleanly terminate the thread (lets ART manage it).
+            // If sp is invalid, allocate a stack first so pthread_exit can run.
+            try {
+                var libcMod = Process.findModuleByName('libc.so');
+                var pthreadExitFn = libcMod ? libcMod.findExportByName('pthread_exit') : null;
+                if (pthreadExitFn) {
+                    if (details.context.sp.isNull() || details.context.sp.compare(ptr(0x10000)) < 0) {
+                        var bgStack = Memory.alloc(0x20000);
+                        globalThis['_bgStack' + _sigbusCount] = bgStack;
+                        details.context.sp = bgStack.add(0x10000);
+                    }
+                    details.context.pc = pthreadExitFn;
+                    details.context.x0 = ptr(0);
+                    _excLog('BG thread -> pthread_exit');
+                    return true;
+                }
+            } catch(e) {}
+            return false;
+        }
+    }
+    return false;
+});
+
+// --- Generic SecShell decryption & anti-tamper bypass ---
+// Activated only when libSecShell.so is detected in any app.
+// Uses known offsets for recognized packages, falls back to
+// ARM64 death-trap scanning for unknown SecShell deployments.
+function _secShellGenericBypass() {
+    if (globalThis._secShellGenericDone) return;
+    globalThis._secShellGenericDone = true;
+
+    var _ARM64_RET = [0xc0, 0x03, 0x5f, 0xd6];
+    var _ARM64_NOP = [0x1f, 0x20, 0x03, 0xd5];
+
+    // Known offsets table: package => [{off, desc, patch, verify?}]
+    var KNOWN_SECSHELL_OFFSETS = {
+        'com.external.castle': [
+            { off: 0x92F64, desc: 'death-trap', patch: _ARM64_RET, verify: 0xd10c03ff },
+            { off: 0x98AA8, desc: 'BL call-site #1', patch: _ARM64_NOP },
+            { off: 0x3EE08, desc: 'BR call-site #2', patch: _ARM64_NOP },
+            { off: 0xC3F08, desc: 'BG anti-tamper BL', patch: _ARM64_NOP }
+        ]
+    };
+
+    // Read package name
+    var _pkgName = '';
+    try {
+        var _br = Java.use('java.io.BufferedReader').$new(
+            Java.use('java.io.FileReader').$new('/proc/self/cmdline')
+        );
+        _pkgName = (_br.readLine() || '').replace(/\0/g, '');
+        _br.close();
+    } catch(e) {}
+
+    // Scan for ARM64 death-trap functions in SecShell module
+    // Death-trap pattern: SUB SP, SP, #large → MOV X29/X30, XZR (zeros FP/LR)
+    function _scanDeathTraps(secMod) {
+        var results = [];
+        var base = secMod.base;
+        var scanLen = Math.min(secMod.size, 0x200000); // Up to 2MB
+        if (scanLen < 64) return results;
+        try {
+            var buf = base.readByteArray(scanLen);
+            var view = new DataView(buf);
+            for (var off = 0; off < scanLen - 64; off += 4) {
+                var instr = view.getUint32(off, true);
+                // SUB SP, SP, #imm: (instr & 0xFF0003FF) === 0xD10003FF
+                if ((instr & 0xFF0003FF) === 0xD10003FF) {
+                    var imm12 = (instr >>> 10) & 0xFFF;
+                    var shift = (instr >>> 22) & 0x3;
+                    var value = shift === 1 ? (imm12 << 12) : imm12;
+                    if (value >= 0x200) {
+                        // Check next 10 instructions for FP/LR zeroing
+                        var isDeath = false;
+                        for (var j = 1; j <= 10 && (off + j * 4 + 4) <= scanLen; j++) {
+                            var nx = view.getUint32(off + j * 4, true);
+                            // MOV X29, XZR = 0xAA1F03FD or MOV X30, XZR = 0xAA1F03FE
+                            if (nx === 0xAA1F03FD || nx === 0xAA1F03FE) {
+                                isDeath = true;
+                                break;
+                            }
+                        }
+                        if (isDeath) results.push({ off: off, instr: instr });
+                    }
+                }
+            }
+        } catch(e) { _excLog('Death-trap scan err: ' + e); }
+        return results;
+    }
+
+    // Find BL instructions targeting a specific offset within the module
+    function _findBLCallSites(secMod, deathTrapOff) {
+        var results = [];
+        var scanLen = Math.min(secMod.size, 0x200000);
+        try {
+            var buf = secMod.base.readByteArray(scanLen);
+            var view = new DataView(buf);
+            for (var off = 0; off < scanLen - 4; off += 4) {
+                var instr = view.getUint32(off, true);
+                if ((instr & 0xFC000000) === 0x94000000) {
+                    var imm26 = instr & 0x3FFFFFF;
+                    if (imm26 & 0x2000000) imm26 -= 0x4000000;
+                    if (off + imm26 * 4 === deathTrapOff) results.push(off);
+                }
+            }
+        } catch(e) { _excLog('BL scan err: ' + e); }
+        return results;
+    }
+
+    function _patchSecShellGeneric(secMod) {
+        if (globalThis._secShellPrePatched) return;
+
+        var knownOffsets = KNOWN_SECSHELL_OFFSETS[_pkgName];
+        if (knownOffsets) {
+            // Known package: verify decryption then patch known offsets
+            var dt = knownOffsets[0];
+            try {
+                var cur = secMod.base.add(dt.off).readU32();
+                if (dt.verify && cur !== dt.verify) {
+                    _excLog('SecShell encrypted (0x' + cur.toString(16) + '), deferring');
+                    return;
+                }
+            } catch(e) { return; }
+
+            globalThis._secShellPrePatched = true;
+            _excLog('Patching SecShell (known: ' + _pkgName + ')');
+            for (var i = 0; i < knownOffsets.length; i++) {
+                var o = knownOffsets[i];
+                try {
+                    var addr = secMod.base.add(o.off);
+                    Memory.protect(addr, 4, 'rwx');
+                    addr.writeByteArray(o.patch);
+                    _excLog('Patched ' + o.desc + ' @ +0x' + o.off.toString(16));
+                } catch(e) { _excLog('Patch fail ' + o.desc + ': ' + e); }
+            }
+        } else {
+            // Unknown package: check decryption then scan
+            try {
+                var probe = secMod.base.add(0x1000).readU32();
+                if (probe === 0 || probe === 0xFFFFFFFF) return; // Still encrypted
+            } catch(e) { return; }
+
+            _excLog('SecShell generic scan for ' + (_pkgName || 'unknown'));
+            var traps = _scanDeathTraps(secMod);
+            if (traps.length === 0) {
+                _excLog('No death-traps found, crash handler active as fallback');
+                globalThis._secShellPrePatched = true; // Stop polling
+                return;
+            }
+
+            globalThis._secShellPrePatched = true;
+            var patched = 0;
+            for (var i = 0; i < traps.length; i++) {
+                var trap = traps[i];
+                try {
+                    var tAddr = secMod.base.add(trap.off);
+                    Memory.protect(tAddr, 4, 'rwx');
+                    tAddr.writeByteArray(_ARM64_RET);
+                    patched++;
+                    _excLog('Death-trap +0x' + trap.off.toString(16) + ' -> RET');
+                } catch(e) {}
+
+                var sites = _findBLCallSites(secMod, trap.off);
+                for (var j = 0; j < sites.length; j++) {
+                    try {
+                        var sAddr = secMod.base.add(sites[j]);
+                        Memory.protect(sAddr, 4, 'rwx');
+                        sAddr.writeByteArray(_ARM64_NOP);
+                        patched++;
+                        _excLog('Call-site +0x' + sites[j].toString(16) + ' -> NOP');
+                    } catch(e) {}
+                }
+            }
+            _excLog('Generic SecShell: patched ' + patched + ' sites');
+        }
+
+        // Refresh xhook if available
+        if (globalThis._xhookRefreshFn) {
+            try { globalThis._xhookRefreshFn(); } catch(e) {}
+            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 200);
+            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 500);
+        }
+    }
+
+    // dlopen hook: detect SecShell loading
+    try {
+        var _dlopenAddr = Module.findExportByName(null, 'android_dlopen_ext')
+            || Module.findExportByName('libdl.so', 'android_dlopen_ext')
+            || Module.findExportByName(null, 'dlopen')
+            || Module.findExportByName('libdl.so', 'dlopen');
+        if (_dlopenAddr) {
+            Interceptor.attach(_dlopenAddr, {
+                onEnter: function(args) {
+                    try {
+                        var n = args[0].readUtf8String();
+                        if (n && n.indexOf('SecShell') !== -1) this._isSS = true;
+                    } catch(e) {}
+                },
+                onLeave: function(retval) {
+                    if (this._isSS) {
+                        var m = Process.findModuleByName('libSecShell.so');
+                        if (m) {
+                            _secShellBase = m.base;
+                            _secShellEnd = m.base.add(m.size);
+                            _patchSecShellGeneric(m);
+                        }
+                    }
+                }
+            });
+        }
+    } catch(e) {}
+
+    // Polling fallback (auto-stops after 30s if no SecShell found)
+    var _ssPoll = setInterval(function() {
+        try {
+            var m = Process.findModuleByName('libSecShell.so');
+            if (m) {
+                _secShellBase = m.base;
+                _secShellEnd = m.base.add(m.size);
+                _patchSecShellGeneric(m);
+                if (globalThis._secShellPrePatched) clearInterval(_ssPoll);
+            }
+        } catch(e) {}
+    }, 10);
+    setTimeout(function() { clearInterval(_ssPoll); }, 30000);
+
+    _excLog('SecShell generic bypass active (pkg=' + _pkgName + ')');
+}
+
+// --- Castle pre-init: file hooks + hidden API bypass (before SecShell loads) ---
+function _castlePreInit() {
+    var TAG = "HSPatch-Castle";
+    var AndroidLog;
+    try { AndroidLog = Java.use('android.util.Log'); } catch(e) { return; }
+
+    // Detect Castle by reading /proc/self/cmdline via Java I/O
+    var cmdline = '';
+    try {
+        var br = Java.use('java.io.BufferedReader').$new(
+            Java.use('java.io.FileReader').$new('/proc/self/cmdline')
+        );
+        cmdline = br.readLine() || '';
+        br.close();
+    } catch(e) { return; }
+    if (cmdline.indexOf('com.external.castle') === -1) return;
+
+    // Prevent duplicate pre-init (DelegateLastClassLoader may trigger second run)
+    if (globalThis._castlePreInitDone) {
+        AndroidLog.i(TAG, 'Castle pre-init already done, skipping');
+        return;
+    }
+    globalThis._castlePreInitDone = true;
+
+    AndroidLog.i(TAG, 'Castle detected, pre-init starting...');
+
+    // Step 1: Get APK path (works during <clinit> before APK is memory-mapped)
+    var apkPath = null;
+
+    // Primary: ActivityThread.mBoundApplication.appInfo.sourceDir
+    // mBoundApplication is set in handleBindApplication BEFORE class loading
+    try {
+        var AT = Java.use('android.app.ActivityThread');
+        var at = AT.currentActivityThread();
+        var bindData = at.mBoundApplication.value;
+        var appInfoField = bindData.getClass().getDeclaredField('appInfo');
+        appInfoField.setAccessible(true);
+        var appInfo = Java.cast(appInfoField.get(bindData), Java.use('android.content.pm.ApplicationInfo'));
+        apkPath = appInfo.sourceDir.value;
+        AndroidLog.i(TAG, 'APK path (ActivityThread): ' + apkPath);
+    } catch(e) {
+        AndroidLog.w(TAG, 'ActivityThread path: ' + e);
+    }
+
+    // Fallback: AW.mC context (only works after AW.attachBaseContext sets it)
+    if (!apkPath) {
+        try {
+            var AW = Java.use('com.SecShell.SecShell.AW');
+            var ctx = AW.mC.value;
+            if (ctx) {
+                apkPath = ctx.getApplicationInfo().sourceDir.value;
+                AndroidLog.i(TAG, 'APK path (AW.mC): ' + apkPath);
+            }
+        } catch(e) {}
+    }
+
+    // Fallback: scan /proc/self/maps (only works if APK is mmap'd)
+    if (!apkPath) {
+        try {
+            var br2 = Java.use('java.io.BufferedReader').$new(
+                Java.use('java.io.FileReader').$new('/proc/self/maps')
+            );
+            var line;
+            while ((line = br2.readLine()) !== null) {
+                if (line.indexOf('com.external.castle') !== -1 && line.indexOf('base.apk') !== -1) {
+                    var parts = line.trim().split(/\s+/);
+                    apkPath = parts[parts.length - 1];
+                    break;
+                }
+            }
+            br2.close();
+            if (apkPath) AndroidLog.i(TAG, 'APK path (maps): ' + apkPath);
+        } catch(e) {}
+    }
+
+    if (!apkPath) {
+        AndroidLog.w(TAG, 'APK path not found (hookApkPath deferred to killOpen)');
+    }
+
+    // Step 2: Load libSignatureKiller.so + extract origin.apk + hookApkPath
+    var dataDir = '/data/data/com.external.castle';
+    var originPath = dataDir + '/origin.apk';
+
+    if (apkPath) {
+        // Extract origin.apk from modified APK assets
+        try {
+            var ZipFile = Java.use('java.util.zip.ZipFile');
+            var FileJava = Java.use('java.io.File');
+            var FileOutputStream = Java.use('java.io.FileOutputStream');
+            var zip = ZipFile.$new(apkPath);
+            var entry = zip.getEntry('assets/SignatureKiller/origin.apk');
+            if (entry) {
+                var expectedSize = entry.getSize();
+                var existingFile = FileJava.$new(originPath);
+                if (!existingFile.exists() || existingFile.length() !== expectedSize) {
+                    AndroidLog.i(TAG, 'Extracting origin.apk (' + expectedSize + ' bytes)...');
+                    var inputStream = zip.getInputStream(entry);
+                    var fos = FileOutputStream.$new(originPath);
+                    var buf = Java.array('byte', new Array(8192).fill(0));
+                    var len;
+                    while ((len = inputStream.read(buf)) !== -1) {
+                        fos.write(buf, 0, len);
+                    }
+                    inputStream.close();
+                    fos.close();
+                    AndroidLog.i(TAG, 'origin.apk extracted');
+                } else {
+                    AndroidLog.i(TAG, 'origin.apk already exists, skipping');
+                }
+            } else {
+                AndroidLog.w(TAG, 'origin.apk not in APK assets');
+            }
+            zip.close();
+        } catch(e) {
+            AndroidLog.e(TAG, 'Extract failed: ' + e);
+        }
+
+        // Load libSignatureKiller.so early (before killOpen in <clinit>)
+        // Use System.load with full path since loadLibrary may not find it during <clinit>
+        try {
+            var libSkDir = apkPath.replace(/\/base\.apk$/, '/lib/arm64');
+            var libSkPath = libSkDir + '/libSignatureKiller.so';
+            Java.use('java.lang.System').load(libSkPath);
+            AndroidLog.i(TAG, 'libSignatureKiller.so loaded from ' + libSkPath);
+        } catch(e) {
+            AndroidLog.w(TAG, 'System.load SignatureKiller: ' + e);
+        }
+
+        try {
+            var sigKillerMod = Process.findModuleByName('libSignatureKiller.so');
+            if (sigKillerMod) {
+                AndroidLog.i(TAG, 'libSignatureKiller at ' + sigKillerMod.base);
+                var hookApkPathAddr = sigKillerMod.findExportByName('Java_bin_mt_signature_KillerApplication_hookApkPath');
+                var xhookRefreshAddr = sigKillerMod.findExportByName('xhook_refresh');
+
+                if (!hookApkPathAddr) {
+                    var exports = sigKillerMod.enumerateExports();
+                    for (var i = 0; i < exports.length; i++) {
+                        if (exports[i].name.indexOf('hookApkPath') !== -1) hookApkPathAddr = exports[i].address;
+                        if (exports[i].name.indexOf('xhook_refresh') !== -1 && !xhookRefreshAddr) xhookRefreshAddr = exports[i].address;
+                    }
+                }
+
+                if (hookApkPathAddr) {
+                    var env = Java.vm.getEnv();
+                    var apkPathJstr = env.newStringUtf(apkPath);
+                    var originPathJstr = env.newStringUtf(originPath);
+                    var hookApkPathFn = new NativeFunction(hookApkPathAddr, 'void',
+                        ['pointer', 'pointer', 'pointer', 'pointer']);
+                    hookApkPathFn(env.handle, ptr(0), apkPathJstr, originPathJstr);
+                    AndroidLog.i(TAG, 'hookApkPath: ' + apkPath + ' -> ' + originPath);
+                }
+
+                if (xhookRefreshAddr) {
+                    var xhookRefreshFn = new NativeFunction(xhookRefreshAddr, 'int', []);
+                    xhookRefreshFn();
+                    globalThis._xhookRefreshFn = xhookRefreshFn;
+                    AndroidLog.i(TAG, 'xhook_refresh called (initial)');
+                }
+            }
+        } catch(e) {
+            AndroidLog.e(TAG, 'hookApkPath error: ' + e);
+        }
+    }
+
+    // Step 3: SecShell anti-tamper pre-patching (ALWAYS runs, even without APK path)
+    // Ensure xhookRefreshFn is available
+    if (!globalThis._xhookRefreshFn) {
+        try {
+            var skm = Process.findModuleByName('libSignatureKiller.so');
+            if (skm) {
+                var xra = skm.findExportByName('xhook_refresh');
+                if (xra) globalThis._xhookRefreshFn = new NativeFunction(xra, 'int', []);
+            }
+        } catch(e) {}
+    }
+
+    // Use global flag so second pre-init invocation doesn't create duplicate polling
+    var EXPECTED_DEATH_TRAP_INSTR = 0xd10c03ff;
+
+    function _patchSecShellOffsets(secMod) {
+        if (globalThis._secShellPrePatched) return;
+
+        // Verify code section is decrypted before patching.
+        // SecShell's code is encrypted in the .so file; JNI_OnLoad decrypts it.
+        // Check the death-trap instruction — if it's still encrypted, defer.
+        var deathTrapAddr = secMod.base.add(0x92F64);
+        try {
+            var currentInstr = deathTrapAddr.readU32();
+            if (currentInstr !== EXPECTED_DEATH_TRAP_INSTR) {
+                _excLog('SecShell code still encrypted (0x' + currentInstr.toString(16) + ' != expected 0xd10c03ff), deferring...');
+                return; // Will be retried by polling
+            }
+        } catch(e) {
+            _excLog('Cannot read death-trap addr: ' + e);
+            return;
+        }
+
+        globalThis._secShellPrePatched = true;
+        if (globalThis._xhookRefreshFn) try { globalThis._xhookRefreshFn(); } catch(e) {}
+        _excLog('Patching SecShell at base=' + secMod.base + ' size=0x' + secMod.size.toString(16));
+        var ARM64_RET = [0xc0, 0x03, 0x5f, 0xd6];
+        var offsets = [
+            { off: 0x92F64, desc: 'death-trap function', patch: ARM64_RET },
+            { off: 0x98AA8, desc: 'BL call-site #1', patch: ARM64_NOP },
+            { off: 0x3EE08, desc: 'BR call-site #2', patch: ARM64_NOP },
+            { off: 0xC3F08, desc: 'BG anti-tamper BL', patch: ARM64_NOP }
+        ];
+        var patched = 0;
+        for (var i = 0; i < offsets.length; i++) {
+            var o = offsets[i];
+            var addr = secMod.base.add(o.off);
+            try {
+                var origInstr = addr.readU32();
+                Memory.protect(addr, 4, 'rwx');
+                addr.writeByteArray(o.patch);
+                patched++;
+                _excLog('Pre-patched ' + o.desc + ' at ' + addr + ' (was 0x' + origInstr.toString(16) + ')');
+            } catch(e) {
+                _excLog('Pre-patch failed for ' + o.desc + ' at ' + addr + ': ' + e);
+            }
+        }
+        _excLog('Pre-patched ' + patched + '/' + offsets.length + ' anti-tamper sites');
+        if (globalThis._xhookRefreshFn) {
+            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 200);
+            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 500);
+            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 1000);
+        }
+    }
+
+    // dlopen hook to catch libSecShell.so load and pre-patch immediately
+    try {
+        var dlopenAddr = Module.findExportByName(null, 'android_dlopen_ext')
+            || Module.findExportByName('libdl.so', 'android_dlopen_ext')
+            || Module.findExportByName(null, 'dlopen')
+            || Module.findExportByName('libdl.so', 'dlopen');
+        if (dlopenAddr) {
+            Interceptor.attach(dlopenAddr, {
+                onEnter: function(args) {
+                    try {
+                        var name = args[0].readUtf8String();
+                        if (name && name.indexOf('SecShell') !== -1) {
+                            this._isSecShell = true;
+                            _excLog('dlopen: loading ' + name);
+                        }
+                    } catch(e) {}
+                },
+                onLeave: function(retval) {
+                    if (this._isSecShell) {
+                        var secMod = Process.findModuleByName('libSecShell.so');
+                        if (secMod) {
+                            _patchSecShellOffsets(secMod);
+                            _excLog('Pre-patched in dlopen onLeave');
+                        }
+                    }
+                }
+            });
+            AndroidLog.i(TAG, 'dlopen hook installed');
+        }
+    } catch(dlopenErr) {
+        AndroidLog.w(TAG, 'dlopen hook failed: ' + dlopenErr + ' (polling fallback)');
+    }
+
+    // Polling fallback for SecShell pre-patching
+    // Polls frequently: finds module → checks if decrypted → patches when ready
+    var _pollInterval = setInterval(function() {
+        try {
+            if (globalThis._xhookRefreshFn) try { globalThis._xhookRefreshFn(); } catch(e) {}
+            var secMod = Process.findModuleByName('libSecShell.so');
+            if (secMod) {
+                _patchSecShellOffsets(secMod);
+                // Only stop polling once patches are applied (_secShellPatched is true)
+                if (globalThis._secShellPrePatched) clearInterval(_pollInterval);
+            }
+        } catch(e) {}
+    }, 10); // 10ms for tight timing window between decryption and anti-tamper
+    AndroidLog.i(TAG, 'SecShell polling started');
+
+    // Step 4: Hidden API bypass via Frida JNI
+    try {
+        var VMRuntime = Java.use('dalvik.system.VMRuntime');
+        var runtime = VMRuntime.getRuntime();
+        runtime.setHiddenApiExemptions(Java.array('java.lang.String', ['L']));
+        AndroidLog.i(TAG, 'Hidden API exemptions set');
+    } catch(e) {
+        AndroidLog.w(TAG, 'Hidden API bypass failed: ' + e);
+    }
+
+    // Step 5: Clear Parcel caches so killPM's CREATOR hook takes effect
+    try {
+        var ParcelClass = Java.use('android.os.Parcel').class;
+        var field = ParcelClass.getDeclaredField('mCreators');
+        field.setAccessible(true);
+        var map = Java.cast(field.get(null), Java.use('java.util.HashMap'));
+        map.clear();
+        AndroidLog.i(TAG, 'Parcel.mCreators cleared');
+    } catch(e) {
+        AndroidLog.w(TAG, 'mCreators clear: ' + e);
+    }
+
+    try {
+        var ParcelClass2 = Java.use('android.os.Parcel').class;
+        var field2 = ParcelClass2.getDeclaredField('sPairedCreators');
+        field2.setAccessible(true);
+        var map2 = Java.cast(field2.get(null), Java.use('java.util.HashMap'));
+        map2.clear();
+        AndroidLog.i(TAG, 'Parcel.sPairedCreators cleared');
+    } catch(e) {}
+
+    AndroidLog.i(TAG, 'Castle pre-init complete');
+}
+
 function _hspatchMain() {
     var TAG = "HSPatch-Frida";
+
+    // Castle pre-init: must run before SecShell loads (file hooks + hidden API)
+    try {
+        _castlePreInit();
+    } catch(castleErr) {
+        try { Java.use('android.util.Log').e(TAG, 'castlePreInit: ' + castleErr.message + '\nStack: ' + (castleErr.stack || 'none')); } catch(e2) {}
+    }
+
+    // Generic SecShell bypass: activated only when libSecShell.so is detected
+    try {
+        _secShellGenericBypass();
+    } catch(ssErr) {
+        try { Java.use('android.util.Log').e(TAG, 'secShellBypass: ' + ssErr.message); } catch(e2) {}
+    }
 
     // Diagnostic: log Frida script engine status
     try {
@@ -98,18 +808,141 @@ function _hspatchMain() {
 
         var Log = Java.use('android.util.Log');
 
+        // =====================================================
+        // 0b. CLASSLOADER FIX
+        //     Frida gadget may default to its own classloader which
+        //     only has frida*.dex. Switch to the app's classloader
+        //     so Java.use() can find app-specific classes (OkHttp,
+        //     Chromium, Retrofit, etc.)
+        // =====================================================
+        var _webviewClassLoader = null;
+        var _appClassLoaderSwitched = false;
+
+        function _switchToAppClassLoader() {
+            if (_appClassLoaderSwitched) return true;
+            try {
+                var _appCtxForCL = Java.use('android.app.ActivityThread').currentApplication();
+                if (_appCtxForCL) {
+                    Java.classFactory.loader = _appCtxForCL.getClassLoader();
+                    _appClassLoaderSwitched = true;
+                    Log.i(TAG, '[+] Classloader switched to app context classloader');
+                    return true;
+                }
+            } catch(e) {}
+            return false;
+        }
+
+        // First try: get classloader from Application context
+        _switchToAppClassLoader();
+
+        // If classloader switch failed, retry after delay (app may not be initialized yet)
+        if (!_appClassLoaderSwitched) {
+            Log.w(TAG, '[-] App context not ready, scheduling classloader retry...');
+            var _clRetries = 0;
+            var _clInterval = setInterval(function() {
+                _clRetries++;
+                try {
+                    Java.perform(function() {
+                        if (_switchToAppClassLoader()) {
+                            clearInterval(_clInterval);
+                        } else if (_clRetries >= 10) {
+                            clearInterval(_clInterval);
+                            // Last resort: enumerate classloaders to find one with app classes
+                            try {
+                                Java.enumerateClassLoaders({
+                                    onMatch: function(loader) {
+                                        if (_appClassLoaderSwitched) return;
+                                        try {
+                                            loader.loadClass('in.startv.hotstar.HsApplication');
+                                            Java.classFactory.loader = loader;
+                                            _appClassLoaderSwitched = true;
+                                            Log.i(TAG, '[+] Classloader switched via enumeration (app class found)');
+                                        } catch(e) {}
+                                    },
+                                    onComplete: function() {}
+                                });
+                            } catch(e) {}
+                        }
+                    });
+                } catch(e) {}
+            }, 500);
+        }
+
+        // Also discover WebView's classloader for Chromium-internal classes
+        try {
+            Java.enumerateClassLoaders({
+                onMatch: function(loader) {
+                    try {
+                        loader.loadClass('org.chromium.net.X509Util');
+                        _webviewClassLoader = loader;
+                        Log.i(TAG, '[+] Found WebView classloader with X509Util');
+                    } catch(e) {}
+                },
+                onComplete: function() {}
+            });
+        } catch(eCL2) {
+            Log.w(TAG, '[-] Classloader enumeration failed: ' + eCL2);
+        }
+
         // SSL bypass is PERMANENT — always enabled, no file toggle
         {
-            // Trust-all X509TrustManager (created once, reused everywhere)
-            var _TrustAll = Java.registerClass({
-                name: 'com.hspatch.ssl.TrustAll',
-                implements: [Java.use('javax.net.ssl.X509TrustManager')],
-                methods: {
-                    checkClientTrusted: function(chain, authType) {},
-                    checkServerTrusted: function(chain, authType) {},
-                    getAcceptedIssuers: function() { return []; }
-                }
-            });
+            // Trust-all X509ExtendedTrustManager (covers WebView/Chromium 4-param check)
+            var _TrustAll;
+            try {
+                _TrustAll = Java.registerClass({
+                    name: 'com.hspatch.ssl.TrustAll',
+                    superClass: Java.use('javax.net.ssl.X509ExtendedTrustManager'),
+                    methods: {
+                        checkClientTrusted: [{
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String'],
+                            implementation: function(chain, authType) {}
+                        }, {
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'java.net.Socket'],
+                            implementation: function(chain, authType, socket) {}
+                        }, {
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'javax.net.ssl.SSLEngine'],
+                            implementation: function(chain, authType, engine) {}
+                        }],
+                        checkServerTrusted: [{
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String'],
+                            implementation: function(chain, authType) {}
+                        }, {
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'java.net.Socket'],
+                            implementation: function(chain, authType, socket) {}
+                        }, {
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'javax.net.ssl.SSLEngine'],
+                            implementation: function(chain, authType, engine) {}
+                        }],
+                        getAcceptedIssuers: [{
+                            returnType: '[Ljava.security.cert.X509Certificate;',
+                            argumentTypes: [],
+                            implementation: function() {
+                                return Java.array('java.security.cert.X509Certificate', []);
+                            }
+                        }]
+                    }
+                });
+            } catch(extErr) {
+                // Fallback: use basic X509TrustManager if X509ExtendedTrustManager fails
+                _TrustAll = Java.registerClass({
+                    name: 'com.hspatch.ssl.TrustAll',
+                    implements: [Java.use('javax.net.ssl.X509TrustManager')],
+                    methods: {
+                        checkClientTrusted: function(chain, authType) {},
+                        checkServerTrusted: function(chain, authType) {},
+                        getAcceptedIssuers: function() {
+                            return Java.array('java.security.cert.X509Certificate', []);
+                        }
+                    }
+                });
+                Log.w(TAG, '[*] TrustAll: fallback to X509TrustManager (Extended not available)');
+            }
             var _ta = _TrustAll.$new();
 
             // Accept-all HostnameVerifier (created once)
@@ -274,6 +1107,283 @@ function _hspatchMain() {
             } catch(e) {}
 
             Log.i(TAG, '[*] SSL bypass PERMANENT: SSLContext + TrustManager + Conscrypt + OkHttp + NetSecCfg');
+
+            // =====================================================
+            // 1a-1b. WEBVIEW BoringSSL BYPASS
+            //        Chromium WebView uses its own statically-linked BoringSSL
+            //        that is NOT reached by Java SSL hooks above.
+            //        This hooks the Java WebViewClient API to suppress SSL errors.
+            // =====================================================
+            try {
+                var SslErrorHandler = Java.use('android.webkit.SslErrorHandler');
+                var WebViewClient = Java.use('android.webkit.WebViewClient');
+                WebViewClient.onReceivedSslError.implementation = function(view, handler, error) {
+                    Log.i(TAG, '[+] WebView SSL error BYPASSED: ' + error.toString());
+                    handler.proceed();
+                };
+                Log.d(TAG, '[+] WebViewClient.onReceivedSslError hooked (always proceed)');
+            } catch(eWvSsl) {
+                Log.w(TAG, '[-] WebViewClient.onReceivedSslError: ' + eWvSsl);
+            }
+
+            // Hook subclasses of WebViewClient that override onReceivedSslError
+            // by intercepting SslErrorHandler.cancel to convert it to proceed
+            try {
+                var _SslErrHandler = Java.use('android.webkit.SslErrorHandler');
+                _SslErrHandler.cancel.implementation = function() {
+                    Log.i(TAG, '[+] SslErrorHandler.cancel() -> proceed() (WebView SSL bypass)');
+                    this.proceed();
+                };
+                Log.d(TAG, '[+] SslErrorHandler.cancel hooked -> proceed');
+            } catch(eSslCancel) {
+                Log.w(TAG, '[-] SslErrorHandler.cancel hook: ' + eSslCancel);
+            }
+
+            // Force WebView to accept all certificates by hooking WebSettings
+            var _wvClassloaderCaptured = false;
+            function _captureWebViewClassloader(webView) {
+                if (_wvClassloaderCaptured || _wvHooksComplete) return;
+                try {
+                    var mProviderField = Java.use('android.webkit.WebView').class.getDeclaredField('mProvider');
+                    mProviderField.setAccessible(true);
+                    var provider = mProviderField.get(webView);
+                    if (provider) {
+                        var chromiumLoader = provider.getClass().getClassLoader();
+                        var factory = Java.ClassFactory.get(chromiumLoader);
+                        if (!_x509Hooked) {
+                            try { _hookX509Util(factory); _x509Hooked = true; } catch(e) {}
+                        }
+                        try { _hookAndroidNetworkLibrary(factory); } catch(e) {}
+                        _wvHooksComplete = true;
+                        _wvClassloaderCaptured = true;
+                        Log.i(TAG, '[+] WebView hooks installed via mProvider classloader');
+                    }
+                } catch(e) {
+                    Log.d(TAG, '[-] mProvider capture: ' + e);
+                }
+            }
+            try {
+                var _WebView = Java.use('android.webkit.WebView');
+                // Enable mixed content mode to allow HTTP resources in HTTPS pages
+                var origLoadUrl = _WebView.loadUrl.overload('java.lang.String');
+                origLoadUrl.implementation = function(url) {
+                    try {
+                        var settings = this.getSettings();
+                        // MIXED_CONTENT_ALWAYS_ALLOW = 0
+                        settings.setMixedContentMode(0);
+                    } catch(eMix) {}
+                    _captureWebViewClassloader(this);
+                    origLoadUrl.call(this, url);
+                };
+                var origLoadUrlHeaders = _WebView.loadUrl.overload('java.lang.String', 'java.util.Map');
+                origLoadUrlHeaders.implementation = function(url, headers) {
+                    try {
+                        var settings = this.getSettings();
+                        settings.setMixedContentMode(0);
+                    } catch(eMix) {}
+                    _captureWebViewClassloader(this);
+                    origLoadUrlHeaders.call(this, url, headers);
+                };
+                Log.d(TAG, '[+] WebView.loadUrl hooked (mixed content allowed)');
+            } catch(eWvLoad) {
+                Log.w(TAG, '[-] WebView.loadUrl hook: ' + eWvLoad);
+            }
+
+            // =====================================================
+            // 1a-1c. CHROMIUM X509Util BYPASS
+            //        Hooks Chromium's internal certificate verification layer.
+            //        This is what actually validates certs in WebView's native stack.
+            //        X509Util lives in WebView's classloader, not the app's.
+            // =====================================================
+            function _hookX509Util(factory) {
+                var X509Util = factory.use('org.chromium.net.X509Util');
+                try {
+                    X509Util.verifyServerCertificateChain.overloads.forEach(function(ov) {
+                        ov.implementation = function() { return 0; };
+                    });
+                    Log.d(TAG, '[+] X509Util.verifyServerCertificateChain hooked (always OK)');
+                } catch(e) { Log.w(TAG, '[-] X509Util.verifyServerCertificateChain: ' + e); }
+                try {
+                    X509Util.checkTrustByCerts.overloads.forEach(function(ov) {
+                        ov.implementation = function() { return 0; };
+                    });
+                } catch(e) {}
+            }
+
+            // Try with discovered WebView classloader first, then default, then delayed retry
+            var _x509Hooked = false;
+            if (_webviewClassLoader) {
+                try {
+                    var wvFactory = Java.ClassFactory.get(_webviewClassLoader);
+                    _hookX509Util(wvFactory);
+                    _x509Hooked = true;
+                } catch(e) {
+                    Log.w(TAG, '[-] X509Util via WebView classloader failed: ' + e);
+                }
+            }
+            if (!_x509Hooked) {
+                try {
+                    _hookX509Util(Java.classFactory);
+                    _x509Hooked = true;
+                } catch(eX509) {
+                    Log.w(TAG, '[-] X509Util not found yet, scheduling classloader scan');
+                    // Retry with classloader enumeration after WebView loads
+                    setTimeout(function() {
+                        Java.perform(function() {
+                            try {
+                                // Re-scan classloaders since WebView may have loaded
+                                Java.enumerateClassLoaders({
+                                    onMatch: function(loader) {
+                                        if (_x509Hooked) return;
+                                        try {
+                                            loader.loadClass('org.chromium.net.X509Util');
+                                            var factory = Java.ClassFactory.get(loader);
+                                            _hookX509Util(factory);
+                                            _x509Hooked = true;
+                                        } catch(e) {}
+                                    },
+                                    onComplete: function() {
+                                        if (!_x509Hooked) {
+                                            Log.w(TAG, '[-] X509Util not found in any classloader');
+                                        }
+                                    }
+                                });
+                            } catch(e2) { Log.w(TAG, '[-] X509Util delayed retry failed: ' + e2); }
+                        });
+                    }, 5000);
+                }
+            }
+
+            // Hook Android's Chromium NetworkSecurityPolicy to allow cleartext
+            try {
+                var NetSecPolicy = Java.use('android.security.NetworkSecurityPolicy');
+                NetSecPolicy.isCleartextTrafficPermitted.overload().implementation = function() { return true; };
+                try {
+                    NetSecPolicy.isCleartextTrafficPermitted.overload('java.lang.String').implementation = function(host) { return true; };
+                } catch(e) {}
+            } catch(e) {}
+
+            // =====================================================
+            // 1a-1d. CHROMIUM AndroidNetworkLibrary BYPASS
+            //        In Chrome/WebView v100+, certificate verification can go through
+            //        AndroidNetworkLibrary.verifyServerCertificates() instead of X509Util.
+            //        Also hooks X509Util.createDefaultTrustManager to return our TrustAll.
+            // =====================================================
+            function _hookAndroidNetworkLibrary(factory) {
+                try {
+                    var ANL = factory.use('org.chromium.net.AndroidNetworkLibrary');
+                    try {
+                        ANL.verifyServerCertificates.overloads.forEach(function(ov) {
+                            ov.implementation = function() {
+                                Log.d(TAG, '[+] AndroidNetworkLibrary.verifyServerCertificates BYPASSED');
+                                // Return AndroidCertVerifyResult with status=0 (OK)
+                                try {
+                                    var Result = factory.use('org.chromium.net.AndroidCertVerifyResult');
+                                    return Result.$new(0, false, Java.array('byte[]', []));
+                                } catch(e) {
+                                    // Some versions have different constructor
+                                    try {
+                                        var Result2 = factory.use('org.chromium.net.AndroidCertVerifyResult');
+                                        return Result2.$new(0);
+                                    } catch(e2) {
+                                        return ov.call(this);
+                                    }
+                                }
+                            };
+                        });
+                        Log.d(TAG, '[+] AndroidNetworkLibrary.verifyServerCertificates hooked');
+                    } catch(e) {}
+                } catch(e) {}
+            }
+
+            // Hook AndroidNetworkLibrary via known classloaders
+            if (_webviewClassLoader) {
+                try {
+                    _hookAndroidNetworkLibrary(Java.ClassFactory.get(_webviewClassLoader));
+                } catch(e) {}
+            }
+            try { _hookAndroidNetworkLibrary(Java.classFactory); } catch(e) {}
+
+            // =====================================================
+            // 1a-1e. DELAYED WEBVIEW CLASSLOADER HOOKS
+            //        WebView loads on a separate thread. By the time the initial
+            //        hooks run, the WebView classloader may not exist yet.
+            //        This schedules aggressive classloader re-scans at 3s, 8s, 15s
+            //        to catch X509Util and AndroidNetworkLibrary.
+            // =====================================================
+            var _wvHooksComplete = _x509Hooked;
+            function _delayedWebViewHooks() {
+                if (_wvHooksComplete) return;
+                try {
+                    Java.perform(function() {
+                        // Strategy 1: Get WebView classloader via WebViewFactory.sProviderInstance
+                        try {
+                            var WebViewFactory = Java.use('android.webkit.WebViewFactory');
+                            var providerField = WebViewFactory.class.getDeclaredField('sProviderInstance');
+                            providerField.setAccessible(true);
+                            var provider = providerField.get(null);
+                            if (provider) {
+                                var wvLoader = provider.getClass().getClassLoader();
+                                var factory = Java.ClassFactory.get(wvLoader);
+                                if (!_x509Hooked) {
+                                    try { _hookX509Util(factory); _x509Hooked = true; } catch(e) {}
+                                }
+                                try { _hookAndroidNetworkLibrary(factory); } catch(e) {}
+                                _wvHooksComplete = true;
+                                Log.i(TAG, '[+] WebView hooks installed via WebViewFactory classloader');
+                                return;
+                            }
+                        } catch(e) {
+                            Log.d(TAG, '[-] WebViewFactory approach: ' + e);
+                        }
+
+                        // Strategy 2: createPackageContext for WebView package
+                        try {
+                            var app = Java.use('android.app.ActivityThread').currentApplication();
+                            if (app) {
+                                var wvPkgs = ['com.google.android.webview', 'com.android.webview', 'com.google.android.trichromelibrary'];
+                                for (var pi = 0; pi < wvPkgs.length; pi++) {
+                                    try {
+                                        var ctx = app.createPackageContext(wvPkgs[pi], 3);
+                                        var wvLoader2 = ctx.getClassLoader();
+                                        var factory2 = Java.ClassFactory.get(wvLoader2);
+                                        try { factory2.use('org.chromium.net.X509Util'); } catch(e) { continue; }
+                                        if (!_x509Hooked) {
+                                            try { _hookX509Util(factory2); _x509Hooked = true; } catch(e) {}
+                                        }
+                                        try { _hookAndroidNetworkLibrary(factory2); } catch(e) {}
+                                        _wvHooksComplete = true;
+                                        Log.i(TAG, '[+] WebView hooks installed via package context: ' + wvPkgs[pi]);
+                                        return;
+                                    } catch(e) {}
+                                }
+                            }
+                        } catch(e) {}
+
+                        // Strategy 3: Enumerate classloaders (original approach)
+                        Java.enumerateClassLoaders({
+                            onMatch: function(loader) {
+                                if (_wvHooksComplete) return;
+                                try {
+                                    loader.loadClass('org.chromium.net.X509Util');
+                                    var factory = Java.ClassFactory.get(loader);
+                                    if (!_x509Hooked) {
+                                        _hookX509Util(factory);
+                                        _x509Hooked = true;
+                                    }
+                                    _hookAndroidNetworkLibrary(factory);
+                                    _wvHooksComplete = true;
+                                    Log.i(TAG, '[+] WebView hooks installed via classloader enumeration');
+                                } catch(e) {}
+                            },
+                            onComplete: function() {}
+                        });
+                    });
+                } catch(e) {}
+            }
+            setTimeout(_delayedWebViewHooks, 3000);
+            setTimeout(_delayedWebViewHooks, 8000);
+            setTimeout(_delayedWebViewHooks, 15000);
 
             // =====================================================
             // 1a-2. SECURITY ERROR DIALOG SUPPRESSION
@@ -539,11 +1649,72 @@ function _hspatchMain() {
 
         // Try immediate hook on known BoringSSL/Cronet library names
         // libwebviewchromium.so is the system WebView (Chromium) with statically-linked BoringSSL
-        // NOTE: libwebviewchromium.so removed — BoringSSL is statically linked
-        // (not exported) and scanning its massive symbol table causes SIGSEGV.
-        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so'];
+        // Using findExportByName only (safe) — some WebView builds DO export SSL symbols
+        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so', 'libwebviewchromium.so'];
         for (var nsi = 0; nsi < _nativeSslLibs.length; nsi++) {
             _nativeSslHooked += patchNativeSSLVerify(_nativeSslLibs[nsi]);
+        }
+
+        // Scan ALL loaded modules for WebView/Chromium libs by path (APK-embedded libs
+        // have paths like "/data/app/.../base.apk!/lib/arm64-v8a/libwebviewchromium.so")
+        try {
+            var _allMods = Process.enumerateModules();
+            for (var mi = 0; mi < _allMods.length; mi++) {
+                var _modPath = _allMods[mi].path || '';
+                var _modName = _allMods[mi].name || '';
+                // Skip already-tried names and non-SSL modules
+                if (_nativeSslLibs.indexOf(_modName) !== -1) continue;
+                if (_modPath.indexOf('webviewchromium') !== -1 || _modPath.indexOf('chromium') !== -1 ||
+                    _modName.indexOf('monochrome') !== -1 || _modName.indexOf('trichrome') !== -1) {
+                    var mp = patchNativeSSLVerify(_modName);
+                    if (mp > 0) {
+                        _nativeSslHooked += mp;
+                        console.log('[+] WebView module SSL hooked: ' + _modName + ' (' + mp + ' hooks)');
+                    }
+                }
+            }
+        } catch(eModScan) {
+            console.log('[-] Module scan error: ' + eModScan);
+        }
+
+        // Global fallback: use Module.findExportByName(null, ...) to find SSL functions
+        // in ANY loaded module (catches WebView's BoringSSL if exported)
+        try {
+            var _globalSslFns = ['SSL_CTX_set_custom_verify', 'SSL_set_custom_verify',
+                                  'SSL_CTX_set_verify', 'SSL_set_verify', 'SSL_get_verify_result'];
+            var _alwaysOkCb = new NativeCallback(function(ssl, out_alert) { return 0; }, 'int', ['pointer', 'pointer']);
+            for (var gsi = 0; gsi < _globalSslFns.length; gsi++) {
+                try {
+                    var gAddr = Module.findExportByName(null, _globalSslFns[gsi]);
+                    if (gAddr) {
+                        // Check if this address is already hooked (skip libssl.so addresses)
+                        var gMod = Process.findModuleByAddress(gAddr);
+                        if (gMod && gMod.name === 'libssl.so') continue; // already hooked above
+                        var gFnName = _globalSslFns[gsi];
+                        if (gFnName === 'SSL_get_verify_result') {
+                            Interceptor.replace(gAddr, new NativeCallback(function(ssl) { return 0; }, 'long', ['pointer']));
+                        } else if (gFnName.indexOf('custom_verify') !== -1) {
+                            var origGFn = new NativeFunction(gAddr, 'void', ['pointer', 'int', 'pointer']);
+                            (function(fn, addr) {
+                                Interceptor.replace(addr, new NativeCallback(function(ctx, mode, cb) {
+                                    fn(ctx, mode, _alwaysOkCb);
+                                }, 'void', ['pointer', 'int', 'pointer']));
+                            })(origGFn, gAddr);
+                        } else {
+                            var origSFn = new NativeFunction(gAddr, 'void', ['pointer', 'int', 'pointer']);
+                            (function(fn, addr) {
+                                Interceptor.replace(addr, new NativeCallback(function(ctx, mode, cb) {
+                                    fn(ctx, 0, ptr(0)); // SSL_VERIFY_NONE
+                                }, 'void', ['pointer', 'int', 'pointer']));
+                            })(origSFn, gAddr);
+                        }
+                        _nativeSslHooked++;
+                        console.log('[+] Global SSL hook: ' + gFnName + ' in ' + (gMod ? gMod.name : 'unknown'));
+                    }
+                } catch(gse) {}
+            }
+        } catch(eGlobal) {
+            console.log('[-] Global SSL scan error: ' + eGlobal);
         }
 
         // NOTE: broad "scan ALL modules" loop REMOVED in v3.41.
@@ -551,25 +1722,35 @@ function _hspatchMain() {
         // caused SIGSEGV in Frida's ELF reader (__fseeko64 null FILE*).
         // The named libs above cover all real-world SSL scenarios.
 
-        // Watch for late-loaded SSL libs by name only (safe — no broad scan)
+        // Watch for late-loaded SSL libs by name or path (safe — no broad scan)
+        var _patchedModules = {};
         try {
-            var _patchedModules = {};
             Process.attachModuleObserver({
                 onAdded: function(mod) {
                     var name = mod.name;
+                    var path = mod.path || '';
                     if (_patchedModules[name]) return;
-                    // Only check libs whose name suggests SSL/Cronet
-                    if (name.indexOf('ssl') === -1 && name.indexOf('cronet') === -1 &&
-                        name.indexOf('boringssl') === -1) return;
+                    // Check both name AND path for SSL/Cronet/WebView indicators
+                    var isSSLRelated = (name.indexOf('ssl') !== -1 || name.indexOf('cronet') !== -1 ||
+                        name.indexOf('boringssl') !== -1 || name.indexOf('webviewchromium') !== -1 ||
+                        name.indexOf('monochrome') !== -1 || name.indexOf('trichrome') !== -1 ||
+                        path.indexOf('webviewchromium') !== -1 || path.indexOf('chromium') !== -1);
+                    if (!isSSLRelated) return;
                     if (name.indexOf('frida') !== -1 || name.indexOf('gadget') !== -1) return;
-                    try {
-                        _patchedModules[name] = true;
-                        var p = patchNativeSSLVerify(name);
-                        if (p > 0) {
-                            _nativeSslHooked += p;
-                            console.log('[+] Late-loaded SSL lib patched: ' + name + ' (' + p + ' hooks)');
-                        }
-                    } catch(lateE) {}
+                    // IMPORTANT: Defer patching — module may still be loading (linker not finished).
+                    // Immediate access to exports during dlopen causes linker CHECK failures.
+                    _patchedModules[name] = true;
+                    (function(modName) {
+                        setTimeout(function() {
+                            try {
+                                var p = patchNativeSSLVerify(modName);
+                                if (p > 0) {
+                                    _nativeSslHooked += p;
+                                    console.log('[+] Late-loaded SSL lib patched: ' + modName + ' (' + p + ' hooks)');
+                                }
+                            } catch(lateE) {}
+                        }, 1500);
+                    })(name);
                 }
             });
         } catch (e) {
@@ -583,6 +1764,52 @@ function _hspatchMain() {
         }
 
         Log.i(TAG, '[*] Native BoringSSL bypass: ' + _nativeSslHooked + ' hooks installed');
+
+        // Delayed rescan: WebView may not be loaded yet at hook time.
+        // Scan for webviewchromium module by path at 3s and 8s intervals.
+        function _delayedNativeSSLScan() {
+            try {
+                var mods = Process.enumerateModules();
+                for (var di = 0; di < mods.length; di++) {
+                    var dPath = mods[di].path || '';
+                    var dName = mods[di].name || '';
+                    if (dPath.indexOf('webviewchromium') !== -1 || dName.indexOf('webviewchromium') !== -1 ||
+                        dName.indexOf('monochrome') !== -1 || dName.indexOf('trichrome') !== -1) {
+                        if (!_patchedModules || !_patchedModules[dName]) {
+                            var dp = patchNativeSSLVerify(dName);
+                            if (dp > 0) {
+                                _nativeSslHooked += dp;
+                                if (_patchedModules) _patchedModules[dName] = true;
+                                console.log('[+] Delayed WebView native SSL: ' + dName + ' (' + dp + ' hooks)');
+                            }
+                        }
+                    }
+                }
+                // Also try global search for any new SSL exports
+                var gFns = ['SSL_CTX_set_custom_verify', 'SSL_set_custom_verify'];
+                var _okCb = new NativeCallback(function(ssl, out_alert) { return 0; }, 'int', ['pointer', 'pointer']);
+                for (var gi = 0; gi < gFns.length; gi++) {
+                    try {
+                        var gA = Module.findExportByName(null, gFns[gi]);
+                        if (gA) {
+                            var gM = Process.findModuleByAddress(gA);
+                            if (gM && gM.name !== 'libssl.so' && (!_patchedModules || !_patchedModules[gM.name + '_' + gFns[gi]])) {
+                                var origF = new NativeFunction(gA, 'void', ['pointer', 'int', 'pointer']);
+                                (function(fn, addr, cb) {
+                                    Interceptor.replace(addr, new NativeCallback(function(ctx, mode, callback) {
+                                        fn(ctx, mode, cb);
+                                    }, 'void', ['pointer', 'int', 'pointer']));
+                                })(origF, gA, _okCb);
+                                if (_patchedModules) _patchedModules[gM.name + '_' + gFns[gi]] = true;
+                                console.log('[+] Delayed global SSL: ' + gFns[gi] + ' in ' + gM.name);
+                            }
+                        }
+                    } catch(e) {}
+                }
+            } catch(e) {}
+        }
+        setTimeout(_delayedNativeSSLScan, 5000);
+        setTimeout(_delayedNativeSSLScan, 10000);
 
 
         // =====================================================
@@ -2039,8 +3266,42 @@ function _hspatchMain() {
             return host;
         }
 
+        // Payment gateway domains that should NEVER be blocked
+        var _paymentWhitelist = [
+            'razorpay.com', 'razorpay.in',
+            'juspay.in', 'juspay.io',
+            'paytm.com', 'paytmpayments.com',
+            'phonepe.com',
+            'gpay.app', 'google.com/pay',
+            'setu.co',
+            'npci.org.in',
+            'simpl.in',
+            'lazypay.in',
+            'mobikwik.com',
+            'freecharge.in',
+            'amazonpay.in',
+            'payumoney.com', 'payu.in',
+            'billdesk.com',
+            'cashfree.com',
+            'subscriptionapi.hotstar.com',
+            'api.hotstar.com/o/v1/pay',
+            'api.hotstar.com/o/v2/pay',
+            'payments.hotstar.com'
+        ];
+
+        function _isPaymentDomain(url) {
+            if (!url) return false;
+            var lower = url.toLowerCase();
+            for (var i = 0; i < _paymentWhitelist.length; i++) {
+                if (lower.indexOf(_paymentWhitelist[i]) !== -1) return true;
+            }
+            return false;
+        }
+
         function shouldBlock(url) {
             if (!trafficMonitorEnabled) return null;
+            // Never block payment gateway URLs
+            if (_isPaymentDomain(url)) return null;
 
             // Fast path: check domain hash O(1)
             var host = _extractHost(url);
@@ -2071,6 +3332,8 @@ function _hspatchMain() {
         // DNS-safe version: only checks domain-level rules (no path patterns)
         function shouldBlockDNS(hostname) {
             if (!trafficMonitorEnabled) return null;
+            // Never block payment gateway domains
+            if (_isPaymentDomain(hostname)) return null;
             var hostLower = hostname.toLowerCase();
 
             // Fast path: exact domain hash match

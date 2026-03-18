@@ -1874,6 +1874,10 @@ public class PatchEngine {
                 if (info.dexguardEncrypted) {
                     content = applyDexExtractorPatches(content);
                 }
+                // Apply payment activity crash fixes
+                if (f.getName().equals("HSWebPaymentActivity.smali")) {
+                    content = applyPaymentActivityPatches(content);
+                }
                 if (!content.equals(original)) {
                     writeFileStr(f, content);
                     patchCount++;
@@ -1962,6 +1966,60 @@ public class PatchEngine {
             "Ljava/lang/reflect/Method;->invoke\\(Ljava/lang/Object;\\[Ljava/lang/Object;\\)Ljava/lang/Object;)"
         ).matcher(content).replaceAll(
             "invoke-static {$2, $3, $4}, Lcom/anymy/ref;->invoke(Ljava/lang/Object;Ljava/lang/Object;[Ljava/lang/Object;)V\n\n    $1"
+        );
+
+        return content;
+    }
+
+    /**
+     * Fix crash points in HSWebPaymentActivity that throw when DI is not fully initialized.
+     * 1. IllegalArgumentException("Required value was null.") → return-void
+     * 2. Kotlin Intrinsics null-check throw patterns → return-void
+     * 3. throw null in error-view helper → safe fallback
+     */
+    private String applyPaymentActivityPatches(String content) {
+        // === 1. Replace "Required value was null." throw with return-void ===
+        // Pattern: new-instance vX, Ljava/lang/IllegalArgumentException;
+        //          const-string vY, "Required value was null."
+        //          invoke-direct {vX, vY}, Ljava/lang/IllegalArgumentException;-><init>(Ljava/lang/String;)V
+        //          throw vX
+        content = Pattern.compile(
+            "new-instance ([vp]\\d+), Ljava/lang/IllegalArgumentException;\n\n" +
+            "(\\s+)const-string ([vp]\\d+), \"Required value was null\\.\"\n\n" +
+            "\\s+invoke-direct \\{\\1, \\3\\}, Ljava/lang/IllegalArgumentException;-><init>\\(Ljava/lang/String;\\)V\n\n" +
+            "\\s+throw \\1"
+        ).matcher(content).replaceAll(
+            "invoke-virtual {p0}, Landroid/app/Activity;->finish()V\n\n$2return-void"
+        );
+
+        // === 2. Kotlin Intrinsics.k() + new-instance/throw → return-void ===
+        // Pattern: invoke-static {vX}, Lkotlin/jvm/internal/Intrinsics;->k(...)
+        //          new-instance vY, Ljava/lang/IllegalArgumentException;
+        //          ...
+        //          throw vY
+        content = Pattern.compile(
+            "invoke-static \\{[vp]\\d+\\}, Lkotlin/jvm/internal/Intrinsics;->k\\(Ljava/lang/String;\\)V\n\n" +
+            "(\\s+)new-instance ([vp]\\d+), Ljava/lang/IllegalArgumentException;\n\n" +
+            "\\s+const-string ([vp]\\d+), \"[^\"]*\"\n\n" +
+            "\\s+invoke-direct \\{\\2, \\3\\}, Ljava/lang/IllegalArgumentException;-><init>\\(Ljava/lang/String;\\)V\n\n" +
+            "\\s+throw \\2"
+        ).matcher(content).replaceAll(
+            "invoke-virtual {p0}, Landroid/app/Activity;->finish()V\n\n$1return-void"
+        );
+
+        // === 3. Standalone Intrinsics.k() + throw vX (no new-instance) → return-void ===
+        content = Pattern.compile(
+            "invoke-static \\{[vp]\\d+\\}, Lkotlin/jvm/internal/Intrinsics;->k\\(Ljava/lang/String;\\)V\n\n" +
+            "(\\s+)throw ([vp]\\d+)"
+        ).matcher(content).replaceAll(
+            "invoke-virtual {p0}, Landroid/app/Activity;->finish()V\n\n$1return-void"
+        );
+
+        // === 4. "throw null" pattern in non-static methods → safe visibility fallback ===
+        content = Pattern.compile(
+            "const/4 ([vp]\\d+), 0x0\n\n(\\s+)throw \\1"
+        ).matcher(content).replaceAll(
+            "const/4 $1, 0x0\n\n$2invoke-virtual {p0}, Landroid/app/Activity;->finish()V\n\n$2return-void"
         );
 
         return content;
