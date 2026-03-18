@@ -1342,9 +1342,10 @@ public class MainActivity extends Activity {
                     // ignore — filename will fall back
                 }
 
-                // Also copy to Downloads for manual access / sharing
+                // Also copy to Downloads/hspatch/patched/ for manual access / sharing
                 File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                String timestamp = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
+                File hspatchDir = new File(downloads, "hspatch" + File.separator + "patched");
+                hspatchDir.mkdirs();
                 String appPart = appLabelForName;
                 if (appPart == null || appPart.trim().isEmpty()) {
                     appPart = (targetPackageName != null && !targetPackageName.isEmpty())
@@ -1354,7 +1355,7 @@ public class MainActivity extends Activity {
                             : "UnknownApp");
                 }
                 appPart = sanitizeFileName(appPart);
-                File outputFile = new File(downloads, "HSPatched_" + appPart + "_" + timestamp + ".apk");
+                File outputFile = new File(hspatchDir, appPart + ".apk");
                 try {
                     copyFile(result, outputFile);
                     log("📁 Also saved to: " + outputFile.getAbsolutePath());

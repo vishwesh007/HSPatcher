@@ -568,8 +568,9 @@ function _castlePreInit() {
         }
     }
 
-    // Step 3: SecShell anti-tamper pre-patching (ALWAYS runs, even without APK path)
-    // Ensure xhookRefreshFn is available
+    // Step 3: SecShell anti-tamper pre-patching — delegated to generic bypass
+    // The generic _secShellGenericBypass() handles dlopen hooks + polling.
+    // Just ensure xhookRefreshFn is available for it.
     if (!globalThis._xhookRefreshFn) {
         try {
             var skm = Process.findModuleByName('libSignatureKiller.so');
@@ -579,107 +580,6 @@ function _castlePreInit() {
             }
         } catch(e) {}
     }
-
-    // Use global flag so second pre-init invocation doesn't create duplicate polling
-    var EXPECTED_DEATH_TRAP_INSTR = 0xd10c03ff;
-
-    function _patchSecShellOffsets(secMod) {
-        if (globalThis._secShellPrePatched) return;
-
-        // Verify code section is decrypted before patching.
-        // SecShell's code is encrypted in the .so file; JNI_OnLoad decrypts it.
-        // Check the death-trap instruction — if it's still encrypted, defer.
-        var deathTrapAddr = secMod.base.add(0x92F64);
-        try {
-            var currentInstr = deathTrapAddr.readU32();
-            if (currentInstr !== EXPECTED_DEATH_TRAP_INSTR) {
-                _excLog('SecShell code still encrypted (0x' + currentInstr.toString(16) + ' != expected 0xd10c03ff), deferring...');
-                return; // Will be retried by polling
-            }
-        } catch(e) {
-            _excLog('Cannot read death-trap addr: ' + e);
-            return;
-        }
-
-        globalThis._secShellPrePatched = true;
-        if (globalThis._xhookRefreshFn) try { globalThis._xhookRefreshFn(); } catch(e) {}
-        _excLog('Patching SecShell at base=' + secMod.base + ' size=0x' + secMod.size.toString(16));
-        var ARM64_RET = [0xc0, 0x03, 0x5f, 0xd6];
-        var offsets = [
-            { off: 0x92F64, desc: 'death-trap function', patch: ARM64_RET },
-            { off: 0x98AA8, desc: 'BL call-site #1', patch: ARM64_NOP },
-            { off: 0x3EE08, desc: 'BR call-site #2', patch: ARM64_NOP },
-            { off: 0xC3F08, desc: 'BG anti-tamper BL', patch: ARM64_NOP }
-        ];
-        var patched = 0;
-        for (var i = 0; i < offsets.length; i++) {
-            var o = offsets[i];
-            var addr = secMod.base.add(o.off);
-            try {
-                var origInstr = addr.readU32();
-                Memory.protect(addr, 4, 'rwx');
-                addr.writeByteArray(o.patch);
-                patched++;
-                _excLog('Pre-patched ' + o.desc + ' at ' + addr + ' (was 0x' + origInstr.toString(16) + ')');
-            } catch(e) {
-                _excLog('Pre-patch failed for ' + o.desc + ' at ' + addr + ': ' + e);
-            }
-        }
-        _excLog('Pre-patched ' + patched + '/' + offsets.length + ' anti-tamper sites');
-        if (globalThis._xhookRefreshFn) {
-            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 200);
-            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 500);
-            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 1000);
-        }
-    }
-
-    // dlopen hook to catch libSecShell.so load and pre-patch immediately
-    try {
-        var dlopenAddr = Module.findExportByName(null, 'android_dlopen_ext')
-            || Module.findExportByName('libdl.so', 'android_dlopen_ext')
-            || Module.findExportByName(null, 'dlopen')
-            || Module.findExportByName('libdl.so', 'dlopen');
-        if (dlopenAddr) {
-            Interceptor.attach(dlopenAddr, {
-                onEnter: function(args) {
-                    try {
-                        var name = args[0].readUtf8String();
-                        if (name && name.indexOf('SecShell') !== -1) {
-                            this._isSecShell = true;
-                            _excLog('dlopen: loading ' + name);
-                        }
-                    } catch(e) {}
-                },
-                onLeave: function(retval) {
-                    if (this._isSecShell) {
-                        var secMod = Process.findModuleByName('libSecShell.so');
-                        if (secMod) {
-                            _patchSecShellOffsets(secMod);
-                            _excLog('Pre-patched in dlopen onLeave');
-                        }
-                    }
-                }
-            });
-            AndroidLog.i(TAG, 'dlopen hook installed');
-        }
-    } catch(dlopenErr) {
-        AndroidLog.w(TAG, 'dlopen hook failed: ' + dlopenErr + ' (polling fallback)');
-    }
-
-    // Polling fallback for SecShell pre-patching
-    // Polls frequently: finds module → checks if decrypted → patches when ready
-    var _pollInterval = setInterval(function() {
-        try {
-            if (globalThis._xhookRefreshFn) try { globalThis._xhookRefreshFn(); } catch(e) {}
-            var secMod = Process.findModuleByName('libSecShell.so');
-            if (secMod) {
-                _patchSecShellOffsets(secMod);
-                // Only stop polling once patches are applied (_secShellPatched is true)
-                if (globalThis._secShellPrePatched) clearInterval(_pollInterval);
-            }
-        } catch(e) {}
-    }, 10); // 10ms for tight timing window between decryption and anti-tamper
-    AndroidLog.i(TAG, 'SecShell polling started');
 
     // Step 4: Hidden API bypass via Frida JNI
     try {

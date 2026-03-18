@@ -2352,10 +2352,34 @@ public class PatchEngine {
 
     // ======================== STEP 5: SIGN APK (v1+v2+v3 via Google apksig) ========================
 
-    private void signApk(File unsigned, File signed) throws Exception {
+    /** Load persistent signing key or create + save one on first use */
+    private KeyPair loadOrCreateSigningKey() throws Exception {
+        File keyFile = new File(context.getFilesDir(), "hspatch_signing.key");
+        if (keyFile.exists()) {
+            try (java.io.ObjectInputStream ois = new java.io.ObjectInputStream(
+                    new java.io.FileInputStream(keyFile))) {
+                java.security.PrivateKey priv = (java.security.PrivateKey) ois.readObject();
+                java.security.PublicKey pub = (java.security.PublicKey) ois.readObject();
+                log("   🔑 Using persistent signing key");
+                return new KeyPair(pub, priv);
+            } catch (Exception e) {
+                log("   ⚠️ Stored key invalid, regenerating: " + e.getMessage());
+            }
+        }
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
         kpg.initialize(2048);
         KeyPair kp = kpg.generateKeyPair();
+        try (java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(
+                new java.io.FileOutputStream(keyFile))) {
+            oos.writeObject(kp.getPrivate());
+            oos.writeObject(kp.getPublic());
+        }
+        log("   🔑 New signing key generated and saved");
+        return kp;
+    }
+
+    private void signApk(File unsigned, File signed) throws Exception {
+        KeyPair kp = loadOrCreateSigningKey();
 
         X500Principal sub = new X500Principal("CN=HSPatch, O=HSPatch");
         long now = System.currentTimeMillis();
