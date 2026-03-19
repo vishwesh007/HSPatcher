@@ -42,6 +42,7 @@ import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 
@@ -365,9 +366,10 @@ public class MainActivity extends Activity {
                     switchToPhase(PHASE_SELECTED);
 
                     // If launched with --ez auto_patch true, patch only after load completes
+                    // Call doPatch() directly to skip the "already patched" confirmation dialog
                     if (autoPatchAfterLoad) {
                         autoPatchAfterLoad = false;
-                        mainHandler.postDelayed(this::onPatchClick, 250);
+                        mainHandler.postDelayed(this::doPatch, 250);
                     }
                 });
                 if (isBundle) {
@@ -917,7 +919,7 @@ public class MainActivity extends Activity {
             String label = data.getStringExtra(AppListActivity.EXTRA_APP_LABEL);
             if (path != null) {
                 if (data.getBooleanExtra(AppListActivity.EXTRA_BACKUP_MODE, false)) {
-                    handleBackupResult(path, isSplit, label);
+                    handleBackupResult(path, isSplit, label, data);
                 } else {
                     loadExtractedApp(new File(path), isSplit, label);
                 }
@@ -927,7 +929,7 @@ public class MainActivity extends Activity {
             boolean isSplit = data.getBooleanExtra(AppListActivity.EXTRA_IS_SPLIT, false);
             String label = data.getStringExtra(AppListActivity.EXTRA_APP_LABEL);
             if (path != null) {
-                handleBackupResult(path, isSplit, label);
+                handleBackupResult(path, isSplit, label, data);
             }
         } else if (requestCode == PICK_CERT && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
@@ -1695,7 +1697,7 @@ public class MainActivity extends Activity {
 
     // ======================== APP BACKUP (moved to AppListActivity) ========================
 
-    private void handleBackupResult(String path, boolean isSplit, String label) {
+    private void handleBackupResult(String path, boolean isSplit, String label, Intent intentData) {
         logClear();
         log("💾 Starting app backup: " + label);
 
@@ -1711,10 +1713,32 @@ public class MainActivity extends Activity {
                 String safeName = sanitizeFileName(label);
 
                 if (isSplit) {
-                    // Split APK — copy all files into a zip
-                    File splitDir = new File(path);
-                    File[] apks = splitDir.listFiles();
-                    if (apks == null || apks.length == 0) {
+                    // Split APK — collect base.apk + all split APK paths from intent
+                    List<File> apkFiles = new ArrayList<>();
+
+                    // Add base APK
+                    File baseApk = new File(path);
+                    if (baseApk.isFile()) {
+                        apkFiles.add(baseApk);
+                    } else if (baseApk.isDirectory()) {
+                        // Legacy: path might point to an extracted splits dir
+                        File[] children = baseApk.listFiles();
+                        if (children != null) for (File c : children) {
+                            if (c.isFile() && c.getName().endsWith(".apk")) apkFiles.add(c);
+                        }
+                    }
+
+                    // Add split APK paths from intent
+                    String[] splitDirs = intentData != null
+                        ? intentData.getStringArrayExtra(AppListActivity.EXTRA_SPLIT_DIRS) : null;
+                    if (splitDirs != null) {
+                        for (String splitPath : splitDirs) {
+                            File sf = new File(splitPath);
+                            if (sf.isFile()) apkFiles.add(sf);
+                        }
+                    }
+
+                    if (apkFiles.isEmpty()) {
                         log("❌ No APK files found for backup");
                         return;
                     }
@@ -1722,11 +1746,11 @@ public class MainActivity extends Activity {
                     File backupZip = new File(backupDir,
                         "Backup_" + safeName + "_" + timestamp + ".apks");
 
-                    log("📦 Creating split APK backup (" + apks.length + " files)...");
+                    log("📦 Creating split APK backup (" + apkFiles.size() + " files)...");
                     java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
                         new FileOutputStream(backupZip));
                     long totalBytes = 0;
-                    for (File apk : apks) {
+                    for (File apk : apkFiles) {
                         zos.putNextEntry(new java.util.zip.ZipEntry(apk.getName()));
                         InputStream in = new java.io.FileInputStream(apk);
                         byte[] buf = new byte[65536];
