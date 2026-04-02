@@ -91,9 +91,12 @@ Get-ChildItem $GEN -Recurse -Filter "*.java" | ForEach-Object { $javaSources += 
 
 $classpath = "$ANDROID_JAR;$APKTOOL_JAR;$ARSCLIB_JAR;$APKSIG_JAR"
 $ErrorActionPreference = "Continue"
-& javac -source 8 -target 8 -Xlint:-options -Xlint:-deprecation -classpath $classpath -d $OBJ @javaSources 2>&1 | Out-Null
+$javacOutput = & javac -encoding UTF-8 -source 8 -target 8 -Xlint:-options -Xlint:-deprecation -classpath $classpath -d $OBJ @javaSources 2>&1
 $ErrorActionPreference = "Stop"
-if ($LASTEXITCODE -ne 0) { throw "javac compilation failed" }
+if ($LASTEXITCODE -ne 0) {
+    if ($javacOutput) { $javacOutput | ForEach-Object { Write-Host $_ } }
+    throw "javac compilation failed"
+}
 $classCount = (Get-ChildItem $OBJ -Recurse -Filter "*.class").Count
 Write-Host "  Compiled $classCount classes" -ForegroundColor Green
 
