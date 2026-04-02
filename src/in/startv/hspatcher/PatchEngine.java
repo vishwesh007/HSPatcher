@@ -2352,24 +2352,105 @@ public class PatchEngine {
 
     // ======================== STEP 5: SIGN APK (v1+v2+v3 via Google apksig) ========================
 
-    private void signApk(File unsigned, File signed) throws Exception {
+    /** Persistent keystore file — reused across all patches for consistent signatures. */
+    private static final String KS_TYPE = "PKCS12";
+    private static final String KS_FILE = "hspatcher_sign.p12";
+    private static final String LEGACY_KS_FILE = "hspatcher_sign.jks";
+    private static final String KS_PASS = "hspatcher123";
+    private static final String KS_ALIAS = "hspatcher";
+
+    /**
+     * Get or create a persistent signing key. The keystore is stored in the app's
+     * files directory so the same key is used for every patched APK, allowing
+     * updates without signature mismatches.
+     */
+    private java.security.KeyStore getOrCreateKeyStore() throws Exception {
+        File filesDir = workDir.getParentFile();
+        if (filesDir == null) {
+            throw new java.security.KeyStoreException("Cannot resolve app files directory for signing key");
+        }
+        if (!filesDir.exists() && !filesDir.mkdirs()) {
+            throw new java.io.IOException("Cannot create files directory: " + filesDir.getAbsolutePath());
+        }
+
+        File ksFile = new File(filesDir, KS_FILE);
+        if (ksFile.exists()) {
+            java.security.KeyStore ks = java.security.KeyStore.getInstance(KS_TYPE);
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(ksFile)) {
+                ks.load(fis, KS_PASS.toCharArray());
+            }
+            log("   🔑 Using persistent signing key: " + ksFile.getName());
+            return ks;
+        }
+
+        File legacyKsFile = new File(filesDir, LEGACY_KS_FILE);
+        if (legacyKsFile.exists()) {
+            try {
+                java.security.KeyStore legacyKs = java.security.KeyStore.getInstance("JKS");
+                try (java.io.FileInputStream fis = new java.io.FileInputStream(legacyKsFile)) {
+                    legacyKs.load(fis, KS_PASS.toCharArray());
+                }
+
+                java.security.PrivateKey privateKey = (java.security.PrivateKey)
+                    legacyKs.getKey(KS_ALIAS, KS_PASS.toCharArray());
+                java.security.cert.Certificate[] chain = legacyKs.getCertificateChain(KS_ALIAS);
+                if (privateKey == null || chain == null || chain.length == 0) {
+                    throw new java.security.KeyStoreException(
+                        "Legacy signing keystore is missing alias " + KS_ALIAS);
+                }
+
+                java.security.KeyStore migratedKs = java.security.KeyStore.getInstance(KS_TYPE);
+                migratedKs.load(null, KS_PASS.toCharArray());
+                migratedKs.setKeyEntry(KS_ALIAS, privateKey, KS_PASS.toCharArray(), chain);
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(ksFile)) {
+                    migratedKs.store(fos, KS_PASS.toCharArray());
+                }
+                log("   🔁 Migrated persistent signing key to: " + ksFile.getName());
+                return migratedKs;
+            } catch (Exception e) {
+                throw new java.security.KeyStoreException(
+                    "Legacy signing keystore exists but could not be migrated. "
+                        + "Delete " + legacyKsFile.getName() + " only if you are willing to rotate the patch signing key.",
+                    e);
+            }
+        }
+
+        java.security.KeyStore ks = java.security.KeyStore.getInstance(KS_TYPE);
+        ks.load(null, KS_PASS.toCharArray());
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
         kpg.initialize(2048);
         KeyPair kp = kpg.generateKeyPair();
 
-        X500Principal sub = new X500Principal("CN=HSPatch, O=HSPatch");
+        X500Principal sub = new X500Principal("CN=HSPatch, OU=Patch, O=HSPatch, L=IN, ST=IN, C=IN");
         long now = System.currentTimeMillis();
         byte[] certDer = CertBuilder.buildSelfSigned(kp.getPublic(), kp.getPrivate(), sub,
-            new Date(now), new Date(now + 365L * 24 * 60 * 60 * 1000 * 25));
+            new Date(now), new Date(now + 365L * 24 * 60 * 60 * 1000 * 100)); // 100 years
 
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509Certificate cert = (X509Certificate)
             cf.generateCertificate(new ByteArrayInputStream(certDer));
 
+        ks.setKeyEntry(KS_ALIAS, kp.getPrivate(), KS_PASS.toCharArray(),
+            new java.security.cert.Certificate[]{cert});
+
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(ksFile)) {
+            ks.store(fos, KS_PASS.toCharArray());
+        }
+        log("   🔑 Created persistent signing key: " + ksFile.getName());
+        return ks;
+    }
+
+    private void signApk(File unsigned, File signed) throws Exception {
+        java.security.KeyStore ks = getOrCreateKeyStore();
+        java.security.PrivateKey privateKey = (java.security.PrivateKey)
+            ks.getKey(KS_ALIAS, KS_PASS.toCharArray());
+        java.security.cert.Certificate[] chain = ks.getCertificateChain(KS_ALIAS);
+        X509Certificate cert = (X509Certificate) chain[0];
+
         // Use Google's apksig library for v1+v2+v3 signing (Apache 2.0)
         com.android.apksig.ApkSigner.SignerConfig signerConfig =
             new com.android.apksig.ApkSigner.SignerConfig.Builder(
-                "CERT", kp.getPrivate(), java.util.Collections.singletonList(cert)
+                "CERT", privateKey, java.util.Collections.singletonList(cert)
             ).build();
 
         com.android.apksig.ApkSigner signer = new com.android.apksig.ApkSigner.Builder(

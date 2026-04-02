@@ -21,7 +21,7 @@ $SDK         = if ($env:ANDROID_SDK_ROOT -and $env:ANDROID_SDK_ROOT.Trim()) {
 $BT          = Join-Path $SDK "build-tools\36.1.0"
 $ANDROID_JAR = Join-Path $SDK "platforms\android-36\android.jar"
 $APKTOOL_JAR = Join-Path (Split-Path $PROJECT) "apktool_2.9.3.jar"
-$KEYSTORE    = Join-Path $env:USERPROFILE ".android\debug.keystore"
+$KEYSTORE    = Join-Path $PROJECT "hspatcher.jks"
 
 $AAPT2       = Join-Path $BT "aapt2.exe"
 $D8          = Join-Path $BT "d8.bat"
@@ -224,7 +224,7 @@ if ($LASTEXITCODE -ne 0) { throw "zipalign failed" }
 # ======================== STEP 7: SIGN ========================
 Write-Host "`nStep 7: Signing..."
 $signedApk = Join-Path $BUILD "HSPatcher.apk"
-& $APKSIGNER sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --ks $KEYSTORE --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --out $signedApk $alignedApk 2>&1
+& $APKSIGNER sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --ks $KEYSTORE --ks-pass pass:hspatcher123 --ks-key-alias hspatcher --key-pass pass:hspatcher123 --out $signedApk $alignedApk 2>&1
 if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
 
 # ======================== DONE ========================

@@ -34,6 +34,9 @@ public class AppListActivity extends Activity {
     public static final String EXTRA_BACKUP_MODE = "backup_mode";
     public static final String EXTRA_PACKAGE_NAME = "package_name";
     public static final String EXTRA_SPLIT_DIRS = "split_dirs";
+    public static final String EXTRA_PATCHED_ONLY = "patched_only";
+    public static final String EXTRA_DIRECT_PLAY_UPDATE = "direct_play_update";
+    public static final String EXTRA_PATCH_VERSION = "patch_version";
 
     private LinearLayout appListContainer;
     private EditText searchBox;
@@ -45,11 +48,15 @@ public class AppListActivity extends Activity {
     private List<AppExtractor.AppInfo> filteredApps = new ArrayList<>();
     private Handler handler = new Handler(Looper.getMainLooper());
     private boolean isBackupMode = false;
+    private boolean patchedOnlyMode = false;
+    private boolean directPlayUpdateMode = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         isBackupMode = getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false);
+        patchedOnlyMode = getIntent().getBooleanExtra(EXTRA_PATCHED_ONLY, false);
+        directPlayUpdateMode = getIntent().getBooleanExtra(EXTRA_DIRECT_PLAY_UPDATE, false);
         applyModernSystemUi();
         buildUI();
         loadApps(false);
@@ -92,7 +99,7 @@ public class AppListActivity extends Activity {
         titleBar.addView(backBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         TextView title = new TextView(this);
-        title.setText("📱 Installed Apps");
+        title.setText(getScreenTitle());
         title.setTextSize(20);
         title.setTextColor(getColor(R.color.hsp_accent_green));
         title.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -112,7 +119,9 @@ public class AppListActivity extends Activity {
             title.setText(isBackupMode ? "💾 Backup Installed App" : "📱 Installed Apps");
             statusText.setText(isBackupMode ? "Tap an app to return original APK paths" : "Tap an app to extract to temp workspace");
         });
-        titleBar.addView(backupBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        if (!patchedOnlyMode && !directPlayUpdateMode) {
+            titleBar.addView(backupBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        }
 
         root.addView(titleBar);
 
@@ -149,6 +158,11 @@ public class AppListActivity extends Activity {
         showSystem.setButtonTintList(ColorStateList.valueOf(getColor(R.color.hsp_accent_green)));
         showSystem.setOnCheckedChangeListener((btn, checked) -> loadApps(checked));
         toggleRow.addView(showSystem);
+
+        if (patchedOnlyMode) {
+            showSystem.setChecked(false);
+            showSystem.setVisibility(View.GONE);
+        }
 
         statusText = new TextView(this);
         statusText.setTextColor(getColor(R.color.hsp_text_muted));
@@ -188,11 +202,11 @@ public class AppListActivity extends Activity {
         statusText.setText("Loading...");
 
         new Thread(() -> {
-            List<AppExtractor.AppInfo> apps = AppExtractor.getInstalledApps(this, includeSystem);
+            List<AppExtractor.AppInfo> apps = AppExtractor.getInstalledApps(this, includeSystem, patchedOnlyMode);
             handler.post(() -> {
                 allApps = apps;
                 loadingBar.setVisibility(View.GONE);
-                statusText.setText(apps.size() + " apps");
+                statusText.setText(getStatusText(apps.size(), apps.size()));
                 filterApps(searchBox.getText().toString());
             });
         }).start();
@@ -211,7 +225,7 @@ public class AppListActivity extends Activity {
         for (AppExtractor.AppInfo app : filteredApps) {
             appListContainer.addView(createAppRow(app));
         }
-        statusText.setText(filteredApps.size() + " / " + allApps.size() + " apps");
+        statusText.setText(getStatusText(filteredApps.size(), allApps.size()));
     }
 
     private View createAppRow(AppExtractor.AppInfo app) {
@@ -279,12 +293,25 @@ public class AppListActivity extends Activity {
             metaRow.addView(splitBadge, badgeLp);
         }
 
+        if (app.patchVersion != null) {
+            TextView patchedBadge = new TextView(this);
+            patchedBadge.setText(" PATCHED v" + app.patchVersion);
+            patchedBadge.setTextColor(getColor(R.color.hsp_accent_amber));
+            patchedBadge.setTextSize(10);
+            patchedBadge.setPadding(dp(6), 0, dp(6), 0);
+            patchedBadge.setBackgroundResource(R.drawable.bg_chip);
+            LinearLayout.LayoutParams badgeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            badgeLp.leftMargin = dp(8);
+            metaRow.addView(patchedBadge, badgeLp);
+        }
+
         info.addView(metaRow);
         row.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
 
         // Extract button (arrow icon)
         TextView extractBtn = new TextView(this);
-        extractBtn.setText(isBackupMode ? "BACKUP" : "OPEN");
+        extractBtn.setText(getActionLabel());
         extractBtn.setTextSize(10);
         extractBtn.setTextColor(getColor(R.color.hsp_accent_green));
         extractBtn.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -304,6 +331,16 @@ public class AppListActivity extends Activity {
     }
 
     private void onAppSelected(AppExtractor.AppInfo app) {
+        if (directPlayUpdateMode) {
+            Intent resultIntent = new Intent();
+            resultIntent.putExtra(EXTRA_PACKAGE_NAME, app.packageName);
+            resultIntent.putExtra(EXTRA_APP_LABEL, app.label);
+            resultIntent.putExtra(EXTRA_PATCH_VERSION, app.patchVersion);
+            setResult(RESULT_OK, resultIntent);
+            finish();
+            return;
+        }
+
         // Backup mode: skip temp extraction, return original APK paths directly
         if (isBackupMode || getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false)) {
             Intent resultIntent = new Intent();
@@ -375,5 +412,30 @@ public class AppListActivity extends Activity {
     private int dp(int val) {
         return (int) TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP, val, getResources().getDisplayMetrics());
+    }
+
+    private String getScreenTitle() {
+        if (directPlayUpdateMode) return "⬇️ Patched App Updates";
+        if (patchedOnlyMode) return "🩹 Patched Apps";
+        return "📱 Installed Apps";
+    }
+
+    private String getActionLabel() {
+        if (directPlayUpdateMode) return "UPDATE";
+        return isBackupMode ? "BACKUP" : "OPEN";
+    }
+
+    private String getStatusText(int visibleCount, int totalCount) {
+        if (patchedOnlyMode) {
+            if (totalCount == 0) return "No HSPatcher-installed apps found";
+            if (visibleCount == totalCount) {
+                return totalCount + " patched app" + (totalCount == 1 ? "" : "s")
+                    + (directPlayUpdateMode ? " ready for Play update" : " found");
+            }
+            return visibleCount + " / " + totalCount + " patched apps";
+        }
+        return visibleCount == totalCount
+            ? totalCount + " apps"
+            : visibleCount + " / " + totalCount + " apps";
     }
 }
