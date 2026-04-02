@@ -9,6 +9,34 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-ApktoolJar {
+    param(
+        [string]$ProjectRoot
+    )
+
+    $candidates = @(
+        (Join-Path $ProjectRoot "apktool_2.9.3.jar"),
+        (Join-Path $ProjectRoot "apktool.jar"),
+        (Join-Path (Split-Path $ProjectRoot) "apktool_2.9.3.jar"),
+        (Join-Path (Split-Path $ProjectRoot) "apktool.jar")
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    $downloadUrl = "https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar"
+    $downloadTarget = Join-Path $ProjectRoot "apktool_2.9.3.jar"
+    Write-Host "Downloading apktool_2.9.3.jar for reproducible build..." -ForegroundColor Yellow
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $downloadTarget
+    if (!(Test-Path $downloadTarget)) {
+        throw "Failed to download apktool_2.9.3.jar"
+    }
+    return $downloadTarget
+}
+
 # ======================== PATHS ========================
 $PROJECT     = $PSScriptRoot
 $SDK         = if ($env:ANDROID_SDK_ROOT -and $env:ANDROID_SDK_ROOT.Trim()) {
@@ -20,7 +48,7 @@ $SDK         = if ($env:ANDROID_SDK_ROOT -and $env:ANDROID_SDK_ROOT.Trim()) {
 }
 $BT          = Join-Path $SDK "build-tools\36.1.0"
 $ANDROID_JAR = Join-Path $SDK "platforms\android-36\android.jar"
-$APKTOOL_JAR = Join-Path (Split-Path $PROJECT) "apktool_2.9.3.jar"
+$APKTOOL_JAR = Resolve-ApktoolJar -ProjectRoot $PROJECT
 $KEYSTORE    = Join-Path $PROJECT "hspatcher.jks"
 
 $AAPT2       = Join-Path $BT "aapt2.exe"
