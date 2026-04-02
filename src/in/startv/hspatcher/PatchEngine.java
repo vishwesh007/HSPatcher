@@ -151,13 +151,6 @@ public class PatchEngine {
             log("   → Original APK embedded for native open() hook redirection");
         }
 
-        if (info.hasSecShell) {
-            log("");
-            log("🛡️ SecShell protection detected (libSecShell.so)");
-            log("   → Generic SecShell bypass: Frida pre-loads before SecShell");
-            log("   → Death-trap scanner + exception handler auto-patches anti-tamper");
-        }
-
         // ======== Extract original signing certificate ========
         progress(10, "Extracting signature...");
         info.originalSignatureBase64 = extractOriginalSignature(inputApk);
@@ -272,7 +265,6 @@ public class PatchEngine {
         String originalSignatureBase64; // Base64 of original signing cert (for signature killer)
         boolean alreadyPatched;    // APK was previously patched by HSPatcher
         String patchVersion;       // Version of HSPatcher that patched it (if marker found)
-        boolean hasSecShell;       // APK contains libSecShell.so — needs clinit timing bypass
     }
 
     private ApkInfo analyzeApk(File apk, File ws) throws Exception {
@@ -283,7 +275,6 @@ public class PatchEngine {
             boolean hasGadgetConfig = false;
             boolean hasGadgetScript = false;
             boolean hasHSPatchMarker = false;
-            boolean hasSecShellLib = false;
             String markerVersion = null;
 
             Enumeration<? extends ZipEntry> entries = zip.entries();
@@ -303,8 +294,6 @@ public class PatchEngine {
                         markerVersion = new String(mb, "UTF-8").trim();
                     } catch (Exception ignored) {}
                 }
-                // Detect SecShell protection (libSecShell.so in any ABI directory)
-                if (eName.endsWith("/libSecShell.so")) hasSecShellLib = true;
             }
             Collections.sort(dexNames);
             info.dexNames = dexNames;
@@ -314,11 +303,6 @@ public class PatchEngine {
             if (hasHSPatchMarker || (hasGadgetConfig && hasGadgetScript)) {
                 info.alreadyPatched = true;
                 info.patchVersion = markerVersion;
-            }
-
-            // SecShell detection
-            if (hasSecShellLib) {
-                info.hasSecShell = true;
             }
 
             // Detect DexGuard class encryption early:
@@ -845,7 +829,7 @@ public class PatchEngine {
         extracted++;
         generateBootProvider(tmpDir);
         extracted++;
-        generateGadgetThread(tmpDir, info.hasSecShell);
+        generateGadgetThread(tmpDir);
         extracted++;
 
         DexBuilder db = new DexBuilder(Opcodes.forApi(35));
@@ -1076,7 +1060,7 @@ public class PatchEngine {
         log("   Generated HSPatchBootProvider.smali (ContentProvider bootstrap)");
     }
 
-    private void generateGadgetThread(File smaliRoot, boolean skipSleep) throws IOException {
+    private void generateGadgetThread(File smaliRoot) throws IOException {
         File dir = new File(smaliRoot, "smali/in/startv/hotstar");
         if (!dir.exists()) dir.mkdirs();
         File f = new File(dir, "HSPatchGadgetThread.smali");
@@ -1088,12 +1072,6 @@ public class PatchEngine {
         sb.append("# Frida 17 JNI_OnLoad blocks indefinitely after script execution\n");
         sb.append("# due to internal event loop. Hooks install within ~1s but nativeLoad\n");
         sb.append("# never returns. This thread absorbs the blocking.\n\n");
-
-        if (skipSleep) {
-            // Static field for the gadget .so full path (set by caller before starting thread)
-            sb.append(".field public static gadgetPath:Ljava/lang/String;\n\n");
-        }
-
         // Constructor
         sb.append(".method public constructor <init>()V\n");
         sb.append("    .locals 1\n");
@@ -1103,84 +1081,29 @@ public class PatchEngine {
         sb.append(".end method\n\n");
         // run()
         sb.append(".method public run()V\n");
-        if (skipSleep) {
-            sb.append("    .locals 6\n\n"); // SecShell mode needs v0-v5 for reflection
-        } else {
-            sb.append("    .locals 2\n\n");
-        }
-        if (!skipSleep) {
-            sb.append("    # Sleep 3s to let main thread finish its own loadLibrary calls.\n");
-            sb.append("    # System.loadLibrary holds a Java-level lock in Runtime;\n");
-            sb.append("    # our gadget JNI_OnLoad never returns, so loading too early\n");
-            sb.append("    # would deadlock any subsequent loadLibrary on main thread.\n");
-            sb.append("    const-wide/16 v0, 0xBB8\n");
-            sb.append("    :try_sleep\n");
-            sb.append("    invoke-static {v0, v1}, Ljava/lang/Thread;->sleep(J)V\n");
-            sb.append("    :try_sleep_end\n");
-            sb.append("    .catch Ljava/lang/InterruptedException; {:try_sleep .. :try_sleep_end} :catch_sleep\n");
-            sb.append("    goto :after_sleep\n");
-            sb.append("    :catch_sleep\n");
-            sb.append("    move-exception v0\n");
-            sb.append("    :after_sleep\n\n");
-        } else {
-            sb.append("    # SecShell mode: no sleep — must load gadget ASAP.\n");
-            sb.append("    # Uses Runtime.nativeLoad() via reflection to bypass\n");
-            sb.append("    # the synchronized Runtime monitor (avoids deadlock).\n\n");
-        }
-        if (skipSleep) {
-            // SecShell mode: use nativeLoad via reflection
-            sb.append("    :try_load\n");
-            // Read the gadget path from static field
-            sb.append("    sget-object v0, Lin/startv/hotstar/HSPatchGadgetThread;->gadgetPath:Ljava/lang/String;\n");
-            sb.append("    if-eqz v0, :no_path\n");
-            // Get Runtime.nativeLoad(String, ClassLoader) via reflection
-            sb.append("    const-class v1, Ljava/lang/Runtime;\n");
-            sb.append("    const-string v2, \"nativeLoad\"\n");
-            sb.append("    const/4 v3, 0x2\n");
-            sb.append("    new-array v3, v3, [Ljava/lang/Class;\n");
-            sb.append("    const-class v4, Ljava/lang/String;\n");
-            sb.append("    const/4 v5, 0x0\n");
-            sb.append("    aput-object v4, v3, v5\n");
-            sb.append("    const-class v4, Ljava/lang/ClassLoader;\n");
-            sb.append("    const/4 v5, 0x1\n");
-            sb.append("    aput-object v4, v3, v5\n");
-            sb.append("    invoke-virtual {v1, v2, v3}, Ljava/lang/Class;->getDeclaredMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;\n");
-            sb.append("    move-result-object v1\n"); // v1 = Method
-            sb.append("    const/4 v2, 0x1\n");
-            sb.append("    invoke-virtual {v1, v2}, Ljava/lang/reflect/Method;->setAccessible(Z)V\n");
-            // Get system classloader
-            sb.append("    invoke-static {}, Ljava/lang/ClassLoader;->getSystemClassLoader()Ljava/lang/ClassLoader;\n");
-            sb.append("    move-result-object v2\n"); // v2 = classloader
-            // Build args array: [path, classloader]
-            sb.append("    const/4 v3, 0x2\n");
-            sb.append("    new-array v3, v3, [Ljava/lang/Object;\n");
-            sb.append("    const/4 v4, 0x0\n");
-            sb.append("    aput-object v0, v3, v4\n"); // args[0] = path
-            sb.append("    const/4 v4, 0x1\n");
-            sb.append("    aput-object v2, v3, v4\n"); // args[1] = classloader
-            sb.append("    const/4 v2, 0x0\n"); // null receiver (static method)
-            // Invoke nativeLoad — blocks forever (Frida event loop)
-            sb.append("    invoke-virtual {v1, v2, v3}, Ljava/lang/reflect/Method;->invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;\n");
-            sb.append("    :try_load_end\n");
-            sb.append("    .catch Ljava/lang/Throwable; {:try_load .. :try_load_end} :catch_load\n");
-        } else {
-            sb.append("    :try_load\n");
-            sb.append("    const-string v0, \"gadget\"\n");
-            sb.append("    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n");
-            sb.append("    :try_load_end\n");
-            sb.append("    .catch Ljava/lang/Throwable; {:try_load .. :try_load_end} :catch_load\n");
-        }
+        sb.append("    .locals 2\n\n");
+        sb.append("    # Sleep 3s to let main thread finish its own loadLibrary calls.\n");
+        sb.append("    # System.loadLibrary holds a Java-level lock in Runtime;\n");
+        sb.append("    # our gadget JNI_OnLoad never returns, so loading too early\n");
+        sb.append("    # would deadlock any subsequent loadLibrary on main thread.\n");
+        sb.append("    const-wide/16 v0, 0xBB8\n");
+        sb.append("    :try_sleep\n");
+        sb.append("    invoke-static {v0, v1}, Ljava/lang/Thread;->sleep(J)V\n");
+        sb.append("    :try_sleep_end\n");
+        sb.append("    .catch Ljava/lang/InterruptedException; {:try_sleep .. :try_sleep_end} :catch_sleep\n");
+        sb.append("    goto :after_sleep\n");
+        sb.append("    :catch_sleep\n");
+        sb.append("    move-exception v0\n");
+        sb.append("    :after_sleep\n\n");
+        sb.append("    :try_load\n");
+        sb.append("    const-string v0, \"gadget\"\n");
+        sb.append("    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n");
+        sb.append("    :try_load_end\n");
+        sb.append("    .catch Ljava/lang/Throwable; {:try_load .. :try_load_end} :catch_load\n");
         sb.append("    const-string v0, \"HSPatch\"\n");
         sb.append("    const-string v1, \"  \\u2705 frida gadget loaded (bg thread complete)\"\n");
         sb.append("    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I\n");
         sb.append("    return-void\n\n");
-        if (skipSleep) {
-            sb.append("    :no_path\n");
-            sb.append("    # Fallback: gadgetPath not set, try System.loadLibrary\n");
-            sb.append("    const-string v0, \"gadget\"\n");
-            sb.append("    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n");
-            sb.append("    return-void\n\n");
-        }
         sb.append("    :catch_load\n");
         sb.append("    move-exception v0\n");
         sb.append("    const-string v0, \"HSPatch\"\n");
@@ -1250,12 +1173,6 @@ public class PatchEngine {
         log("   Found: " + targetSmali.getName());
 
         injectHook(targetSmali, info.isApplication, info.dexguardEncrypted);
-
-        // SecShell timing bypass: inject Frida pre-load before loadLibrary("SecShell")
-        if (info.hasSecShell) {
-            log("   Injecting SecShell timing bypass...");
-            injectSecShellClinitBypass(targetSmali);
-        }
 
         // Apply smali-level patches (License hack + DexExtractor)
         int smpCount = applySmaliPatches(smaliDir, info);
@@ -1496,223 +1413,6 @@ public class PatchEngine {
         log("   ✅ Injected HSPatchInit.init() hook (helper method)");
     }
 
-    /**
-     * SecShell timing bypass: inject code to start Frida gadget thread BEFORE
-     * System.loadLibrary("SecShell") is called.
-     *
-     * SecShell's anti-tamper runs on a background thread spawned during its JNI_OnLoad.
-     * We must start Frida first so hooks (dlopen, pthread_create) are installed in time.
-     *
-     * The loadLibrary("SecShell") call is typically in attachBaseContext() or <clinit>.
-     * This method finds and injects the pre-load code before the loadLibrary call.
-     */
-    private void injectSecShellClinitBypass(File smaliFile) throws IOException {
-        String content = readFileStr(smaliFile);
-
-        // Find the method containing System.loadLibrary("SecShell")
-        int ssIdx = content.indexOf("\"SecShell\"");
-        if (ssIdx < 0) {
-            log("   ⚠️ No loadLibrary(\"SecShell\") in " + smaliFile.getName() + " — bypass skipped");
-            return;
-        }
-
-        // Find which method contains this string reference
-        int methodStart = content.lastIndexOf(".method ", ssIdx);
-        if (methodStart < 0) {
-            log("   ⚠️ Cannot find method containing SecShell reference");
-            return;
-        }
-
-        int methodEnd = content.indexOf(".end method", ssIdx);
-        if (methodEnd < 0) return;
-
-        String methodSig = content.substring(methodStart, content.indexOf('\n', methodStart)).trim();
-        log("   SecShell loadLibrary found in: " + methodSig);
-
-        // Find the const-string line BEFORE "SecShell"
-        // We need to insert our pre-load BEFORE the const-string that loads "SecShell"
-        int constStringLine = content.lastIndexOf('\n', ssIdx);
-        if (constStringLine < 0) constStringLine = 0;
-        else constStringLine += 1;
-
-        // We actually need to find the start of the code block that does:
-        //   const-string vX, "SecShell"
-        //   invoke-static {vX}, Ljava/lang/System;->loadLibrary(...)V
-        // And inject BEFORE that block.
-        // But we may also need to go back further if there's a const-string for "SecShell-x86" etc.
-        // Simplest: inject at the very START of the method body (after .locals/.registers directives)
-
-        // Find the .locals or .registers line in this method
-        int localsIdx = content.indexOf(".locals ", methodStart);
-        int registersIdx = content.indexOf(".registers ", methodStart);
-        int regLine = -1;
-        if (localsIdx >= 0 && localsIdx < methodEnd) regLine = localsIdx;
-        if (registersIdx >= 0 && registersIdx < methodEnd &&
-            (regLine < 0 || registersIdx < regLine)) regLine = registersIdx;
-
-        if (regLine < 0) {
-            log("   ⚠️ Cannot find .locals/.registers — bypass skipped");
-            return;
-        }
-
-        // Ensure we have enough locals (we use v0, v1, v2)
-        int regLineEnd = content.indexOf('\n', regLine);
-        String regLineStr = content.substring(regLine, regLineEnd).trim();
-        boolean isLocals = regLineStr.startsWith(".locals");
-        int currentRegs = Integer.parseInt(regLineStr.split("\\s+")[1]);
-        if (isLocals && currentRegs < 3) {
-            content = content.substring(0, regLine) + "    .locals 3" + content.substring(regLineEnd);
-            // Recalculate positions after edit
-            int diff = "    .locals 3".length() - (regLineEnd - regLine);
-            ssIdx += diff;
-            methodEnd += diff;
-            constStringLine += diff;
-            regLineEnd = content.indexOf('\n', regLine);
-        }
-
-        int insertPos = regLineEnd + 1;
-        // Skip .param lines and .annotation lines at method start
-        int cursor = insertPos;
-        while (cursor < methodEnd) {
-            String line = "";
-            int lineEnd = content.indexOf('\n', cursor);
-            if (lineEnd < 0) break;
-            line = content.substring(cursor, lineEnd).trim();
-            if (line.startsWith(".param") || line.startsWith(".annotation") ||
-                line.startsWith(".end annotation") || line.isEmpty() ||
-                line.startsWith("#") || line.startsWith(".prologue") ||
-                line.startsWith(".line")) {
-                cursor = lineEnd + 1;
-            } else {
-                break;
-            }
-        }
-        insertPos = cursor;
-
-        // Check if method has Context parameter (like attachBaseContext)
-        boolean hasContextParam = methodSig.contains("(Landroid/content/Context;)");
-
-        // Build the bypass code
-        StringBuilder bypass = new StringBuilder();
-        bypass.append("\n    # === HSPatch: pre-load Frida gadget before SecShell ===\n");
-        bypass.append("    # SecShell spawns anti-tamper thread during loadLibrary.\n");
-        bypass.append("    # We start Frida first and wait for hooks to install.\n");
-        bypass.append("    :hsp_pre_start\n");
-
-        // Get native library dir and set gadgetPath BEFORE starting thread
-        if (hasContextParam) {
-            // Method has Context param (p1) — use it to get nativeLibraryDir
-            bypass.append("    # Get native lib dir from Context param (p1)\n");
-            bypass.append("    invoke-virtual {p1}, Landroid/content/Context;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;\n");
-            bypass.append("    move-result-object v0\n");
-            bypass.append("    iget-object v0, v0, Landroid/content/pm/ApplicationInfo;->nativeLibraryDir:Ljava/lang/String;\n");
-        } else {
-            // No Context available — fall back to ActivityThread.currentApplication()
-            bypass.append("    # Get native lib dir from ActivityThread.currentApplication()\n");
-            bypass.append("    invoke-static {}, Landroid/app/ActivityThread;->currentApplication()Landroid/app/Application;\n");
-            bypass.append("    move-result-object v0\n");
-            bypass.append("    invoke-virtual {v0}, Landroid/content/Context;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;\n");
-            bypass.append("    move-result-object v0\n");
-            bypass.append("    iget-object v0, v0, Landroid/content/pm/ApplicationInfo;->nativeLibraryDir:Ljava/lang/String;\n");
-        }
-        // Build full path: nativeLibraryDir + "/libgadget.so"
-        bypass.append("    new-instance v1, Ljava/lang/StringBuilder;\n");
-        bypass.append("    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V\n");
-        bypass.append("    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n");
-        bypass.append("    const-string v0, \"/libgadget.so\"\n");
-        bypass.append("    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;\n");
-        bypass.append("    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;\n");
-        bypass.append("    move-result-object v0\n");
-        // Store in static field for the gadget thread to read
-        bypass.append("    sput-object v0, Lin/startv/hotstar/HSPatchGadgetThread;->gadgetPath:Ljava/lang/String;\n\n");
-
-        bypass.append("    new-instance v0, Lin/startv/hotstar/HSPatchGadgetThread;\n");
-        bypass.append("    invoke-direct {v0}, Lin/startv/hotstar/HSPatchGadgetThread;-><init>()V\n");
-        bypass.append("    invoke-virtual {v0}, Ljava/lang/Thread;->start()V\n\n");
-        bypass.append("    # Wait up to 10s for Frida to set hspatch.frida.ready\n");
-        bypass.append("    const/16 v2, 0xC8\n"); // 200 iterations * 50ms = 10s max
-        bypass.append("    :hsp_wait_loop\n");
-        bypass.append("    const-string v0, \"hspatch.frida.ready\"\n");
-        bypass.append("    invoke-static {v0}, Ljava/lang/System;->getProperty(Ljava/lang/String;)Ljava/lang/String;\n");
-        bypass.append("    move-result-object v0\n");
-        bypass.append("    if-nez v0, :hsp_frida_ready\n\n");
-        bypass.append("    const-wide/16 v0, 0x32\n"); // 50ms
-        bypass.append("    invoke-static {v0, v1}, Ljava/lang/Thread;->sleep(J)V\n\n");
-        bypass.append("    add-int/lit8 v2, v2, -0x1\n");
-        bypass.append("    if-gtz v2, :hsp_wait_loop\n");
-        bypass.append("    :hsp_pre_end\n");
-        bypass.append("    .catch Ljava/lang/Throwable; {:hsp_pre_start .. :hsp_pre_end} :hsp_pre_catch\n");
-        bypass.append("    goto :hsp_frida_ready\n");
-        bypass.append("    :hsp_pre_catch\n");
-        bypass.append("    move-exception v0\n");
-        bypass.append("    :hsp_frida_ready\n");
-        bypass.append("    # === End HSPatch pre-load ===\n\n");
-
-        content = content.substring(0, insertPos) + bypass.toString() + content.substring(insertPos);
-
-        // Phase 2: Wrap the System.loadLibrary("SecShell") call in try-catch
-        // so that JNI_ERR from JNI_OnLoad doesn't crash the app.
-        // SecShell's anti-tamper bypass may cause JNI_OnLoad to return JNI_ERR,
-        // but the library initialization (dex decryption) still completes.
-        // Re-find "SecShell" in the modified content
-        int ssIdx2 = content.indexOf("\"SecShell\"");
-        if (ssIdx2 >= 0) {
-            // Find the invoke-static line for loadLibrary after the const-string
-            int invokeIdx = content.indexOf("Ljava/lang/System;->loadLibrary(", ssIdx2);
-            if (invokeIdx >= 0) {
-                // Find the start of the invoke-static line
-                int invokeLineStart = content.lastIndexOf('\n', invokeIdx);
-                if (invokeLineStart < 0) invokeLineStart = 0;
-                else invokeLineStart += 1;
-                // Find the end of the invoke-static line
-                int invokeLineEnd = content.indexOf('\n', invokeIdx);
-                if (invokeLineEnd < 0) invokeLineEnd = content.length();
-
-                // Find the const-string line that sets the "SecShell" string
-                int constIdx = content.lastIndexOf("const-string", ssIdx2);
-                int constLineStart = content.lastIndexOf('\n', constIdx);
-                if (constLineStart < 0) constLineStart = 0;
-                else constLineStart += 1;
-
-                // Insert try-catch wrapping around const-string + invoke-static
-                String tryStart = "    :hsp_secshell_try\n";
-                String tryEnd = "\n    :hsp_secshell_try_end\n" +
-                        "    .catch Ljava/lang/UnsatisfiedLinkError; {:hsp_secshell_try .. :hsp_secshell_try_end} :hsp_secshell_catch\n" +
-                        "    goto :hsp_secshell_done\n" +
-                        "    :hsp_secshell_catch\n" +
-                        "    move-exception v0\n" +
-                        "    # JNI_OnLoad returned JNI_ERR — swallow the error.\n" +
-                        "    # SecShell's dex decryption completed during JNI_OnLoad\n" +
-                        "    # even though the anti-tamper checks failed.\n" +
-                        "    :hsp_secshell_done\n" +
-                        "    # === Wait for Frida to re-invoke JNI_OnLoad and register natives ===\n" +
-                        "    const/16 v2, 0xC8\n" + // 200 iterations * 50ms = 10s max
-                        "    :hsp_natives_wait\n" +
-                        "    const-string v0, \"hspatch.secshell.natives\"\n" +
-                        "    invoke-static {v0}, Ljava/lang/System;->getProperty(Ljava/lang/String;)Ljava/lang/String;\n" +
-                        "    move-result-object v0\n" +
-                        "    if-nez v0, :hsp_natives_ready\n" +
-                        "    const-wide/16 v0, 0x32\n" + // 50ms
-                        "    invoke-static {v0, v1}, Ljava/lang/Thread;->sleep(J)V\n" +
-                        "    add-int/lit8 v2, v2, -0x1\n" +
-                        "    if-gtz v2, :hsp_natives_wait\n" +
-                        "    :hsp_natives_ready\n" +
-                        "    # === End wait for natives ===\n";
-
-                content = content.substring(0, constLineStart) + tryStart +
-                          content.substring(constLineStart, invokeLineEnd) + tryEnd +
-                          content.substring(invokeLineEnd);
-                log("   ✅ Wrapped loadLibrary(\"SecShell\") in try-catch (JNI_ERR protection)");
-            }
-        }
-
-        writeFileStr(smaliFile, content);
-
-        String methodName = methodSig.contains("attachBaseContext") ? "attachBaseContext" :
-                           methodSig.contains("<clinit>") ? "<clinit>" : methodSig;
-        log("   ✅ Injected SecShell timing bypass in " + methodName + " (Frida loads before SecShell)");
-    }
-
     private String findOnCreate(String content, boolean isApp) {
         String[] sigs = isApp ?
             new String[]{".method public onCreate()V",
@@ -1876,12 +1576,6 @@ public class PatchEngine {
             // Skip DEXes that have smali-patched replacements
             if (extraPatched != null && extraPatched.containsKey(name)) continue;
 
-            // Skip old HSPatch artifacts when re-patching so new ones can be injected
-            if (name.endsWith("/libgadget.so") || name.endsWith("/libgadget.config.so") ||
-                name.endsWith("/libgadget.js.so") || name.endsWith("/libSignatureKiller.so") ||
-                name.equals("assets/hspatch_marker.txt") || name.equals("assets/user_ca.crt") ||
-                name.equals("assets/origin.apk")) continue;
-
             // Intercept manifest for activity + provider registration
             if (name.equals("AndroidManifest.xml")) {
                 byte[] mfBytes = readAllBytes(origZip.getInputStream(entry));
@@ -2007,7 +1701,7 @@ public class PatchEngine {
 
         // Write HSPatch marker asset (for already-patched detection)
         try {
-            String version = "3.57";
+            String version = "3.61.1";
             byte[] markerData = version.getBytes("UTF-8");
             ZipEntry markerEntry = new ZipEntry("assets/hspatch_marker.txt");
             markerEntry.setMethod(ZipEntry.DEFLATED);
@@ -2628,25 +2322,24 @@ public class PatchEngine {
                     log("   ⚠️ No SignatureKiller .so for ABI: " + abi);
                     continue;
                 }
-                byte[] soData = readAllBytes(new FileInputStream(soFile));
-                addZipEntry(zos, new ByteArrayInputStream(soData),
-                           "lib/" + abi + "/libSignatureKiller.so");
+                try (FileInputStream soInput = new FileInputStream(soFile)) {
+                    addZipEntry(zos, soInput, "lib/" + abi + "/libSignatureKiller.so");
+                }
                 log("   🔒 SignatureKiller .so added for " + abi +
-                    " (" + (soData.length / 1024) + " KB)");
+                    " (" + (soFile.length() / 1024) + " KB)");
                 soAdded++;
             }
 
             // Embed original APK as assets/SignatureKiller/origin.apk
             // This is read by killOpen() at runtime — native open() calls are
             // redirected to this copy so integrity checks see the original APK.
-            byte[] originData = readAllBytes(new FileInputStream(originalApk));
             ZipEntry originEntry = new ZipEntry("assets/SignatureKiller/origin.apk");
             originEntry.setMethod(ZipEntry.DEFLATED); // compress to save space
             zos.putNextEntry(originEntry);
-            zos.write(originData);
+            copyStream(new FileInputStream(originalApk), zos, false);
             zos.closeEntry();
             log("   📦 Original APK embedded as origin.apk (" +
-                (originData.length / 1024 / 1024) + " MB)");
+                (originalApk.length() / 1024 / 1024) + " MB)");
 
             if (soAdded > 0) {
                 log("   ✅ SignatureKiller embedded for " + soAdded + " ABI(s)");
@@ -2658,48 +2351,105 @@ public class PatchEngine {
 
     // ======================== STEP 5: SIGN APK (v1+v2+v3 via Google apksig) ========================
 
-    /** Load persistent signing key or create + save one on first use */
-    private KeyPair loadOrCreateSigningKey() throws Exception {
-        File keyFile = new File(workDir.getParentFile(), "hspatch_signing.key");
-        if (keyFile.exists()) {
-            try (java.io.ObjectInputStream ois = new java.io.ObjectInputStream(
-                    new java.io.FileInputStream(keyFile))) {
-                java.security.PrivateKey priv = (java.security.PrivateKey) ois.readObject();
-                java.security.PublicKey pub = (java.security.PublicKey) ois.readObject();
-                log("   🔑 Using persistent signing key");
-                return new KeyPair(pub, priv);
+    /** Persistent keystore file — reused across all patches for consistent signatures. */
+    private static final String KS_TYPE = "PKCS12";
+    private static final String KS_FILE = "hspatcher_sign.p12";
+    private static final String LEGACY_KS_FILE = "hspatcher_sign.jks";
+    private static final String KS_PASS = "hspatcher123";
+    private static final String KS_ALIAS = "hspatcher";
+
+    /**
+     * Get or create a persistent signing key. The keystore is stored in the app's
+     * files directory so the same key is used for every patched APK, allowing
+     * updates without signature mismatches.
+     */
+    private java.security.KeyStore getOrCreateKeyStore() throws Exception {
+        File filesDir = workDir.getParentFile();
+        if (filesDir == null) {
+            throw new java.security.KeyStoreException("Cannot resolve app files directory for signing key");
+        }
+        if (!filesDir.exists() && !filesDir.mkdirs()) {
+            throw new java.io.IOException("Cannot create files directory: " + filesDir.getAbsolutePath());
+        }
+
+        File ksFile = new File(filesDir, KS_FILE);
+        if (ksFile.exists()) {
+            java.security.KeyStore ks = java.security.KeyStore.getInstance(KS_TYPE);
+            try (java.io.FileInputStream fis = new java.io.FileInputStream(ksFile)) {
+                ks.load(fis, KS_PASS.toCharArray());
+            }
+            log("   🔑 Using persistent signing key: " + ksFile.getName());
+            return ks;
+        }
+
+        File legacyKsFile = new File(filesDir, LEGACY_KS_FILE);
+        if (legacyKsFile.exists()) {
+            try {
+                java.security.KeyStore legacyKs = java.security.KeyStore.getInstance("JKS");
+                try (java.io.FileInputStream fis = new java.io.FileInputStream(legacyKsFile)) {
+                    legacyKs.load(fis, KS_PASS.toCharArray());
+                }
+
+                java.security.PrivateKey privateKey = (java.security.PrivateKey)
+                    legacyKs.getKey(KS_ALIAS, KS_PASS.toCharArray());
+                java.security.cert.Certificate[] chain = legacyKs.getCertificateChain(KS_ALIAS);
+                if (privateKey == null || chain == null || chain.length == 0) {
+                    throw new java.security.KeyStoreException(
+                        "Legacy signing keystore is missing alias " + KS_ALIAS);
+                }
+
+                java.security.KeyStore migratedKs = java.security.KeyStore.getInstance(KS_TYPE);
+                migratedKs.load(null, KS_PASS.toCharArray());
+                migratedKs.setKeyEntry(KS_ALIAS, privateKey, KS_PASS.toCharArray(), chain);
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(ksFile)) {
+                    migratedKs.store(fos, KS_PASS.toCharArray());
+                }
+                log("   🔁 Migrated persistent signing key to: " + ksFile.getName());
+                return migratedKs;
             } catch (Exception e) {
-                log("   ⚠️ Stored key invalid, regenerating: " + e.getMessage());
+                throw new java.security.KeyStoreException(
+                    "Legacy signing keystore exists but could not be migrated. "
+                        + "Delete " + legacyKsFile.getName() + " only if you are willing to rotate the patch signing key.",
+                    e);
             }
         }
+
+        java.security.KeyStore ks = java.security.KeyStore.getInstance(KS_TYPE);
+        ks.load(null, KS_PASS.toCharArray());
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
         kpg.initialize(2048);
         KeyPair kp = kpg.generateKeyPair();
-        try (java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(
-                new java.io.FileOutputStream(keyFile))) {
-            oos.writeObject(kp.getPrivate());
-            oos.writeObject(kp.getPublic());
-        }
-        log("   🔑 New signing key generated and saved");
-        return kp;
-    }
 
-    private void signApk(File unsigned, File signed) throws Exception {
-        KeyPair kp = loadOrCreateSigningKey();
-
-        X500Principal sub = new X500Principal("CN=HSPatch, O=HSPatch");
+        X500Principal sub = new X500Principal("CN=HSPatch, OU=Patch, O=HSPatch, L=IN, ST=IN, C=IN");
         long now = System.currentTimeMillis();
         byte[] certDer = CertBuilder.buildSelfSigned(kp.getPublic(), kp.getPrivate(), sub,
-            new Date(now), new Date(now + 365L * 24 * 60 * 60 * 1000 * 25));
+            new Date(now), new Date(now + 365L * 24 * 60 * 60 * 1000 * 100)); // 100 years
 
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509Certificate cert = (X509Certificate)
             cf.generateCertificate(new ByteArrayInputStream(certDer));
 
+        ks.setKeyEntry(KS_ALIAS, kp.getPrivate(), KS_PASS.toCharArray(),
+            new java.security.cert.Certificate[]{cert});
+
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(ksFile)) {
+            ks.store(fos, KS_PASS.toCharArray());
+        }
+        log("   🔑 Created persistent signing key: " + ksFile.getName());
+        return ks;
+    }
+
+    private void signApk(File unsigned, File signed) throws Exception {
+        java.security.KeyStore ks = getOrCreateKeyStore();
+        java.security.PrivateKey privateKey = (java.security.PrivateKey)
+            ks.getKey(KS_ALIAS, KS_PASS.toCharArray());
+        java.security.cert.Certificate[] chain = ks.getCertificateChain(KS_ALIAS);
+        X509Certificate cert = (X509Certificate) chain[0];
+
         // Use Google's apksig library for v1+v2+v3 signing (Apache 2.0)
         com.android.apksig.ApkSigner.SignerConfig signerConfig =
             new com.android.apksig.ApkSigner.SignerConfig.Builder(
-                "CERT", kp.getPrivate(), java.util.Collections.singletonList(cert)
+                "CERT", privateKey, java.util.Collections.singletonList(cert)
             ).build();
 
         com.android.apksig.ApkSigner signer = new com.android.apksig.ApkSigner.Builder(

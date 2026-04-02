@@ -9,6 +9,52 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Resolve-ApktoolJar {
+    param(
+        [string]$ProjectRoot
+    )
+
+    $candidates = @(
+        (Join-Path $ProjectRoot "apktool_2.9.3.jar"),
+        (Join-Path $ProjectRoot "apktool.jar"),
+        (Join-Path (Split-Path $ProjectRoot) "apktool_2.9.3.jar"),
+        (Join-Path (Split-Path $ProjectRoot) "apktool.jar")
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    $downloadUrl = "https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar"
+    $downloadTarget = Join-Path $ProjectRoot "apktool_2.9.3.jar"
+    Write-Host "Downloading apktool_2.9.3.jar for reproducible build..." -ForegroundColor Yellow
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $downloadTarget
+    if (!(Test-Path $downloadTarget)) {
+        throw "Failed to download apktool_2.9.3.jar"
+    }
+    return $downloadTarget
+}
+
+function Resolve-SigningConfig {
+    param(
+        [string]$ProjectRoot
+    )
+
+    $projectKeystore = Join-Path $ProjectRoot "hspatcher.jks"
+    if (Test-Path $projectKeystore) {
+        return @{
+            KeyStore = $projectKeystore
+            StorePass = "hspatcher123"
+            Alias = "hspatcher"
+            KeyPass = "hspatcher123"
+        }
+    }
+
+    throw "Project keystore missing: $projectKeystore. CI/debug keystore fallback is disabled for HSPatcher builds."
+}
+
 # ======================== PATHS ========================
 $PROJECT     = $PSScriptRoot
 $SDK         = if ($env:ANDROID_SDK_ROOT -and $env:ANDROID_SDK_ROOT.Trim()) {
@@ -20,8 +66,8 @@ $SDK         = if ($env:ANDROID_SDK_ROOT -and $env:ANDROID_SDK_ROOT.Trim()) {
 }
 $BT          = Join-Path $SDK "build-tools\36.1.0"
 $ANDROID_JAR = Join-Path $SDK "platforms\android-36\android.jar"
-$APKTOOL_JAR = Join-Path (Split-Path $PROJECT) "apktool_2.9.3.jar"
-$KEYSTORE    = Join-Path $env:USERPROFILE ".android\debug.keystore"
+$APKTOOL_JAR = Resolve-ApktoolJar -ProjectRoot $PROJECT
+$SIGNING     = Resolve-SigningConfig -ProjectRoot $PROJECT
 
 $AAPT2       = Join-Path $BT "aapt2.exe"
 $D8          = Join-Path $BT "d8.bat"
@@ -91,9 +137,12 @@ Get-ChildItem $GEN -Recurse -Filter "*.java" | ForEach-Object { $javaSources += 
 
 $classpath = "$ANDROID_JAR;$APKTOOL_JAR;$ARSCLIB_JAR;$APKSIG_JAR"
 $ErrorActionPreference = "Continue"
-& javac -source 8 -target 8 -Xlint:-options -Xlint:-deprecation -classpath $classpath -d $OBJ @javaSources 2>&1 | Out-Null
+$javacOutput = & javac -encoding UTF-8 -source 8 -target 8 -Xlint:-options -Xlint:-deprecation -classpath $classpath -d $OBJ @javaSources 2>&1
 $ErrorActionPreference = "Stop"
-if ($LASTEXITCODE -ne 0) { throw "javac compilation failed" }
+if ($LASTEXITCODE -ne 0) {
+    if ($javacOutput) { $javacOutput | ForEach-Object { Write-Host $_ } }
+    throw "javac compilation failed"
+}
 $classCount = (Get-ChildItem $OBJ -Recurse -Filter "*.class").Count
 Write-Host "  Compiled $classCount classes" -ForegroundColor Green
 
@@ -224,7 +273,7 @@ if ($LASTEXITCODE -ne 0) { throw "zipalign failed" }
 # ======================== STEP 7: SIGN ========================
 Write-Host "`nStep 7: Signing..."
 $signedApk = Join-Path $BUILD "HSPatcher.apk"
-& $APKSIGNER sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --ks $KEYSTORE --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --out $signedApk $alignedApk 2>&1
+& $APKSIGNER sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --ks $SIGNING.KeyStore --ks-pass "pass:$($SIGNING.StorePass)" --ks-key-alias $SIGNING.Alias --key-pass "pass:$($SIGNING.KeyPass)" --out $signedApk $alignedApk 2>&1
 if ($LASTEXITCODE -ne 0) { throw "apksigner failed" }
 
 # ======================== DONE ========================

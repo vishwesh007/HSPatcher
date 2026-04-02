@@ -1,5 +1,15 @@
 # HSPatcher Changelog
 
+## v3.61.1 - 2026-04-02: Local Rerelease After CI Signing Bug
+
+### Summary
+- Disabled GitHub Actions release automation entirely so HSPatcher APKs are no longer produced by CI.
+- Removed the debug-keystore fallback from the local build path; releases now require `hspatcher.jks`.
+- Rebuilt the release APK locally to replace the bad GitHub-hosted v3.60/v3.61 artifacts that were produced with mismatched signing.
+- Version bump: 3.61 -> 3.61.1 in the manifest and patch marker.
+
+---
+
 ## v3.33 — 2026-02-27: .apks Signature Fix + Advanced Hooking-Based Blocking
 
 ### Summary

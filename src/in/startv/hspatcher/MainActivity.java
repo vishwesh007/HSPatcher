@@ -48,6 +48,9 @@ import java.util.Random;
 
 public class MainActivity extends Activity {
 
+    private static final int MAX_LOG_CHARS = 24000;
+    private static final int MAX_FATAL_STACK_LINES = 12;
+
     private static final int PICK_APK = 1001;
     private static final int STORAGE_PERM = 1002;
     private static final int MANAGE_STORAGE = 1003;
@@ -57,19 +60,23 @@ public class MainActivity extends Activity {
     private static final int UNINSTALL_REQUEST = 1007;
     private static final int BACKUP_APP = 1008;
     private static final int PICK_CERT = 1009;
+    private static final int PICK_PATCHED_APP_UPDATE = 1010;
+    private static final int NOTIFICATION_PERM = 1011;
 
     private Button btnSelect, btnPatch, btnInstall, btnExtract, btnUninstall;
     private Button btnCancel, btnMod, btnTools, btnCert;
     private TextView logOutput, apkName, apkSize, progressText, versionText;
+    private TextView patchGameScore, patchGameHint;
     private ScrollView logScroll;
     private ProgressBar progressBar;
-    private LinearLayout apkInfoPanel;
+    private LinearLayout apkInfoPanel, patchGamePanel;
     private View headerContainer;
     private TextView titleText;
     private TextView subtitleText;
     private LinearLayout phase1Buttons, phase2Buttons, phase4Buttons;
     private View colorOverlay;
     private FrameLayout particleContainer;
+    private PatchArcadeView patchGameView;
 
     private static final int PHASE_INITIAL = 0;
     private static final int PHASE_SELECTED = 1;
@@ -86,6 +93,7 @@ public class MainActivity extends Activity {
     private boolean pendingInstallAfterUninstall = false;
     private String targetPackageName = null;
     private boolean autoPatchAfterLoad = false;
+    private boolean autoInstallAfterPatch = false;
     private String selectedApkPatchedVersion = null; // non-null if APK is already patched
 
     private boolean pendingLogAutoScroll = false;
@@ -143,6 +151,10 @@ public class MainActivity extends Activity {
         progressBar = findViewById(R.id.progress_bar);
         apkInfoPanel = findViewById(R.id.apk_info_panel);
         versionText = findViewById(R.id.version_text);
+        patchGamePanel = findViewById(R.id.patch_game_panel);
+        patchGameScore = findViewById(R.id.patch_game_score);
+        patchGameHint = findViewById(R.id.patch_game_hint);
+        patchGameView = findViewById(R.id.patch_game_view);
         headerContainer = findViewById(R.id.header_container);
         titleText = findViewById(R.id.title_text);
         subtitleText = findViewById(R.id.subtitle_text);
@@ -154,11 +166,9 @@ public class MainActivity extends Activity {
 
         // Display app version
         try {
-            String vName = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-            if (vName == null || vName.isEmpty()) vName = "dev";
-            versionText.setText("v" + vName);
+            versionText.setText(getDisplayVersionLabel());
         } catch (Exception e) {
-            versionText.setText("v3.10");
+            versionText.setText("v?");
         }
 
         btnSelect.setOnClickListener(v -> { animateButtonPress(v, 0xFF00E676); onSelectClick(); });
@@ -169,6 +179,10 @@ public class MainActivity extends Activity {
         btnCancel.setOnClickListener(v -> onCancelClick());
         btnMod.setOnClickListener(v -> onModClick());
         btnTools.setOnClickListener(v -> showToolsMenu());
+        versionText.setOnClickListener(v -> {
+            animateButtonPress(v, 0xFFFFC107);
+            startActivity(new Intent(this, CreditsActivity.class));
+        });
 
         // FAB for CA cert
         btnCert = findViewById(R.id.fab_cert);
@@ -179,16 +193,27 @@ public class MainActivity extends Activity {
         animateEntrance();
 
         requestStoragePermission();
+        requestNotificationPermissionIfNeeded();
+        setupPatchArcade();
 
         // Auto-load APK if passed via intent
         String intentPath = getIntent().getStringExtra("apk_path");
         if (intentPath != null && !intentPath.isEmpty()) {
             autoPatchAfterLoad = getIntent().getBooleanExtra("auto_patch", false);
+            autoInstallAfterPatch = getIntent().getBooleanExtra("auto_install", false);
             File f = new File(intentPath);
             if (f.exists()) {
                 log("📂 Auto-loading APK from intent: " + intentPath);
                 autoLoadApk(f);
             }
+        }
+
+        // Play Store download intent: am start -n ... --es play_download "in.startv.hotstar"
+        String playDownload = getIntent().getStringExtra("play_download");
+        if (playDownload != null && !playDownload.isEmpty()) {
+            autoPatchAfterLoad = true;
+            autoInstallAfterPatch = getIntent().getBooleanExtra("auto_install", false);
+            mainHandler.postDelayed(() -> doPlayStoreDownload(playDownload), 500);
         }
     }
 
@@ -196,10 +221,19 @@ public class MainActivity extends Activity {
         View root = getLayoutInflater().inflate(R.layout.dialog_tools, null);
         View signer = root.findViewById(R.id.dialog_tools_signer);
         View dbEditor = root.findViewById(R.id.dialog_tools_db);
+        View playStore = root.findViewById(R.id.dialog_tools_playstore);
+        View patchedApps = root.findViewById(R.id.dialog_tools_patched_apps);
+        View credits = root.findViewById(R.id.dialog_tools_credits);
         View signerIcon = root.findViewById(R.id.dialog_tools_signer_icon);
         View dbIcon = root.findViewById(R.id.dialog_tools_db_icon);
+        View playIcon = root.findViewById(R.id.dialog_tools_play_icon);
+        View patchedIcon = root.findViewById(R.id.dialog_tools_patched_icon);
+        View creditsIcon = root.findViewById(R.id.dialog_tools_credits_icon);
         View signerOk = root.findViewById(R.id.dialog_tools_signer_ok);
         View dbOk = root.findViewById(R.id.dialog_tools_db_ok);
+        View playOk = root.findViewById(R.id.dialog_tools_play_ok);
+        View patchedOk = root.findViewById(R.id.dialog_tools_patched_ok);
+        View creditsOk = root.findViewById(R.id.dialog_tools_credits_ok);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
             .setView(root)
@@ -215,7 +249,24 @@ public class MainActivity extends Activity {
             startActivity(new Intent(this, DbEditorActivity.class));
         });
 
-        dialog.setOnShowListener(d -> animateToolsDialog(root, signer, dbEditor, signerIcon, dbIcon, signerOk, dbOk));
+        playStore.setOnClickListener(v -> {
+            dialog.dismiss();
+            showPlayStoreDownloadDialog();
+        });
+
+        patchedApps.setOnClickListener(v -> {
+            dialog.dismiss();
+            showPatchedAppsUpdateList();
+        });
+
+        credits.setOnClickListener(v -> {
+            dialog.dismiss();
+            startActivity(new Intent(this, CreditsActivity.class));
+        });
+
+        dialog.setOnShowListener(d -> animateToolsDialog(root, signer, dbEditor, playStore,
+            patchedApps, credits, signerIcon, dbIcon, playIcon, patchedIcon, creditsIcon,
+            signerOk, dbOk, playOk, patchedOk, creditsOk));
         dialog.show();
 
         if (dialog.getWindow() != null) {
@@ -262,6 +313,7 @@ public class MainActivity extends Activity {
         isSplitBundle = false;
         originalFileName = "";
         selectedApkPatchedVersion = null;
+        autoInstallAfterPatch = false;
         switchToPhase(PHASE_INITIAL);
         apkInfoPanel.setVisibility(View.GONE);
         logClear();
@@ -274,6 +326,7 @@ public class MainActivity extends Activity {
         isSplitBundle = false;
         originalFileName = "";
         selectedApkPatchedVersion = null;
+        autoInstallAfterPatch = false;
         switchToPhase(PHASE_INITIAL);
         apkInfoPanel.setVisibility(View.GONE);
         logClear();
@@ -324,12 +377,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERM);
+        }
+    }
+
     // ======================== FILE PICKER ========================
 
     private void onExtractClick() {
         if (isPatching) return;
         Intent intent = new Intent(this, AppListActivity.class);
         startActivityForResult(intent, EXTRACT_APP);
+    }
+
+    private void showPatchedAppsUpdateList() {
+        Intent intent = new Intent(this, AppListActivity.class);
+        intent.putExtra(AppListActivity.EXTRA_PATCHED_ONLY, true);
+        intent.putExtra(AppListActivity.EXTRA_DIRECT_PLAY_UPDATE, true);
+        startActivityForResult(intent, PICK_PATCHED_APP_UPDATE);
     }
 
     private void autoLoadApk(File f) {
@@ -420,8 +488,10 @@ public class MainActivity extends Activity {
         super.onResume();
         if (isPatching) {
             startPatchEntertainment();
+            setPatchArcadeActive(true);
         } else {
             stopPatchEntertainment();
+            setPatchArcadeActive(false);
         }
         // Fallback: detect uninstall completion when onActivityResult doesn't fire
         if (pendingInstallAfterUninstall && targetPackageName != null) {
@@ -444,11 +514,13 @@ public class MainActivity extends Activity {
         super.onPause();
         // Avoid animating in background; patch thread continues regardless.
         stopPatchEntertainment();
+        setPatchArcadeActive(false);
     }
 
     @Override
     protected void onDestroy() {
         stopPatchEntertainment();
+        setPatchArcadeActive(false);
         super.onDestroy();
     }
 
@@ -462,12 +534,16 @@ public class MainActivity extends Activity {
                     animatePhaseTransition(phase1Buttons, phase2Buttons, phase4Buttons);
                     progressBar.setVisibility(View.GONE);
                     progressText.setVisibility(View.GONE);
+                    patchGamePanel.setVisibility(View.GONE);
+                    setPatchArcadeActive(false);
                     btnCert.setVisibility(View.VISIBLE);
                     break;
                 case PHASE_SELECTED:
                     animatePhaseTransition(phase2Buttons, phase1Buttons, phase4Buttons);
                     progressBar.setVisibility(View.GONE);
                     progressText.setVisibility(View.GONE);
+                    patchGamePanel.setVisibility(View.GONE);
+                    setPatchArcadeActive(false);
                     btnCert.setVisibility(View.VISIBLE);
                     break;
                 case PHASE_PATCHING:
@@ -477,9 +553,13 @@ public class MainActivity extends Activity {
                     btnCert.setVisibility(View.GONE);
                     progressBar.setVisibility(View.VISIBLE);
                     progressText.setVisibility(View.VISIBLE);
+                    patchGamePanel.setVisibility(View.VISIBLE);
+                    setPatchArcadeActive(true);
                     break;
                 case PHASE_COMPLETE:
                     animatePhaseTransition(phase4Buttons, phase1Buttons, phase2Buttons);
+                    patchGamePanel.setVisibility(View.GONE);
+                    setPatchArcadeActive(false);
                     btnCert.setVisibility(View.VISIBLE);
                     break;
             }
@@ -488,6 +568,35 @@ public class MainActivity extends Activity {
             phase1Buttons.setVisibility(phase == PHASE_INITIAL ? View.VISIBLE : View.GONE);
             phase2Buttons.setVisibility(phase == PHASE_SELECTED ? View.VISIBLE : View.GONE);
             phase4Buttons.setVisibility(phase == PHASE_COMPLETE ? View.VISIBLE : View.GONE);
+            if (patchGamePanel != null) {
+                patchGamePanel.setVisibility(phase == PHASE_PATCHING ? View.VISIBLE : View.GONE);
+            }
+        }
+    }
+
+    private void setupPatchArcade() {
+        if (patchGameView == null) return;
+        patchGameView.setOnScoreChangedListener((score, streak, bestStreak) -> {
+            if (patchGameScore != null) {
+                patchGameScore.setText("Score " + score + "  Streak " + streak + "  Best " + bestStreak);
+            }
+        });
+        patchGameView.resetGame();
+        setPatchArcadeActive(false);
+    }
+
+    private void setPatchArcadeActive(boolean active) {
+        if (patchGameView == null) return;
+        patchGameView.setGameActive(active && currentPhase == PHASE_PATCHING);
+    }
+
+    private void resetPatchArcade() {
+        if (patchGameView != null) {
+            patchGameView.resetGame();
+            patchGameView.setPatchProgress(lastProgressPct);
+        }
+        if (patchGameHint != null) {
+            patchGameHint.setText("Tap the drifting sparks while HSPatcher finishes the patch.");
         }
     }
 
@@ -931,6 +1040,13 @@ public class MainActivity extends Activity {
             if (path != null) {
                 handleBackupResult(path, isSplit, label, data);
             }
+        } else if (requestCode == PICK_PATCHED_APP_UPDATE && resultCode == RESULT_OK && data != null) {
+            String packageName = data.getStringExtra(AppListActivity.EXTRA_PACKAGE_NAME);
+            String label = data.getStringExtra(AppListActivity.EXTRA_APP_LABEL);
+            String patchVersion = data.getStringExtra(AppListActivity.EXTRA_PATCH_VERSION);
+            if (packageName != null && !packageName.trim().isEmpty()) {
+                startPatchedAppPlayUpdate(packageName, label, patchVersion);
+            }
         } else if (requestCode == PICK_CERT && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
             if (uri != null) importCaCert(uri);
@@ -1178,6 +1294,8 @@ public class MainActivity extends Activity {
         logClear();
         lastProgressPct = 0;
         lastProgressStep = "Starting";
+        resetPatchArcade();
+        PatchForegroundService.start(this, getPatchTargetLabel(), 0, lastProgressStep);
 
         // Explosion animation, then start patching
         explodePatchButton(() -> {
@@ -1197,7 +1315,7 @@ public class MainActivity extends Activity {
                     .setInterpolator(new OvershootInterpolator(1.5f)).start();
             } catch (Throwable ignored) {}
 
-            log("⚡ HSPatcher v3.55 — Starting one-click patch");
+            log("⚡ HSPatcher " + getDisplayVersionLabel() + " — Starting one-click patch");
             log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             new Thread(() -> {
@@ -1373,8 +1491,14 @@ public class MainActivity extends Activity {
 
                 mainHandler.post(() -> {
                     isPatching = false;
+                    PatchForegroundService.stop(MainActivity.this);
                     stopPatchEntertainment();
                     switchToPhase(PHASE_COMPLETE);
+                    if (autoInstallAfterPatch) {
+                        autoInstallAfterPatch = false;
+                        log("↪ Auto-install requested — checking signatures and launching installer...");
+                        mainHandler.postDelayed(this::onInstallClick, 450);
+                    }
                 });
 
             } catch (Throwable e) {
@@ -1391,12 +1515,19 @@ public class MainActivity extends Activity {
                     log("   Error: " + msg);
                 } else {
                     log("\u274c FATAL: " + e.getClass().getName() + ": " + msg);
-                    for (StackTraceElement st : e.getStackTrace()) {
-                        log("   " + st.toString());
+                    StackTraceElement[] stack = e.getStackTrace();
+                    int limit = Math.min(stack.length, MAX_FATAL_STACK_LINES);
+                    for (int i = 0; i < limit; i++) {
+                        log("   " + stack[i].toString());
+                    }
+                    if (stack.length > limit) {
+                        log("   ... " + (stack.length - limit) + " more line(s)");
                     }
                 }
                 mainHandler.post(() -> {
                     isPatching = false;
+                    autoInstallAfterPatch = false;
+                    PatchForegroundService.stop(MainActivity.this);
                     stopPatchEntertainment();
                     switchToPhase(PHASE_SELECTED);
                     progressBar.setVisibility(View.GONE);
@@ -1454,7 +1585,7 @@ public class MainActivity extends Activity {
                 targetPackageName = patchedInfo.packageName;
                 log("📦 Package: " + targetPackageName);
                 log("📦 Version: " + patchedInfo.versionName
-                    + " (" + patchedInfo.versionCode + ")");
+                    + " (" + getVersionCodeCompat(patchedInfo) + ")");
 
                 // Check if app is already installed
                 android.content.pm.PackageInfo installedInfo;
@@ -1464,6 +1595,23 @@ public class MainActivity extends Activity {
                 } catch (PackageManager.NameNotFoundException e) {
                     log("ℹ️ App not currently installed — fresh install");
                     mainHandler.post(this::doInstall);
+                    return;
+                }
+
+                long installedVersionCode = getVersionCodeCompat(installedInfo);
+                long patchedVersionCode = getVersionCodeCompat(patchedInfo);
+                if (installedVersionCode > patchedVersionCode) {
+                    log("⚠️ VERSION DOWNGRADE DETECTED");
+                    log("   Installed version is newer than the Play download.");
+                    log("   Installed: " + installedInfo.versionName + " (" + installedVersionCode + ")");
+                    log("   Patched:   " + patchedInfo.versionName + " (" + patchedVersionCode + ")");
+
+                    final String installedVer = installedInfo.versionName != null
+                        ? installedInfo.versionName : "?";
+                    final String patchedVer = patchedInfo.versionName != null
+                        ? patchedInfo.versionName : "?";
+
+                    mainHandler.post(() -> showVersionDowngradeDialog(installedVer, patchedVer));
                     return;
                 }
 
@@ -1526,6 +1674,24 @@ public class MainActivity extends Activity {
             })
             .setNegativeButton("Cancel", (d, w) -> log("❌ Install cancelled by user"))
             .setCancelable(false)
+            .show();
+    }
+
+    private void showVersionDowngradeDialog(String installedVer, String patchedVer) {
+        new android.app.AlertDialog.Builder(this)
+            .setTitle("⚠️ Older Build Downloaded")
+            .setMessage(
+                "The installed app is newer than the Play build that was downloaded.\n\n" +
+                "Installed version: " + installedVer + "\n" +
+                "Downloaded version: " + patchedVer + "\n\n" +
+                "Android will block this as a downgrade unless the current app is removed first.\n\n" +
+                "What would you like to do?")
+            .setPositiveButton("Uninstall & Install", (d, w) -> {
+                startUninstallFlow(targetPackageName, true);
+            })
+            .setNegativeButton("Keep Current Version", (d, w) -> {
+                log("❌ Downgrade install cancelled — keeping installed version");
+            })
             .show();
     }
 
@@ -1825,6 +1991,135 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ======================== PLAY STORE DOWNLOAD ========================
+
+    private void showPlayStoreDownloadDialog() {
+        android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint("e.g. in.startv.hotstar or JioHotstar");
+        input.setTextColor(Color.WHITE);
+        input.setHintTextColor(0x88FFFFFF);
+        input.setSingleLine(true);
+
+        new AlertDialog.Builder(this)
+            .setTitle("Download from Play Store")
+            .setMessage("Enter a package name or search query:")
+            .setView(input)
+            .setPositiveButton("Download", (d, w) -> {
+                String query = input.getText().toString().trim();
+                if (query.isEmpty()) return;
+                autoPatchAfterLoad = true;
+                autoInstallAfterPatch = false;
+                if (query.contains(".") && !query.contains(" ")) {
+                    doPlayStoreDownload(query);
+                } else {
+                    doPlayStoreSearch(query);
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void startPatchedAppPlayUpdate(String packageName, String label, String patchVersion) {
+        autoPatchAfterLoad = true;
+        autoInstallAfterPatch = true;
+        logClear();
+        log("🩹 Patched app selected: " + (label != null ? label : packageName));
+        log("📦 Package: " + packageName);
+        if (patchVersion != null && !patchVersion.isEmpty()) {
+            log("🔐 Current installed patch version: v" + patchVersion);
+        }
+        log("↪ Fetching latest Play Store build, then patching and installing automatically...");
+        mainHandler.postDelayed(() -> doPlayStoreDownload(packageName, false), 180);
+    }
+
+    private void doPlayStoreSearch(String query) {
+        logClear();
+        log("🔍 Searching Play Store for: " + query);
+
+        new Thread(() -> {
+            try {
+                PlayStoreClient client = new PlayStoreClient();
+                if (!client.authenticate()) {
+                    log("❌ Play Store authentication failed");
+                    return;
+                }
+                java.util.List<PlayStoreClient.SearchResult> results = client.search(query, 10);
+                if (results.isEmpty()) {
+                    log("❌ No results found for: " + query);
+                    return;
+                }
+                log("Found " + results.size() + " result(s):");
+                for (int i = 0; i < results.size(); i++) {
+                    PlayStoreClient.SearchResult r = results.get(i);
+                    log("  " + (i + 1) + ". " + r.title + " (" + r.packageName + ") by " + r.developer);
+                }
+                // Show selection dialog on UI thread
+                mainHandler.post(() -> showSearchResults(results, client));
+            } catch (Exception e) {
+                log("❌ Search failed: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    private void showSearchResults(java.util.List<PlayStoreClient.SearchResult> results, PlayStoreClient client) {
+        String[] items = new String[results.size()];
+        for (int i = 0; i < results.size(); i++) {
+            PlayStoreClient.SearchResult r = results.get(i);
+            items[i] = r.title + "\n" + r.packageName;
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("Select App to Download")
+            .setItems(items, (d, which) -> {
+                String pkg = results.get(which).packageName;
+                doPlayStoreDownload(pkg);
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void doPlayStoreDownload(String packageName) {
+        doPlayStoreDownload(packageName, true);
+    }
+
+    private void doPlayStoreDownload(String packageName, boolean clearLogs) {
+        if (clearLogs) logClear();
+        log("⬇️ Downloading from Play Store: " + packageName);
+        log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+        new Thread(() -> {
+            try {
+                File downloadDir = new File(getFilesDir(), "play_download");
+                PlayStoreClient client = new PlayStoreClient();
+
+                File result = client.downloadApp(packageName, downloadDir, true,
+                    new PlayStoreClient.ProgressCallback() {
+                        @Override
+                        public void onProgress(String message) { log(message); }
+                        @Override
+                        public void onError(String error) { log("❌ " + error); }
+                        @Override
+                        public void onComplete(File downloadedFile) {
+                            log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                            log("✅ Download complete: " + downloadedFile.getName());
+                            log("📏 Size: " + (downloadedFile.length() / (1024 * 1024)) + " MB");
+                        }
+                    });
+
+                if (result != null && result.exists()) {
+                    mainHandler.post(() -> {
+                        log("\n📂 Loading downloaded APK...");
+                        autoLoadApk(result);
+                    });
+                } else {
+                    autoInstallAfterPatch = false;
+                }
+            } catch (Exception e) {
+                autoInstallAfterPatch = false;
+                log("❌ Download failed: " + e.getMessage());
+            }
+        }).start();
+    }
+
     // ======================== UTILITIES ========================
 
     private void extractAsset(String assetName, File dest) throws Exception {
@@ -1859,6 +2154,10 @@ public class MainActivity extends Activity {
         Log.d("HSPatcher", msg);
         mainHandler.post(() -> {
             logOutput.append(msg + "\n");
+            int excess = logOutput.length() - MAX_LOG_CHARS;
+            if (excess > 0) {
+                logOutput.getEditableText().delete(0, excess);
+            }
             if (!pendingLogAutoScroll) {
                 pendingLogAutoScroll = true;
                 logScroll.removeCallbacks(logAutoScrollRunnable);
@@ -1880,8 +2179,51 @@ public class MainActivity extends Activity {
             } else {
                 progressBar.setProgress(pct);
             }
+            if (patchGameView != null) {
+                patchGameView.setPatchProgress(pct);
+            }
+            if (patchGameHint != null && step != null && !step.trim().isEmpty()) {
+                patchGameHint.setText(step + " - keep the streak going while patching runs.");
+            }
+            if (isPatching) {
+                PatchForegroundService.update(this, getPatchTargetLabel(), pct, step);
+            }
             renderProgressText();
         });
+    }
+
+    private String getPatchTargetLabel() {
+        String label = null;
+        if (apkName != null) {
+            CharSequence apkLabel = apkName.getText();
+            if (apkLabel != null) {
+                label = apkLabel.toString().replace(" ⚠️ ALREADY PATCHED", "").trim();
+            }
+        }
+        if (label == null || label.isEmpty()) {
+            label = (originalFileName != null && !originalFileName.trim().isEmpty())
+                ? originalFileName
+                : "Selected APK";
+        }
+        return label;
+    }
+
+    private long getVersionCodeCompat(android.content.pm.PackageInfo info) {
+        if (info == null) return 0;
+        if (Build.VERSION.SDK_INT >= 28) {
+            return info.getLongVersionCode();
+        }
+        return info.versionCode;
+    }
+
+    private String getDisplayVersionLabel() {
+        try {
+            String versionName = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            if (versionName == null || versionName.trim().isEmpty()) return "vdev";
+            return "v" + versionName;
+        } catch (Exception e) {
+            return "v?";
+        }
     }
 
     // ======================== CA CERTIFICATE MANAGEMENT ========================

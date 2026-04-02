@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <dimen name="hsp_padding_screen">16dp</dimen>
+    <dimen name="hsp_padding_screen">18dp</dimen>
 
     <dimen name="hsp_spacing_xs">4dp</dimen>
     <dimen name="hsp_spacing_sm">8dp</dimen>
     <dimen name="hsp_spacing_md">12dp</dimen>
-    <dimen name="hsp_spacing_lg">16dp</dimen>
-    <dimen name="hsp_spacing_xl">24dp</dimen>
+    <dimen name="hsp_spacing_lg">18dp</dimen>
+    <dimen name="hsp_spacing_xl">26dp</dimen>
 
-    <dimen name="hsp_radius_sm">10dp</dimen>
-    <dimen name="hsp_radius_md">14dp</dimen>
-    <dimen name="hsp_radius_lg">18dp</dimen>
+    <dimen name="hsp_radius_sm">12dp</dimen>
+    <dimen name="hsp_radius_md">16dp</dimen>
+    <dimen name="hsp_radius_lg">22dp</dimen>
 
     <dimen name="hsp_btn_h_lg">56dp</dimen>
     <dimen name="hsp_btn_h_md">48dp</dimen>

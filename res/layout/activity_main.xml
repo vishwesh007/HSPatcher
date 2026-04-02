@@ -14,96 +14,141 @@
         android:padding="@dimen/hsp_padding_screen"
         android:clipToPadding="false">
 
-        <!-- Header -->
         <LinearLayout
             android:id="@+id/header_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:layout_marginTop="@dimen/hsp_spacing_md"
+            android:background="@drawable/bg_hero_panel"
+            android:clipToPadding="false"
             android:gravity="center_vertical"
-            android:paddingTop="@dimen/hsp_spacing_lg"
-            android:paddingBottom="@dimen/hsp_spacing_md">
+            android:orientation="horizontal"
+            android:padding="@dimen/hsp_spacing_lg">
+
+            <TextView
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="@drawable/bg_signal_badge"
+                android:gravity="center"
+                android:text="HP"
+                android:textAllCaps="true"
+                android:textColor="@color/hsp_text"
+                android:textSize="14sp"
+                android:textStyle="bold" />
 
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:layout_marginStart="@dimen/hsp_spacing_md"
                 android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="PATCH WORKSHOP"
+                    android:textAllCaps="true"
+                    android:textColor="@color/hsp_accent_teal"
+                    android:textSize="10sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.16" />
 
                 <TextView
                     android:id="@+id/title_text"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="⚡ HSPatcher"
-                    android:textSize="28sp"
-                    android:textColor="@color/hsp_accent_green"
+                    android:text="HSPatcher"
+                    android:textSize="29sp"
+                    android:textColor="@color/hsp_text"
                     android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/subtitle_text"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="One-Click Universal APK Patcher"
-                    android:textSize="14sp"
-                    android:textColor="@color/hsp_text_faint"
-                    android:paddingTop="@dimen/hsp_spacing_xs" />
+                    android:text="Stage, patch, sign, and reinstall with a calmer progress flow and clearer target context."
+                    android:textColor="@color/hsp_text_muted"
+                    android:textSize="13sp"
+                    android:paddingTop="6dp" />
 
-                <TextView
-                    android:id="@+id/version_text"
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text=""
-                    android:textSize="14sp"
-                    android:textColor="@color/hsp_text"
-                    android:textStyle="bold"
-                    android:paddingTop="6dp"
-                    android:paddingBottom="6dp"
-                    android:paddingLeft="12dp"
-                    android:paddingRight="12dp"
                     android:layout_marginTop="@dimen/hsp_spacing_sm"
-                    android:background="@drawable/bg_chip" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Persistent signing"
+                        android:textSize="11sp"
+                        android:textColor="@color/hsp_accent_green"
+                        android:textStyle="bold"
+                        android:paddingLeft="10dp"
+                        android:paddingTop="4dp"
+                        android:paddingRight="10dp"
+                        android:paddingBottom="4dp"
+                        android:background="@drawable/bg_chip" />
+
+                    <TextView
+                        android:id="@+id/version_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/bg_chip"
+                        android:paddingLeft="10dp"
+                        android:paddingTop="4dp"
+                        android:paddingRight="10dp"
+                        android:paddingBottom="4dp"
+                        android:text=""
+                        android:textColor="@color/hsp_text"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
             </LinearLayout>
 
-            <!-- Tools menu button -->
             <Button
                 android:id="@+id/btn_tools"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
                 android:text="⚙"
+                android:textColor="@color/hsp_text"
                 android:textSize="20sp"
-                android:textColor="@color/hsp_text_muted"
                 android:background="@drawable/btn_surface"
                 android:gravity="center"
                 android:padding="0dp" />
         </LinearLayout>
 
-        <!-- Selected APK info -->
         <LinearLayout
             android:id="@+id/apk_info_panel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="@drawable/bg_card"
-            android:padding="@dimen/hsp_spacing_lg"
             android:layout_marginTop="@dimen/hsp_spacing_md"
+            android:background="@drawable/bg_section_panel"
+            android:orientation="vertical"
+            android:padding="@dimen/hsp_spacing_lg"
             android:visibility="gone">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Selected APK"
-                android:textSize="12sp"
-                android:textColor="@color/hsp_text_faint" />
+                android:text="ACTIVE TARGET"
+                android:textAllCaps="true"
+                android:textColor="@color/hsp_accent_amber"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.12" />
 
             <TextView
                 android:id="@+id/apk_name"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text=""
-                android:textSize="16sp"
+                android:textSize="19sp"
                 android:textColor="@color/hsp_text"
                 android:textStyle="bold"
-                android:paddingTop="@dimen/hsp_spacing_xs" />
+                android:paddingTop="6dp" />
 
             <TextView
                 android:id="@+id/apk_size"
@@ -112,18 +157,36 @@
                 android:text=""
                 android:textSize="13sp"
                 android:textColor="@color/hsp_text_muted"
-                android:paddingTop="2dp" />
+                android:paddingTop="4dp" />
         </LinearLayout>
 
-        <!-- Log output -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/hsp_spacing_lg"
+            android:text="MISSION CONSOLE"
+            android:textAllCaps="true"
+            android:textColor="@color/hsp_accent_teal"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.16" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Normal-language status stays on top while the detailed log remains available below."
+            android:textColor="@color/hsp_text_muted"
+            android:textSize="12sp" />
+
         <ScrollView
             android:id="@+id/log_scroll"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:layout_marginTop="@dimen/hsp_spacing_md"
-            android:background="@drawable/bg_log"
-            android:padding="@dimen/hsp_spacing_md"
+            android:layout_marginTop="@dimen/hsp_spacing_sm"
+            android:background="@drawable/bg_console_shell"
+            android:padding="@dimen/hsp_spacing_lg"
             android:fillViewport="true"
             android:overScrollMode="ifContentScrolls">
 
@@ -131,14 +194,13 @@
                 android:id="@+id/log_output"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Ready. Select an APK to patch."
+                android:text="Ready. Select an APK to begin the next patch run."
                 android:textSize="12sp"
                 android:textColor="@color/hsp_text_mono"
                 android:fontFamily="monospace"
-                android:lineSpacingExtra="2dp" />
+                android:lineSpacingExtra="3dp" />
         </ScrollView>
 
-        <!-- Progress bar -->
         <ProgressBar
             android:id="@+id/progress_bar"
             style="?android:attr/progressBarStyleHorizontal"
@@ -159,8 +221,60 @@
             android:textSize="12sp"
             android:textColor="@color/hsp_accent_green"
             android:gravity="center"
-            android:paddingTop="4dp"
+            android:paddingTop="6dp"
             android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/patch_game_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/hsp_spacing_md"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="@dimen/hsp_spacing_md"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Patch Arcade"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/hsp_text" />
+
+                <TextView
+                    android:id="@+id/patch_game_score"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Score 0  Streak 0"
+                    android:textSize="12sp"
+                    android:textColor="@color/hsp_accent_amber"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/patch_game_hint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="A lightweight micro-break while the patch pipeline completes its background stages."
+                android:textSize="12sp"
+                android:textColor="@color/hsp_text_faint" />
+
+            <in.startv.hspatcher.PatchArcadeView
+                android:id="@+id/patch_game_view"
+                android:layout_width="match_parent"
+                android:layout_height="180dp"
+                android:layout_marginTop="@dimen/hsp_spacing_sm"
+                android:background="@drawable/bg_log" />
+        </LinearLayout>
 
         <!-- Phase 1: Initial — SELECT + EXTRACT -->
         <LinearLayout

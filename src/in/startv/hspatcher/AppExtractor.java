@@ -30,6 +30,7 @@ public class AppExtractor {
         public long totalSize;
         public boolean isSplit;
         public boolean isSystem;
+        public String patchVersion;
 
         public String getSizeStr() {
             if (totalSize > 1024 * 1024) return (totalSize / (1024 * 1024)) + " MB";
@@ -42,6 +43,13 @@ public class AppExtractor {
      * sorted by label.
      */
     public static List<AppInfo> getInstalledApps(Context ctx, boolean includeSystem) {
+        return getInstalledApps(ctx, includeSystem, false);
+    }
+
+    /**
+     * Get installed apps, optionally filtering to APKs previously patched by HSPatcher.
+     */
+    public static List<AppInfo> getInstalledApps(Context ctx, boolean includeSystem, boolean patchedOnly) {
         PackageManager pm = ctx.getPackageManager();
         List<PackageInfo> packages = pm.getInstalledPackages(0);
         List<AppInfo> result = new ArrayList<>();
@@ -80,12 +88,27 @@ public class AppExtractor {
                 }
             }
 
+            if (patchedOnly) {
+                info.patchVersion = detectPatchVersion(ai.publicSourceDir);
+                if (info.patchVersion == null) continue;
+            }
+
             result.add(info);
         }
 
         // Sort by label (case-insensitive)
         Collections.sort(result, (a, b) -> a.label.compareToIgnoreCase(b.label));
         return result;
+    }
+
+    private static String detectPatchVersion(String sourceDir) {
+        if (sourceDir == null || sourceDir.trim().isEmpty()) return null;
+        try {
+            return PatchEngine.isAlreadyPatched(new File(sourceDir));
+        } catch (Throwable t) {
+            Log.w(TAG, "Patched-app detection failed for " + sourceDir + ": " + t.getMessage());
+            return null;
+        }
     }
 
     /**
