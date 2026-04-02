@@ -52,18 +52,7 @@ function Resolve-SigningConfig {
         }
     }
 
-    $debugKeystore = Join-Path $env:USERPROFILE ".android\debug.keystore"
-    if (Test-Path $debugKeystore) {
-        Write-Host "Project keystore not found; using debug keystore fallback for this build." -ForegroundColor Yellow
-        return @{
-            KeyStore = $debugKeystore
-            StorePass = "android"
-            Alias = "androiddebugkey"
-            KeyPass = "android"
-        }
-    }
-
-    throw "No signing keystore available"
+    throw "Project keystore missing: $projectKeystore. CI/debug keystore fallback is disabled for HSPatcher builds."
 }
 
 # ======================== PATHS ========================
