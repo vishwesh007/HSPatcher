@@ -46,15 +46,60 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="Play downloads, patched-app updates, signing, database tools, and credits"
+        android:text="Signing, patch maintenance, Play sync, and support tools arranged as a cleaner operations sheet."
         android:textColor="@color/hsp_text_muted"
         android:textSize="12sp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_chip"
+            android:paddingLeft="10dp"
+            android:paddingTop="4dp"
+            android:paddingRight="10dp"
+            android:paddingBottom="4dp"
+            android:text="FAST ACTIONS"
+            android:textColor="@color/hsp_accent_green"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_chip"
+            android:paddingLeft="10dp"
+            android:paddingTop="4dp"
+            android:paddingRight="10dp"
+            android:paddingBottom="4dp"
+            android:text="LOW FRICTION"
+            android:textColor="@color/hsp_accent_teal"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_marginTop="12dp"
         android:background="#22FFFFFF" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="PATCH OPERATIONS"
+        android:textAllCaps="true"
+        android:textColor="@color/hsp_accent_teal"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.14" />
 
     <LinearLayout
         android:id="@+id/dialog_tools_signer"
@@ -136,7 +181,7 @@
             android:paddingTop="2dp"
             android:paddingRight="8dp"
             android:paddingBottom="2dp"
-            android:text="OK"
+                android:text="READY"
             android:textColor="@color/hsp_accent_green"
             android:textSize="10sp"
             android:textStyle="bold" />
@@ -222,11 +267,22 @@
             android:paddingTop="2dp"
             android:paddingRight="8dp"
             android:paddingBottom="2dp"
-            android:text="OK"
+            android:text="EDIT"
             android:textColor="@color/hsp_accent_green"
             android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="SYNC + DISCOVERY"
+        android:textAllCaps="true"
+        android:textColor="@color/hsp_accent_amber"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.14" />
 
     <LinearLayout
         android:id="@+id/dialog_tools_playstore"
@@ -308,7 +364,7 @@
             android:paddingTop="2dp"
             android:paddingRight="8dp"
             android:paddingBottom="2dp"
-            android:text="OK"
+                android:text="FETCH"
             android:textColor="@color/hsp_accent_green"
             android:textSize="10sp"
             android:textStyle="bold" />
@@ -394,11 +450,22 @@
             android:paddingTop="2dp"
             android:paddingRight="8dp"
             android:paddingBottom="2dp"
-            android:text="GO"
+            android:text="SYNC"
             android:textColor="@color/hsp_accent_amber"
             android:textSize="10sp"
             android:textStyle="bold" />
     </LinearLayout>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="ABOUT"
+        android:textAllCaps="true"
+        android:textColor="@color/hsp_accent_blue"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.14" />
 
     <LinearLayout
         android:id="@+id/dialog_tools_credits"

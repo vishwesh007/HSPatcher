@@ -3,9 +3,12 @@
 
     <item>
         <shape>
-            <solid android:color="@color/hsp_glass_fill" />
+            <gradient
+                android:angle="90"
+                android:startColor="#CC061017"
+                android:endColor="#D40A151D" />
             <corners android:radius="@dimen/hsp_radius_md" />
-            <stroke android:width="1dp" android:color="@color/hsp_glass_stroke" />
+            <stroke android:width="1dp" android:color="#3C63D5F0" />
         </shape>
     </item>
 
@@ -15,7 +18,7 @@
                 <corners android:radius="@dimen/hsp_radius_md" />
                 <gradient
                     android:angle="270"
-                    android:startColor="#26FFFFFF"
+                    android:startColor="#1AF4FDFF"
                     android:endColor="#00FFFFFF" />
             </shape>
         </inset>
