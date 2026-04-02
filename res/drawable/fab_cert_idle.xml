@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Idle state FAB: semi-transparent, awaiting cert input -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Shadow base -->
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#1A000000" />
+        </shape>
+    </item>
+
+    <!-- Glass base with border -->
+    <item android:insetLeft="2dp" android:insetTop="2dp" android:insetRight="2dp" android:insetBottom="2dp">
+        <shape android:shape="oval">
+            <solid android:color="@color/hsp_glass_fill_strong" />
+            <stroke android:width="1.5dp" android:color="@color/hsp_glass_stroke" />
+        </shape>
+    </item>
+
+    <!-- Inner highlight gloss -->
+    <item android:insetLeft="4dp" android:insetTop="4dp" android:insetRight="12dp" android:insetBottom="12dp">
+        <shape android:shape="oval">
+            <solid android:color="@color/hsp_glass_highlight" />
+        </shape>
+    </item>
+</layer-list>

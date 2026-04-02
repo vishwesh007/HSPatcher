@@ -77,6 +77,7 @@ public class DbEditorActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mainHandler = new Handler(Looper.getMainLooper());
+        applyModernSystemUi();
         buildUI();
 
         // Accept DB path from intent
@@ -86,6 +87,21 @@ public class DbEditorActivity extends Activity {
             if (f.exists()) {
                 openDatabase(f);
             }
+        }
+    }
+
+    private void applyModernSystemUi() {
+        try {
+            getWindow().setStatusBarColor(getColor(R.color.hsp_bg));
+            getWindow().setNavigationBarColor(getColor(R.color.hsp_bg));
+
+            View decorView = getWindow().getDecorView();
+            int flags = decorView.getSystemUiVisibility();
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decorView.setSystemUiVisibility(flags);
+        } catch (Throwable ignored) {
+            // Best-effort only.
         }
     }
 
@@ -136,7 +152,7 @@ public class DbEditorActivity extends Activity {
         fileRow.setOrientation(LinearLayout.HORIZONTAL);
         fileRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        btnOpenDb = makeButton("📂 OPEN DATABASE", getColor(R.color.hsp_accent_blue));
+        btnOpenDb = makeButton("📂 OPEN DB", getColor(R.color.hsp_accent_blue));
         btnOpenDb.setLayoutParams(new LinearLayout.LayoutParams(0, dp(48), 1));
         btnOpenDb.setOnClickListener(v -> pickDatabase());
         fileRow.addView(btnOpenDb);

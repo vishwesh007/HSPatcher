@@ -28,6 +28,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -41,6 +42,7 @@ import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 
@@ -191,17 +193,66 @@ public class MainActivity extends Activity {
     }
 
     private void showToolsMenu() {
-        String[] items = {"🔐 APK Signer", "🗄️ DB Editor"};
-        new AlertDialog.Builder(this)
-            .setTitle("⚙ Tools")
-            .setItems(items, (dialog, which) -> {
-                if (which == 0) {
-                    startActivity(new Intent(this, ApkSignerActivity.class));
-                } else if (which == 1) {
-                    startActivity(new Intent(this, DbEditorActivity.class));
-                }
-            })
-            .show();
+        View root = getLayoutInflater().inflate(R.layout.dialog_tools, null);
+        View signer = root.findViewById(R.id.dialog_tools_signer);
+        View dbEditor = root.findViewById(R.id.dialog_tools_db);
+        View signerIcon = root.findViewById(R.id.dialog_tools_signer_icon);
+        View dbIcon = root.findViewById(R.id.dialog_tools_db_icon);
+        View signerOk = root.findViewById(R.id.dialog_tools_signer_ok);
+        View dbOk = root.findViewById(R.id.dialog_tools_db_ok);
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setView(root)
+            .create();
+
+        signer.setOnClickListener(v -> {
+            dialog.dismiss();
+            startActivity(new Intent(this, ApkSignerActivity.class));
+        });
+
+        dbEditor.setOnClickListener(v -> {
+            dialog.dismiss();
+            startActivity(new Intent(this, DbEditorActivity.class));
+        });
+
+        dialog.setOnShowListener(d -> animateToolsDialog(root, signer, dbEditor, signerIcon, dbIcon, signerOk, dbOk));
+        dialog.show();
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            dialog.getWindow().setDimAmount(0.72f);
+            WindowManager.LayoutParams lp = dialog.getWindow().getAttributes();
+            lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.94f);
+            dialog.getWindow().setAttributes(lp);
+        }
+    }
+
+    private void animateToolsDialog(View root, View... cards) {
+        root.setAlpha(0f);
+        root.setScaleX(0.92f);
+        root.setScaleY(0.92f);
+        root.setTranslationY(28f);
+        root.animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .translationY(0f)
+            .setDuration(320)
+            .setInterpolator(new OvershootInterpolator(0.9f))
+            .start();
+
+        for (int i = 0; i < cards.length; i++) {
+            View card = cards[i];
+            card.setAlpha(0f);
+            card.setTranslationY(24f);
+            card.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay(70L + (i * 55L))
+                .setDuration(260)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
+        }
     }
 
     private void onCancelClick() {
@@ -315,9 +366,10 @@ public class MainActivity extends Activity {
                     switchToPhase(PHASE_SELECTED);
 
                     // If launched with --ez auto_patch true, patch only after load completes
+                    // Call doPatch() directly to skip the "already patched" confirmation dialog
                     if (autoPatchAfterLoad) {
                         autoPatchAfterLoad = false;
-                        mainHandler.postDelayed(this::onPatchClick, 250);
+                        mainHandler.postDelayed(this::doPatch, 250);
                     }
                 });
                 if (isBundle) {
@@ -867,7 +919,7 @@ public class MainActivity extends Activity {
             String label = data.getStringExtra(AppListActivity.EXTRA_APP_LABEL);
             if (path != null) {
                 if (data.getBooleanExtra(AppListActivity.EXTRA_BACKUP_MODE, false)) {
-                    handleBackupResult(path, isSplit, label);
+                    handleBackupResult(path, isSplit, label, data);
                 } else {
                     loadExtractedApp(new File(path), isSplit, label);
                 }
@@ -877,7 +929,7 @@ public class MainActivity extends Activity {
             boolean isSplit = data.getBooleanExtra(AppListActivity.EXTRA_IS_SPLIT, false);
             String label = data.getStringExtra(AppListActivity.EXTRA_APP_LABEL);
             if (path != null) {
-                handleBackupResult(path, isSplit, label);
+                handleBackupResult(path, isSplit, label, data);
             }
         } else if (requestCode == PICK_CERT && resultCode == RESULT_OK && data != null) {
             Uri uri = data.getData();
@@ -1292,9 +1344,10 @@ public class MainActivity extends Activity {
                     // ignore — filename will fall back
                 }
 
-                // Also copy to Downloads for manual access / sharing
+                // Also copy to Downloads/hspatch/patched/ for manual access / sharing
                 File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                String timestamp = new SimpleDateFormat("HHmmss", Locale.US).format(new Date());
+                File hspatchDir = new File(downloads, "hspatch" + File.separator + "patched");
+                hspatchDir.mkdirs();
                 String appPart = appLabelForName;
                 if (appPart == null || appPart.trim().isEmpty()) {
                     appPart = (targetPackageName != null && !targetPackageName.isEmpty())
@@ -1304,7 +1357,7 @@ public class MainActivity extends Activity {
                             : "UnknownApp");
                 }
                 appPart = sanitizeFileName(appPart);
-                File outputFile = new File(downloads, "HSPatched_" + appPart + "_" + timestamp + ".apk");
+                File outputFile = new File(hspatchDir, appPart + ".apk");
                 try {
                     copyFile(result, outputFile);
                     log("📁 Also saved to: " + outputFile.getAbsolutePath());
@@ -1644,7 +1697,7 @@ public class MainActivity extends Activity {
 
     // ======================== APP BACKUP (moved to AppListActivity) ========================
 
-    private void handleBackupResult(String path, boolean isSplit, String label) {
+    private void handleBackupResult(String path, boolean isSplit, String label, Intent intentData) {
         logClear();
         log("💾 Starting app backup: " + label);
 
@@ -1660,10 +1713,32 @@ public class MainActivity extends Activity {
                 String safeName = sanitizeFileName(label);
 
                 if (isSplit) {
-                    // Split APK — copy all files into a zip
-                    File splitDir = new File(path);
-                    File[] apks = splitDir.listFiles();
-                    if (apks == null || apks.length == 0) {
+                    // Split APK — collect base.apk + all split APK paths from intent
+                    List<File> apkFiles = new ArrayList<>();
+
+                    // Add base APK
+                    File baseApk = new File(path);
+                    if (baseApk.isFile()) {
+                        apkFiles.add(baseApk);
+                    } else if (baseApk.isDirectory()) {
+                        // Legacy: path might point to an extracted splits dir
+                        File[] children = baseApk.listFiles();
+                        if (children != null) for (File c : children) {
+                            if (c.isFile() && c.getName().endsWith(".apk")) apkFiles.add(c);
+                        }
+                    }
+
+                    // Add split APK paths from intent
+                    String[] splitDirs = intentData != null
+                        ? intentData.getStringArrayExtra(AppListActivity.EXTRA_SPLIT_DIRS) : null;
+                    if (splitDirs != null) {
+                        for (String splitPath : splitDirs) {
+                            File sf = new File(splitPath);
+                            if (sf.isFile()) apkFiles.add(sf);
+                        }
+                    }
+
+                    if (apkFiles.isEmpty()) {
                         log("❌ No APK files found for backup");
                         return;
                     }
@@ -1671,11 +1746,11 @@ public class MainActivity extends Activity {
                     File backupZip = new File(backupDir,
                         "Backup_" + safeName + "_" + timestamp + ".apks");
 
-                    log("📦 Creating split APK backup (" + apks.length + " files)...");
+                    log("📦 Creating split APK backup (" + apkFiles.size() + " files)...");
                     java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
                         new FileOutputStream(backupZip));
                     long totalBytes = 0;
-                    for (File apk : apks) {
+                    for (File apk : apkFiles) {
                         zos.putNextEntry(new java.util.zip.ZipEntry(apk.getName()));
                         InputStream in = new java.io.FileInputStream(apk);
                         byte[] buf = new byte[65536];
@@ -1824,46 +1899,121 @@ public class MainActivity extends Activity {
 
     private void updateCertButton() {
         if (hasCaCert()) {
-            btnCert.setText("✅");
+            // Stop any idle pulse animation
+            btnCert.clearAnimation();
+
+            btnCert.setText("✓");
+            btnCert.setTextSize(20f);
+            btnCert.setTextColor(getColor(R.color.hsp_accent_green));
+            btnCert.setBackgroundResource(R.drawable.fab_cert_loaded);
+            btnCert.setContentDescription("CA certificate loaded. Tap to manage certificate");
+
+            // Play state transition animation
+            try {
+                android.view.animation.Animation anim = android.view.animation.AnimationUtils
+                    .loadAnimation(this, R.anim.fab_state_transition);
+                btnCert.startAnimation(anim);
+            } catch (Throwable ignored) {}
         } else {
-            btnCert.setText("📜");
+            btnCert.clearAnimation();
+
+            btnCert.setText("🔒");
+            btnCert.setTextSize(18f);
+            btnCert.setTextColor(getColor(R.color.hsp_text_muted));
+            btnCert.setBackgroundResource(R.drawable.fab_cert_idle);
+            btnCert.setContentDescription("No CA certificate loaded. Tap to import");
+
+            // Start gentle pulse animation to draw attention
+            try {
+                android.view.animation.Animation anim = android.view.animation.AnimationUtils
+                    .loadAnimation(this, R.anim.fab_pulse);
+                btnCert.startAnimation(anim);
+            } catch (Throwable ignored) {}
         }
     }
 
     private void onCertClick() {
-        if (hasCaCert()) {
+        boolean hasCert = hasCaCert();
+
+        View root = getLayoutInflater().inflate(R.layout.dialog_cert, null);
+
+        TextView tvStatus       = root.findViewById(R.id.dialog_cert_status);
+        View infoPanelCard      = root.findViewById(R.id.dialog_cert_info_panel);
+        View noCertHint         = root.findViewById(R.id.dialog_cert_no_cert_hint);
+        TextView tvInfoName     = root.findViewById(R.id.dialog_cert_info_name);
+        TextView tvInfoSize     = root.findViewById(R.id.dialog_cert_info_size);
+        View rowImport          = root.findViewById(R.id.dialog_cert_import);
+        View rowDelete          = root.findViewById(R.id.dialog_cert_delete);
+        View rowClose           = root.findViewById(R.id.dialog_cert_close);
+        TextView tvImpCategory  = root.findViewById(R.id.dialog_cert_import_category);
+        TextView tvImpIcon      = root.findViewById(R.id.dialog_cert_import_icon);
+        TextView tvImpTitle     = root.findViewById(R.id.dialog_cert_import_title);
+        TextView tvImpDesc      = root.findViewById(R.id.dialog_cert_import_desc);
+        TextView tvImpBadge     = root.findViewById(R.id.dialog_cert_import_badge);
+
+        if (hasCert) {
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             String certName = prefs.getString(PREF_CERT_NAME, "unknown");
-            long certSize = getCaCertFile().length();
+            long certSize   = getCaCertFile().length();
 
-            new AlertDialog.Builder(this)
-                .setTitle("📜 CA Certificate")
-                .setMessage("Stored certificate:\n\n"
-                    + "\u2022 " + certName + "\n"
-                    + "\u2022 " + certSize + " bytes\n\n"
-                    + "This certificate will be embedded into\n"
-                    + "every patched APK for MITM proxy support.\n\n"
-                    + "What would you like to do?")
-                .setPositiveButton("Replace", (d, w) -> pickCertFile())
-                .setNegativeButton("Delete", (d, w) -> {
-                    deleteCaCert();
-                    Toast.makeText(this, "CA certificate deleted", Toast.LENGTH_SHORT).show();
-                })
-                .setNeutralButton("Close", null)
-                .show();
+            tvStatus.setText("Certificate loaded — embedded in all patched APKs");
+            tvStatus.setTextColor(getColor(R.color.hsp_accent_green));
+
+            infoPanelCard.setVisibility(View.VISIBLE);
+            noCertHint.setVisibility(View.GONE);
+            tvInfoName.setText("📄 " + certName);
+            tvInfoSize.setText(certSize + " bytes");
+
+            // Re-label import row as "Replace"
+            tvImpCategory.setText("MANAGE");
+            tvImpCategory.setTextColor(getColor(R.color.hsp_accent_blue));
+            tvImpIcon.setText("🔁");
+            tvImpTitle.setText("Replace Certificate");
+            tvImpDesc.setText("Swap out the current certificate for a new one");
+            tvImpBadge.setText("NEW");
+            tvImpBadge.setTextColor(getColor(R.color.hsp_accent_blue));
+            rowDelete.setVisibility(View.VISIBLE);
         } else {
-            new AlertDialog.Builder(this)
-                .setTitle("📜 Import CA Certificate")
-                .setMessage("Import a proxy CA certificate (.crt / .pem / .cer / .der)\n\n"
-                    + "The certificate will be:\n"
-                    + "\u2022 Stored once in HSPatcher\n"
-                    + "\u2022 Embedded in every patched APK\n"
-                    + "\u2022 Dumped to /data/local/tmp/ at runtime\n"
-                    + "\u2022 Trusted by the Frida SSL bypass\n\n"
-                    + "Supports: Reqable, Charles, mitmproxy, Burp Suite")
-                .setPositiveButton("Import", (d, w) -> pickCertFile())
-                .setNegativeButton("Cancel", null)
-                .show();
+            tvStatus.setText("No certificate loaded — import to enable MITM proxy support");
+            tvStatus.setTextColor(getColor(R.color.hsp_text_muted));
+            infoPanelCard.setVisibility(View.GONE);
+            noCertHint.setVisibility(View.VISIBLE);
+            rowDelete.setVisibility(View.GONE);
+        }
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setView(root)
+            .create();
+
+        rowImport.setOnClickListener(v -> {
+            dialog.dismiss();
+            pickCertFile();
+        });
+
+        rowDelete.setOnClickListener(v -> {
+            dialog.dismiss();
+            deleteCaCert();
+            updateCertButton();
+            Toast.makeText(this, "CA certificate deleted", Toast.LENGTH_SHORT).show();
+        });
+
+        rowClose.setOnClickListener(v -> dialog.dismiss());
+
+        // Stagger-animate the visible action rows only
+        java.util.List<View> animViews = new java.util.ArrayList<>();
+        animViews.add(rowImport);
+        if (hasCert) animViews.add(rowDelete);
+        animViews.add(rowClose);
+        dialog.setOnShowListener(d -> animateToolsDialog(root, animViews.toArray(new View[0])));
+
+        dialog.show();
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            dialog.getWindow().setDimAmount(0.72f);
+            WindowManager.LayoutParams lp = dialog.getWindow().getAttributes();
+            lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.94f);
+            dialog.getWindow().setAttributes(lp);
         }
     }
 

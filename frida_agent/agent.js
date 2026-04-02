@@ -19,8 +19,1169 @@ import Java from "frida-java-bridge";
  * may not yet be attached. Java bridge imported for Frida 17+ support.
  */
 
+// --- Set up sigaltstack so SIGSEGV can be caught even when sp=0 ---
+(function() {
+    try {
+        var libc = Process.findModuleByName('libc.so');
+        var sigaltstackFn = new NativeFunction(libc.findExportByName('sigaltstack'), 'int', ['pointer', 'pointer']);
+        var altStackMem = Memory.alloc(0x20000); // 128KB alternate stack
+        // ARM64 stack_t: {void* ss_sp, int ss_flags, padding, size_t ss_size}
+        var ssStruct = Memory.alloc(24);
+        ssStruct.writePointer(altStackMem);
+        ssStruct.add(8).writeU32(0); // ss_flags = 0 (enable)
+        ssStruct.add(16).writeU64(0x20000); // ss_size
+        sigaltstackFn(ssStruct, ptr(0));
+    } catch(e) {}
+})();
+
+// Pre-allocate native logging for use in signal handler
+var _excLogTag = Memory.allocUtf8String("HSPatch-Exc");
+var _excLogFn = null;
+var _excLogFmtFn = null;
+try {
+    var _liblog = Process.findModuleByName('liblog.so');
+    if (_liblog) {
+        _excLogFn = new NativeFunction(_liblog.findExportByName('__android_log_print'), 'int', ['int', 'pointer', 'pointer']);
+        _excLogFmtFn = new NativeFunction(_liblog.findExportByName('__android_log_print'), 'int', ['int', 'pointer', 'pointer', 'pointer', 'pointer', 'pointer', 'pointer']);
+    }
+} catch(e) {}
+
+function _excLog(msg) {
+    if (_excLogFn) _excLogFn(4, _excLogTag, Memory.allocUtf8String(msg));
+}
+
+// --- Native exception handler to survive SecShell anti-tamper SIGBUS ---
+var _sigbusCount = 0;
+var _castleRecoveryStack = Memory.alloc(0x40000); // Pre-allocate 256KB stack
+var _patchedAddrs = {}; // Track already-patched call sites
+var ARM64_NOP = [0x1f, 0x20, 0x03, 0xd5]; // NOP instruction bytes
+var _secShellBase = null;
+var _secShellEnd = null;
+var _abortHooked = false;
+var _lastExcTime = 0; // Timestamp of last exception
+
+// Neutralize abort() by hooking raise() to block SIGABRT
+// abort() internally calls raise(SIGABRT). We hook raise to skip SIGABRT signals.
+// Also hook sigaction to prevent resetting SIGABRT handler to SIG_DFL.
+try {
+    // Hook raise() to block SIGABRT (signal 6)
+    var _raiseAddr = Module.findExportByName('libc.so', 'raise');
+    if (_raiseAddr) {
+        Interceptor.attach(_raiseAddr, {
+            onEnter: function(args) {
+                var sig = args[0].toInt32();
+                if (sig === 6) { // SIGABRT
+                    _excLog('raise(SIGABRT) BLOCKED');
+                    args[0] = ptr(0); // Change to signal 0 (null signal, no-op)
+                }
+            }
+        });
+        _excLog('raise() hook installed — SIGABRT will be blocked');
+        _abortHooked = true;
+    }
+
+    // Also hook tgkill to block SIGABRT sent via tgkill (bionic abort fallback)
+    var _tgkillAddr = Module.findExportByName('libc.so', 'tgkill');
+    if (_tgkillAddr) {
+        Interceptor.attach(_tgkillAddr, {
+            onEnter: function(args) {
+                var sig = args[2].toInt32();
+                if (sig === 6) { // SIGABRT
+                    _excLog('tgkill(SIGABRT) BLOCKED');
+                    args[2] = ptr(0); // Change to signal 0
+                }
+            }
+        });
+        _excLog('tgkill() hook installed — SIGABRT will be blocked');
+    }
+} catch(e) { _excLog('abort block failed: ' + e); }
+
+Process.setExceptionHandler(function(details) {
+    if (details.type === 'access-violation' || details.type === 'bus-error' || details.type === 'illegal-instruction') {
+        _sigbusCount++;
+        _lastExcTime = Date.now();
+        var pc = details.context.pc;
+        _excLog('EXC #' + _sigbusCount + ' type=' + details.type + ' pc=' + pc + ' sp=' + details.context.sp);
+        if (_sigbusCount > 50) {
+            _excLog('Too many exceptions, giving up');
+            return false;
+        }
+
+        // Check if crash is from SecShell (death-trap target or within module range)
+        var isSecShellCrash = false;
+        if (pc.equals(ptr(0x7b0)) || pc.equals(ptr(0xa01))) {
+            isSecShellCrash = true;
+        } else if (_secShellBase && pc.compare(_secShellBase) >= 0 && pc.compare(_secShellEnd) < 0) {
+            isSecShellCrash = true;
+        } else {
+            // Try to detect SecShell module if not yet cached
+            try {
+                var secMod = Process.findModuleByName('libSecShell.so');
+                if (secMod) {
+                    _secShellBase = secMod.base;
+                    _secShellEnd = secMod.base.add(secMod.size);
+                    if (pc.compare(_secShellBase) >= 0 && pc.compare(_secShellEnd) < 0) {
+                        isSecShellCrash = true;
+                    }
+                }
+            } catch(e) {}
+        }
+
+        // Broader death-trap detection: pc=0 or lr=0 with magic fp values,
+        // or crash inside libSignatureKiller/xhook (corrupted by SecShell)
+        if (!isSecShellCrash) {
+            if (pc.isNull() || pc.compare(ptr(0x1000)) < 0) {
+                isSecShellCrash = true; // zeroed PC = classic death-trap
+            } else {
+                try {
+                    var pcMod = Process.findModuleByAddress(pc);
+                    if (!pcMod) {
+                        isSecShellCrash = true; // unmapped address = corruption
+                    } else {
+                        // Log what module the crash is in for diagnostics
+                        _excLog('Crash in module: ' + (pcMod.name || '?') + ' base=' + pcMod.base);
+                    }
+                } catch(e) { isSecShellCrash = true; }
+            }
+            // During startup, treat any main-thread crash that happens within 5s
+            // of a known SecShell exception as SecShell-related (collateral damage
+            // from death-trap bypass, anonymous mmap'd code, etc.)
+            if (!isSecShellCrash && _lastExcTime > 0 && (Date.now() - _lastExcTime) < 5000) {
+                isSecShellCrash = true;
+                _excLog('Treating as SecShell (within 5s of last exc)');
+            }
+        }
+
+        var tid = Process.getCurrentThreadId();
+        if (tid === Process.id) {
+            _excLog('Main thread, isSecShell=' + isSecShellCrash);
+
+            if (isSecShellCrash) {
+                // SecShell anti-tamper death-trap handler.
+                // Strategy: replace BL call-sites with MOV X0,#1 and NOP death-trap
+                // instructions, letting the function's natural loop complete.
+                var fp = details.context.fp;
+                var lr = details.context.lr;
+                _excLog('Main: fp=' + fp + ' lr=' + lr + ' sp=' + details.context.sp);
+
+                if (lr && !lr.isNull() && lr.compare(ptr(0x10000)) > 0) {
+                    // Track repeated lr values — same caller hitting multiple death-traps
+                    var lrKey = 'lr_' + lr.toString();
+                    _patchedAddrs[lrKey] = (_patchedAddrs[lrKey] || 0) + 1;
+                    var lrCount = _patchedAddrs[lrKey];
+
+                    // Patch the BL at lr-4: replace with MOV X0, #0
+                    // The check function returns 0 for "OK" (not tampered).
+                    // With x0=0, B.LE after CMP is taken → skips spin-loop traps.
+                    var blAddr = lr.sub(4);
+                    if (!_patchedAddrs[blAddr.toString()]) {
+                        try {
+                            Memory.protect(blAddr, 4, 'rwx');
+                            // MOV X0, #0 = 0xD2800000
+                            blAddr.writeByteArray([0x00, 0x00, 0x80, 0xd2]);
+                            _patchedAddrs[blAddr.toString()] = true;
+                            _excLog('MOV X0,#0 at call-site ' + blAddr);
+                        } catch(e) { _excLog('Patch call-site err: ' + e); }
+                    }
+
+                    // Dump 16 instructions ahead of LR for diagnostics (first time only)
+                    if (lrCount === 1) {
+                        try {
+                            var dumpStart = lr;
+                            Memory.protect(dumpStart, 64, 'rx');
+                            var instrDump = '';
+                            for (var di = 0; di < 16; di++) {
+                                var iAddr = dumpStart.add(di * 4);
+                                var iVal = iAddr.readU32();
+                                instrDump += '+' + (di*4) + ':0x' + iVal.toString(16) + ' ';
+                            }
+                            _excLog('DISASM at lr ' + lr + ': ' + instrDump);
+                        } catch(e) { _excLog('disasm err: ' + e); }
+                    }
+
+                    if (lrCount >= 2) {
+                        // Death-trap inside the function body (e.g. integrity check
+                        // embedded in a decryption loop). Track per-PC crash count.
+                        var pcKey = 'pc_' + pc.toString();
+                        _patchedAddrs[pcKey] = (_patchedAddrs[pcKey] || 0) + 1;
+                        var pcCount = _patchedAddrs[pcKey];
+
+                        if (pcCount >= 2) {
+                            // Same pc crashed twice → patch it to MOV X0,#0 to avoid
+                            // repeated exceptions on every loop iteration.
+                            _excLog('Repeated pc ' + pc + ' (' + pcCount + 'x), patching to MOV X0,#0');
+                            try {
+                                Memory.protect(pc, 4, 'rwx');
+                                pc.writeByteArray([0x00, 0x00, 0x80, 0xd2]); // MOV X0, #0
+                            } catch(e) { _excLog('Patch pc err: ' + e); }
+                        } else {
+                            _excLog('Death-trap at pc=' + pc + ' (lr=' + lr + '), skip to pc+4');
+                        }
+
+                        // Advance past the crashing instruction (DON'T return to lr,
+                        // that would re-enter the function from the top and break
+                        // the decryption loop's internal state).
+                        details.context.pc = pc.add(4);
+                        details.context.x0 = ptr(0);
+                        return true;
+                    }
+
+                    // First occurrence: return to lr with x0=0 (check OK)
+                    // The BL at lr-4 is already patched to MOV X0,#0, so future calls
+                    // through the same call-site will return "OK" without crashing.
+
+                    // Check if lr is at a function epilogue (LDP + RET). If so, just
+                    // return there — the function will clean up and RET on its own.
+                    // If NOT at an epilogue, the function has a spin-loop, so skip it
+                    // entirely by unwinding the stack frame to the caller.
+                    var atEpilogue = false;
+                    try {
+                        try { Memory.protect(lr, 8, 'rx'); } catch(pe2) {}
+                        var instr0 = lr.readU32();
+                        var instr1 = lr.add(4).readU32();
+                        // LDP X29,X30,[SP],#imm = 0xa8c*7bfd  (mask: 0xffc07fff)
+                        // RET = 0xd65f03c0
+                        if (((instr0 & 0xFFC07FFF) >>> 0) === 0xA8C07BFD && (instr1 >>> 0) === 0xD65F03C0) {
+                            atEpilogue = true;
+                            _excLog('LR at epilogue (LDP+RET), returning to lr normally');
+                        }
+                    } catch(ep) {}
+
+                    if (!atEpilogue) {
+                        // Not at epilogue. The code at lr after the BL does:
+                        //   CMP W0,WZR; B.LE +148  → takes branch if x0 <= 0 (OK)
+                        //   [spin-loop trap if x0 > 0 (tampered)]
+                        // The check function returns 0 = OK, non-zero = tampered.
+                        // So we need x0 = 0 to take the B.LE and skip the spin-loop.
+                        _excLog('Non-epilogue path: setting x0=0 to take B.LE bypass');
+                        details.context.pc = lr;
+                        details.context.x0 = ptr(0);
+                        _excLog('Recovered via LR (x0=0): PC=' + lr);
+                        return true;
+                    }
+
+                    // Default: return to lr with x0=0 (check OK)
+                    details.context.pc = lr;
+                    details.context.x0 = ptr(0);
+                    _excLog('Recovered via LR: PC=' + lr);
+                    return true;
+                }
+
+                // If LR is invalid, try FP-based frame unwind
+                if (fp && !fp.isNull() && fp.compare(ptr(0x10000)) > 0) {
+                    try {
+                        var savedLr = fp.add(8).readPointer();
+                        var savedFp = fp.readPointer();
+                        if (!savedLr.isNull() && savedLr.compare(ptr(0x10000)) > 0) {
+                            var blAddr2 = savedLr.sub(4);
+                            if (!_patchedAddrs[blAddr2.toString()]) {
+                                try {
+                                    Memory.protect(blAddr2, 4, 'rwx');
+                                    // MOV X0, #0 = check OK
+                                    blAddr2.writeByteArray([0x00, 0x00, 0x80, 0xd2]);
+                                    _patchedAddrs[blAddr2.toString()] = true;
+                                    _excLog('MOV X0,#0 at call-site ' + blAddr2);
+                                } catch(e) {}
+                            }
+                            details.context.sp = fp.add(16);
+                            details.context.fp = savedFp;
+                            details.context.pc = savedLr;
+                            details.context.x0 = ptr(0);
+                            _excLog('Recovered via FP: PC=' + savedLr);
+                            return true;
+                        }
+                    } catch(e) { _excLog('FP read err: ' + e); }
+                }
+
+                // Fallback: park on sleep
+                _excLog('Parking main thread on sleep');
+                var libcMod = Process.findModuleByName('libc.so');
+                var sleepFn = libcMod ? libcMod.findExportByName('sleep') : null;
+                if (sleepFn) {
+                    details.context.sp = _castleRecoveryStack.add(0x20000);
+                    details.context.pc = sleepFn;
+                    details.context.x0 = ptr(86400);
+                    return true;
+                }
+            }
+
+            // Non-SecShell main thread crash: don't touch, let default handler run
+            _excLog('Non-SecShell main crash, not handling');
+            return false;
+        } else {
+            // Background thread — terminate cleanly to avoid blocking ART GC
+            _excLog('BG thread crash, isSecShell=' + isSecShellCrash);
+            // Only patch call-sites for SecShell anti-tamper crashes
+            // Patching non-SecShell crashes (e.g. JIT code) corrupts the app
+            if (isSecShellCrash) {
+                var bgFp = details.context.fp;
+                if (bgFp && !bgFp.isNull() && bgFp.compare(ptr(0x10000)) > 0) {
+                    try {
+                        var bgSavedLr = bgFp.add(8).readPointer();
+                        if (!bgSavedLr.isNull() && bgSavedLr.compare(ptr(0x10000)) > 0) {
+                            var bgBlAddr = bgSavedLr.sub(4);
+                            var bgKey = bgBlAddr.toString();
+                            if (!_patchedAddrs[bgKey]) {
+                                try {
+                                    Memory.protect(bgBlAddr, 4, 'rwx');
+                                    bgBlAddr.writeByteArray(ARM64_NOP);
+                                    _patchedAddrs[bgKey] = true;
+                                    _excLog('BG patched call-site at ' + bgBlAddr);
+                                } catch(e) { _excLog('BG patch err: ' + e); }
+                            }
+                        }
+                    } catch(e) {}
+                }
+            }
+            // For SecShell BG crashes: terminate thread cleanly to avoid blocking ART GC
+            // For non-SecShell BG crashes: let the default handler deal with it
+            if (!isSecShellCrash) {
+                _excLog('Non-SecShell BG crash, not handling');
+                return false;
+            }
+            // Use pthread_exit to cleanly terminate the thread (lets ART manage it).
+            // If sp is invalid, allocate a stack first so pthread_exit can run.
+            try {
+                var libcMod = Process.findModuleByName('libc.so');
+                var pthreadExitFn = libcMod ? libcMod.findExportByName('pthread_exit') : null;
+                if (pthreadExitFn) {
+                    if (details.context.sp.isNull() || details.context.sp.compare(ptr(0x10000)) < 0) {
+                        var bgStack = Memory.alloc(0x20000);
+                        globalThis['_bgStack' + _sigbusCount] = bgStack;
+                        details.context.sp = bgStack.add(0x10000);
+                    }
+                    details.context.pc = pthreadExitFn;
+                    details.context.x0 = ptr(0);
+                    _excLog('BG thread -> pthread_exit');
+                    return true;
+                }
+            } catch(e) {}
+            return false;
+        }
+    }
+    return false;
+});
+
+// --- Generic SecShell decryption & anti-tamper bypass ---
+// Activated only when libSecShell.so is detected in any app.
+// Fully generic: scans for death-trap patterns, BR-register indirect calls,
+// and BL call-sites; no hardcoded offsets required for unknown apps.
+function _secShellGenericBypass() {
+    if (globalThis._secShellGenericDone) return;
+    globalThis._secShellGenericDone = true;
+
+    var _ARM64_RET = [0xc0, 0x03, 0x5f, 0xd6];
+    var _ARM64_NOP = [0x1f, 0x20, 0x03, 0xd5];
+
+    // Read package name
+    var _pkgName = '';
+    try {
+        var _br = Java.use('java.io.BufferedReader').$new(
+            Java.use('java.io.FileReader').$new('/proc/self/cmdline')
+        );
+        _pkgName = (_br.readLine() || '').replace(/\0/g, '');
+        _br.close();
+    } catch(e) {}
+
+    // Detect if code section is decrypted by sampling multiple offsets
+    function _isDecrypted(secMod) {
+        var scanLen = Math.min(secMod.size, 0x200000);
+        if (scanLen < 0x2000) return false;
+        try {
+            // Ensure code pages are readable (Android 10+ may map .text as execute-only)
+            try { Memory.protect(secMod.base, scanLen, 'rx'); } catch(e) {}
+            // Sample 8 positions across the module and check for valid ARM64 patterns
+            var validCount = 0;
+            var sampleOffsets = [0x1000, 0x2000, 0x4000, 0x8000, 0x10000, 0x20000, 0x40000, 0x80000];
+            for (var i = 0; i < sampleOffsets.length; i++) {
+                if (sampleOffsets[i] >= scanLen) continue;
+                try {
+                    var addr = secMod.base.add(sampleOffsets[i]);
+                    Memory.protect(addr, 4, 'rx');
+                    var instr = addr.readU32();
+                } catch(e) { continue; }
+                // ARM64 instructions: NOP, RET, STP, LDP, MOV, SUB, ADD, BL, B, etc.
+                // Encrypted data unlikely matches valid opcodes consistently
+                if (instr !== 0 && instr !== 0xFFFFFFFF) {
+                    var top8 = (instr >>> 24) & 0xFF;
+                    // Common ARM64 top bytes for real instructions
+                    if (top8 === 0xD5 || top8 === 0xD6 || top8 === 0xA9 || top8 === 0xA8 ||
+                        top8 === 0xAA || top8 === 0xD1 || top8 === 0x91 || top8 === 0x94 ||
+                        top8 === 0x97 || top8 === 0x14 || top8 === 0x17 || top8 === 0xF9 ||
+                        top8 === 0xB9 || top8 === 0x52 || top8 === 0xD2 || top8 === 0x72 ||
+                        top8 === 0xF0 || top8 === 0x90 || top8 === 0x36 || top8 === 0x37 ||
+                        top8 === 0x54 || top8 === 0xEB || top8 === 0x6B || top8 === 0x2A ||
+                        top8 === 0xCB || top8 === 0x8B) validCount++;
+                }
+            }
+            return validCount >= 4; // At least 4/8 samples look like valid ARM64
+        } catch(e) { return false; }
+    }
+
+    // Scan for ARM64 death-trap functions in SecShell module
+    // Death-trap patterns:
+    //   1. SUB SP, SP, #large → ... → MOV X29/X30, XZR (zeros FP/LR → crash on return)
+    //   2. MOV SP, XZR directly (zeros SP)
+    //   3. STP XZR, XZR, [SP] (zeros saved FP/LR on stack)
+    function _scanDeathTraps(secMod) {
+        var results = [];
+        var base = secMod.base;
+        var scanLen = Math.min(secMod.size, 0x200000);
+        if (scanLen < 64) return results;
+        try {
+            try { Memory.protect(base, scanLen, 'rwx'); } catch(e) {}
+            var buf = base.readByteArray(scanLen);
+            var view = new DataView(buf);
+            for (var off = 0; off < scanLen - 64; off += 4) {
+                var instr = view.getUint32(off, true);
+
+                // Pattern 1: SUB SP, SP, #large_imm (imm >= 0x200)
+                if ((instr & 0xFF0003FF) === 0xD10003FF) {
+                    var imm12 = (instr >>> 10) & 0xFFF;
+                    var shift = (instr >>> 22) & 0x3;
+                    var value = shift === 1 ? (imm12 << 12) : imm12;
+                    if (value >= 0x200) {
+                        // Check next 20 instructions for FP/LR/SP zeroing
+                        var isDeath = false;
+                        for (var j = 1; j <= 20 && (off + j * 4 + 4) <= scanLen; j++) {
+                            var nx = view.getUint32(off + j * 4, true);
+                            // MOV X29, XZR = 0xAA1F03FD
+                            // MOV X30, XZR = 0xAA1F03FE
+                            // MOV SP, XZR = 0xAA1F03FF (via MOV Xd, Xm encoding)
+                            // STP XZR, XZR, [SP] = 0xA900FFFF (or variant)
+                            if (nx === 0xAA1F03FD || nx === 0xAA1F03FE ||
+                                nx === 0xAA1F03FF ||
+                                (nx & 0xFFE0FFFF) === 0xA900FFFF) {
+                                isDeath = true;
+                                break;
+                            }
+                        }
+                        if (isDeath) results.push({ off: off, instr: instr });
+                    }
+                }
+
+                // Pattern 2: Function starts with STP then quickly zeros X29/X30
+                if ((instr & 0xFFC003E0) === 0xA9800000) { // STP with pre-index, to SP
+                    var hasZero = false;
+                    for (var k = 1; k <= 8 && (off + k * 4 + 4) <= scanLen; k++) {
+                        var nk = view.getUint32(off + k * 4, true);
+                        if (nk === 0xAA1F03FD || nk === 0xAA1F03FE) {
+                            hasZero = true;
+                            break;
+                        }
+                    }
+                    if (hasZero && results.indexOf(off) === -1) {
+                        // Verify it's not already in results
+                        var dup = false;
+                        for (var d = 0; d < results.length; d++) {
+                            if (results[d].off === off) { dup = true; break; }
+                        }
+                        if (!dup) results.push({ off: off, instr: instr });
+                    }
+                }
+            }
+        } catch(e) { _excLog('Death-trap scan err: ' + e); }
+        return results;
+    }
+
+    // Find BL instructions targeting a specific offset within the module
+    function _findBLCallSites(buf, scanLen, targetOff) {
+        var results = [];
+        var view = new DataView(buf);
+        for (var off = 0; off < scanLen - 4; off += 4) {
+            var instr = view.getUint32(off, true);
+            // BL imm26: opcode 0x94000000 or 0x97xxxxxx
+            if ((instr & 0xFC000000) === 0x94000000) {
+                var imm26 = instr & 0x3FFFFFF;
+                if (imm26 & 0x2000000) imm26 -= 0x4000000; // sign extend
+                if (off + imm26 * 4 === targetOff) results.push(off);
+            }
+        }
+        return results;
+    }
+
+    // Find BR Xn instructions targeting death-trap functions
+    // These are indirect calls via register (BR X4, BR X8, etc.)
+    function _findBRCallSites(buf, scanLen) {
+        var results = [];
+        var view = new DataView(buf);
+        for (var off = 0; off < scanLen - 4; off += 4) {
+            var instr = view.getUint32(off, true);
+            // BR Xn = 0xD61F0000 | (Xn << 5)
+            // BLR Xn = 0xD63F0000 | (Xn << 5)
+            if ((instr & 0xFFFFFC1F) === 0xD61F0000 || (instr & 0xFFFFFC1F) === 0xD63F0000) {
+                results.push({ off: off, instr: instr });
+            }
+        }
+        return results;
+    }
+
+    // Scan for anti-tamper check patterns (integrity verification functions)
+    // These typically: open()/read() the APK, compute hash, compare, branch to death
+    function _findAntiTamperBLs(buf, scanLen, deathTrapOffsets) {
+        var allCallSites = [];
+        for (var i = 0; i < deathTrapOffsets.length; i++) {
+            var sites = _findBLCallSites(buf, scanLen, deathTrapOffsets[i]);
+            for (var j = 0; j < sites.length; j++) {
+                allCallSites.push(sites[j]);
+            }
+        }
+        return allCallSites;
+    }
+
+    function _patchSecShellGeneric(secMod) {
+        if (globalThis._secShellPrePatched) return;
+
+        // Wait for decryption
+        if (!_isDecrypted(secMod)) {
+            _excLog('SecShell code still encrypted, deferring...');
+            return;
+        }
+
+        globalThis._secShellPrePatched = true;
+        if (globalThis._xhookRefreshFn) try { globalThis._xhookRefreshFn(); } catch(e) {}
+
+        _excLog('SecShell DECRYPTED at base=' + secMod.base + ' size=0x' + secMod.size.toString(16));
+        _excLog('Package: ' + (_pkgName || 'unknown'));
+
+        var scanLen = Math.min(secMod.size, 0x200000);
+        var buf;
+        try {
+            Memory.protect(secMod.base, scanLen, 'rwx');
+            buf = secMod.base.readByteArray(scanLen);
+        }
+        catch(e) { _excLog('Cannot read module: ' + e); return; }
+
+        // Phase 1: Find all death-trap functions
+        var traps = _scanDeathTraps(secMod);
+        _excLog('Found ' + traps.length + ' death-trap function(s)');
+
+        if (traps.length === 0) {
+            _excLog('No death-traps found — crash handler serves as fallback');
+            return;
+        }
+
+        var patched = 0;
+
+        // Phase 2: Patch death-trap functions to RET
+        var trapOffsets = [];
+        for (var i = 0; i < traps.length; i++) {
+            var trap = traps[i];
+            trapOffsets.push(trap.off);
+            try {
+                var tAddr = secMod.base.add(trap.off);
+                Memory.protect(tAddr, 4, 'rwx');
+                tAddr.writeByteArray(_ARM64_RET);
+                patched++;
+                _excLog('Death-trap +0x' + trap.off.toString(16) + ' -> RET (was 0x' + trap.instr.toString(16) + ')');
+            } catch(e) { _excLog('Death-trap patch fail +0x' + trap.off.toString(16) + ': ' + e); }
+        }
+
+        // Phase 3: Find and NOP all BL call-sites that target death-traps
+        var allBLSites = _findAntiTamperBLs(buf, scanLen, trapOffsets);
+        _excLog('Found ' + allBLSites.length + ' BL call-site(s) targeting death-traps');
+        for (var j = 0; j < allBLSites.length; j++) {
+            try {
+                var sAddr = secMod.base.add(allBLSites[j]);
+                var origInstr = sAddr.readU32();
+                Memory.protect(sAddr, 4, 'rwx');
+                sAddr.writeByteArray(_ARM64_NOP);
+                patched++;
+                _excLog('BL call-site +0x' + allBLSites[j].toString(16) + ' -> NOP (was 0x' + origInstr.toString(16) + ')');
+            } catch(e) {}
+        }
+
+        // Phase 4: Find BR/BLR Xn instructions near death-trap setup code
+        // Some SecShell versions use indirect branches (BR X4) instead of BL
+        var brSites = _findBRCallSites(buf, scanLen);
+        var brPatched = 0;
+        for (var k = 0; k < brSites.length; k++) {
+            var brOff = brSites[k].off;
+            // Check if this BR/BLR is preceded by loading a death-trap address
+            // Look backwards up to 10 instructions for ADRP+ADD pattern loading a trap offset
+            var isDeathBR = false;
+            var view = new DataView(buf);
+            for (var b = 1; b <= 10; b++) {
+                var prevOff = brOff - b * 4;
+                if (prevOff < 0) break;
+                var prevInstr = view.getUint32(prevOff, true);
+                // ADRP: top 1 bit = 1, bits[28:24] = 10000
+                if ((prevInstr & 0x9F000000) === 0x90000000) {
+                    // Calculate ADRP target page
+                    var immlo = (prevInstr >>> 29) & 0x3;
+                    var immhi = (prevInstr >>> 5) & 0x7FFFF;
+                    var pageOff = ((immhi << 2) | immlo) << 12;
+                    if (pageOff & 0x100000000) pageOff -= 0x200000000;
+                    var adrpPage = (prevOff & ~0xFFF) + pageOff;
+                    // Check if ADRP page matches any death-trap page
+                    for (var t = 0; t < trapOffsets.length; t++) {
+                        if (Math.abs(adrpPage - (trapOffsets[t] & ~0xFFF)) < 0x2000) {
+                            isDeathBR = true;
+                            break;
+                        }
+                    }
+                    if (isDeathBR) break;
+                }
+            }
+            if (isDeathBR) {
+                try {
+                    var brAddr = secMod.base.add(brOff);
+                    Memory.protect(brAddr, 4, 'rwx');
+                    brAddr.writeByteArray(_ARM64_NOP);
+                    brPatched++;
+                    patched++;
+                    _excLog('BR/BLR +0x' + brOff.toString(16) + ' -> NOP');
+                } catch(e) {}
+            }
+        }
+        if (brPatched > 0) _excLog('Patched ' + brPatched + ' BR/BLR indirect call(s)');
+
+        _excLog('SecShell bypass complete: ' + patched + ' total patches applied');
+
+        // === RE-INVOKE JNI_OnLoad to register native methods ===
+        // Death-traps are now disabled, so JNI_OnLoad can run fully.
+        // This ensures RegisterNatives is called for com.SecShell.SecShell.H
+        try {
+            var _jniOnLoadAddr = secMod.findExportByName('JNI_OnLoad');
+            if (_jniOnLoadAddr) {
+                _excLog('RE-INVOKING JNI_OnLoad at ' + _jniOnLoadAddr + ' (death-traps disabled)');
+                var _jniOnLoadFn = new NativeFunction(_jniOnLoadAddr, 'int', ['pointer', 'pointer']);
+
+                // Get JavaVM pointer from Frida
+                var _vmPtr = Java.vm.handle;
+                _excLog('JavaVM ptr: ' + _vmPtr);
+
+                var _ret = _jniOnLoadFn(_vmPtr, ptr(0));
+                _excLog('JNI_OnLoad re-invocation returned: ' + _ret +
+                        ' (0x' + (_ret >>> 0).toString(16) + ')');
+
+                // Verify RegisterNatives worked by checking if H.q() is accessible
+                try {
+                    var _hClass = Java.use('com.SecShell.SecShell.H');
+                    _excLog('H class available after re-invocation');
+                } catch(hErr) {
+                    _excLog('H class check: ' + hErr);
+                }
+            } else {
+                _excLog('JNI_OnLoad NOT exported in SecShell');
+            }
+        } catch(reInvokeErr) {
+            _excLog('JNI_OnLoad re-invocation failed: ' + reInvokeErr);
+        }
+
+        // Signal main thread that native methods are registered
+        try {
+            Java.use('java.lang.System').setProperty('hspatch.secshell.natives', '1');
+            _excLog('Set hspatch.secshell.natives=1 — main thread can proceed');
+        } catch(spErr) {
+            _excLog('setProperty failed: ' + spErr);
+        }
+
+        // Refresh xhook if available
+        if (globalThis._xhookRefreshFn) {
+            try { globalThis._xhookRefreshFn(); } catch(e) {}
+            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 200);
+            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 500);
+            setTimeout(function() { try { globalThis._xhookRefreshFn(); } catch(e) {} }, 1000);
+        }
+    }
+
+    // === pthread_create interception: neuter SecShell's anti-tamper threads ===
+    // During SecShell loading, replace thread start routines with a no-op
+    // so anti-tamper threads start but immediately exit (harmless).
+    var _deferringSecShellThreads = false;
+    var _neuteredThreadCount = 0;
+    var _threadNoopTrampoline = null;
+
+    try {
+        // Create a native trampoline that just returns NULL (thread exit)
+        var _trampolineMem = Memory.alloc(Process.pageSize);
+        _excLog('trampoline mem allocated at ' + _trampolineMem);
+        Memory.protect(_trampolineMem, Process.pageSize, 'rwx');
+        // ARM64: MOV X0, #0; RET
+        _trampolineMem.writeByteArray([
+            0x00, 0x00, 0x80, 0xd2,  // MOV X0, #0
+            0xc0, 0x03, 0x5f, 0xd6   // RET
+        ]);
+        _threadNoopTrampoline = _trampolineMem;
+        _excLog('trampoline written OK');
+    } catch(e) { _excLog('trampoline creation failed: ' + e); }
+
+    try {
+        var _pthreadCreateAddr = Module.findExportByName('libc.so', 'pthread_create');
+        _excLog('pthread_create addr: ' + _pthreadCreateAddr);
+        if (_pthreadCreateAddr) {
+            Interceptor.attach(_pthreadCreateAddr, {
+                onEnter: function(args) {
+                    if (_deferringSecShellThreads && _threadNoopTrampoline) {
+                        // Replace the start_routine (arg[2]) with our no-op trampoline
+                        this._originalStartRoutine = args[2];
+                        args[2] = _threadNoopTrampoline;
+                        _neuteredThreadCount++;
+                        _excLog('Neutered SecShell thread #' + _neuteredThreadCount +
+                                ' (original start_routine=' + this._originalStartRoutine + ')');
+                    }
+                }
+            });
+            _excLog('pthread_create interceptor installed (attach mode)');
+        }
+    } catch(e) { _excLog('pthread_create attach failed: ' + e + ' stack=' + (e.stack || 'N/A')); }
+
+    function _releaseDeferredThreads() {
+        _deferringSecShellThreads = false;
+        if (_neuteredThreadCount > 0) {
+            _excLog('SecShell thread neutering stopped (' + _neuteredThreadCount + ' threads were neutered)');
+        }
+    }
+
+    // === JNI_OnLoad RE-INVOCATION STRATEGY ===
+    // Flow: System.loadLibrary("SecShell") → JNI_OnLoad runs → death-traps fire
+    // → exception handler catches them → JNI_OnLoad exits early (RegisterNatives
+    // never called) → polling detects SecShell loaded & decrypted →
+    // _patchSecShellGeneric NOPs all death-traps → we RE-INVOKE JNI_OnLoad
+    // so it runs fully this time (death-traps disabled) → RegisterNatives succeeds.
+    //
+    // We also hook RegisterNatives to confirm native methods get registered.
+
+    var _registeredNativeMethods = {};    // class → [{name, sig, fnPtr}]
+    var _javaVMPtr = null;                // Saved JavaVM* from JNI_OnLoad
+
+    // Hook JNI RegisterNatives to track what gets registered
+    try {
+        // Get JNIEnv* from Java.vm
+        var _envPtr = Java.vm.tryGetEnv();
+        if (_envPtr) {
+            var _jniEnv = _envPtr.handle;
+            // JNIEnv is a pointer to a function table. RegisterNatives is at index 215.
+            var _fnTablePtr = _jniEnv.readPointer();
+            var _registerNativesPtr = _fnTablePtr.add(215 * Process.pointerSize).readPointer();
+            _excLog('RegisterNatives fn at ' + _registerNativesPtr);
+
+            Interceptor.attach(_registerNativesPtr, {
+                onEnter: function(args) {
+                    // args: JNIEnv*, jclass, JNINativeMethod*, nMethods
+                    var env = args[0];
+                    var clazz = args[1];
+                    var methods = args[2];
+                    var nMethods = args[3].toInt32();
+
+                    // Get class name
+                    var className = '(unknown)';
+                    try {
+                        var _getObjectClass = _fnTablePtr.add(31 * Process.pointerSize).readPointer();
+                        // Actually use FindClass approach or just log the jclass pointer
+                        className = 'jclass@' + clazz;
+                    } catch(e) {}
+
+                    _excLog('RegisterNatives called: class=' + className + ' nMethods=' + nMethods);
+
+                    // Log each method being registered
+                    // JNINativeMethod struct: { const char* name, const char* signature, void* fnPtr }
+                    // On 64-bit: each field is 8 bytes (pointer-sized), total 24 bytes per entry
+                    for (var mi = 0; mi < nMethods; mi++) {
+                        try {
+                            var entry = methods.add(mi * 3 * Process.pointerSize);
+                            var namePtr = entry.readPointer();
+                            var sigPtr = entry.add(Process.pointerSize).readPointer();
+                            var fnPtr = entry.add(2 * Process.pointerSize).readPointer();
+                            var mName = namePtr.readUtf8String();
+                            var mSig = sigPtr.readUtf8String();
+                            _excLog('  RegisterNatives[' + mi + ']: ' + mName + mSig + ' -> ' + fnPtr);
+                        } catch(rne) {
+                            _excLog('  RegisterNatives[' + mi + ']: read error: ' + rne);
+                        }
+                    }
+
+                    this._nMethods = nMethods;
+                },
+                onLeave: function(retval) {
+                    _excLog('RegisterNatives returned: ' + retval);
+                }
+            });
+            _excLog('RegisterNatives hook installed');
+        } else {
+            _excLog('No JNIEnv available yet for RegisterNatives hook');
+        }
+    } catch(rnHookErr) {
+        _excLog('RegisterNatives hook failed: ' + rnHookErr);
+    }
+
+    // Enable thread deferring during SecShell loading
+    _deferringSecShellThreads = true;
+
+    // Polling fallback: handles case where pre-load failed or code still encrypted
+    var _ssPollCount = 0;
+    var _ssPoll = setInterval(function() {
+        _ssPollCount++;
+        try {
+            var m = Process.findModuleByName('libSecShell.so');
+            if (m) {
+                if (_ssPollCount <= 3 || _ssPollCount % 100 === 0) {
+                    _excLog('POLL#' + _ssPollCount + ': SecShell at ' + m.base + ' size=' + m.size);
+                }
+                _secShellBase = m.base;
+                _secShellEnd = m.base.add(m.size);
+                var decrypted = _isDecrypted(m);
+                if (_ssPollCount <= 3 || _ssPollCount % 100 === 0) {
+                    _excLog('POLL#' + _ssPollCount + ': decrypted=' + decrypted + ' prePatched=' + globalThis._secShellPrePatched);
+                }
+                if (decrypted && !globalThis._secShellPrePatched) {
+                    _excLog('POLL: patching SecShell now...');
+                    _patchSecShellGeneric(m);
+                    _releaseDeferredThreads();
+                }
+                if (globalThis._secShellPrePatched) clearInterval(_ssPoll);
+            } else {
+                if (_ssPollCount <= 3 || _ssPollCount % 500 === 0) {
+                    _excLog('POLL#' + _ssPollCount + ': SecShell NOT found');
+                }
+            }
+        } catch(e) {
+            if (_ssPollCount <= 3) _excLog('POLL#' + _ssPollCount + ' err: ' + e);
+        }
+    }, 10);
+    setTimeout(function() {
+        clearInterval(_ssPoll);
+        if (_deferringSecShellThreads) _releaseDeferredThreads();
+    }, 60000);
+
+    // Post-exception diagnostic: 8s after script starts, log status
+    setTimeout(function() {
+        _excLog('DIAG@8s: excCount=' + _sigbusCount + ' lastExc=' + (_lastExcTime ? (Date.now() - _lastExcTime) + 'ms ago' : 'none'));
+        _excLog('DIAG@8s: secShellBase=' + _secShellBase + ' prePatched=' + globalThis._secShellPrePatched);
+
+        // Check main thread state via /proc
+        try {
+            var statFile = new File('/proc/self/stat', 'r');
+            var statLine = statFile.readLine();
+            statFile.close();
+            // Field 3 is state: R=running, S=sleeping, D=disk sleep
+            var parts = statLine.split(') ');
+            if (parts.length >= 2) {
+                _excLog('DIAG@8s: mainState=' + parts[1].charAt(0));
+            }
+            // Try to find which thread is in R state and get its PC
+            var pid = Process.id;
+            try {
+                var taskDir = '/proc/' + pid + '/task/';
+                // Read main thread (has same tid as pid) wchan
+                var wchanFile = new File(taskDir + pid + '/wchan', 'r');
+                var wchan = wchanFile.readLine();
+                wchanFile.close();
+                _excLog('DIAG@8s: mainWchan=' + wchan);
+            } catch(we) {}
+            // Try to read syscall file for IP info
+            try {
+                var sysFile = new File('/proc/' + pid + '/task/' + pid + '/syscall', 'r');
+                var sysLine = sysFile.readLine();
+                sysFile.close();
+                _excLog('DIAG@8s: mainSyscall=' + sysLine);
+            } catch(se) {}
+        } catch(e) {}
+
+        // Dump code around all seen LR addresses using cached base
+        if (_secShellBase) {
+            var lrList = [];
+            for (var k in _patchedAddrs) {
+                if (k.indexOf('lr_') === 0) {
+                    lrList.push(k.substring(3));
+                }
+            }
+            _excLog('DIAG@8s: ' + lrList.length + ' unique LRs seen');
+            for (var li = 0; li < lrList.length; li++) {
+                try {
+                    var lrAddr = ptr(lrList[li]);
+                    var lrOff = lrAddr.sub(_secShellBase);
+                    _excLog('DIAG lr=' + lrAddr + ' off=+0x' + lrOff.toString(16) +
+                            ' count=' + _patchedAddrs['lr_' + lrList[li]]);
+                    // Dump 64 instructions (256 bytes) before lr and 256 bytes after
+                    var dumpAddr = lrAddr.sub(256);
+                    Memory.protect(dumpAddr, 768, 'rx');
+                    var lines = ['BEFORE:', 'AFTER:'];
+                    for (var pass = 0; pass < 2; pass++) {
+                        var base = pass === 0 ? dumpAddr : lrAddr;
+                        var count = pass === 0 ? 64 : 128; // 256B before, 512B after
+                        var dump = '';
+                        for (var di = 0; di < count; di++) {
+                            var iAddr = base.add(di * 4);
+                            var iVal = iAddr.readU32();
+                            var relOff = pass === 0 ? (di * 4 - 256) : (di * 4);
+                            dump += relOff + ':0x' + iVal.toString(16) + ' ';
+                            if ((di + 1) % 8 === 0) {
+                                _excLog('DIAG ' + lines[pass] + ' ' + dump.trim());
+                                dump = '';
+                            }
+                        }
+                        if (dump) _excLog('DIAG ' + lines[pass] + ' ' + dump.trim());
+                    }
+                } catch(e) { _excLog('DIAG dump err: ' + e); }
+            }
+        }
+    }, 8000);
+
+    // Second diagnostic at 20s — check if still spinning or progressed
+    setTimeout(function() {
+        _excLog('DIAG@20s: excCount=' + _sigbusCount + ' lastExc=' + (_lastExcTime ? (Date.now() - _lastExcTime) + 'ms ago' : 'none'));
+        try {
+            var statFile = new File('/proc/self/stat', 'r');
+            var statLine = statFile.readLine();
+            statFile.close();
+            var parts = statLine.split(') ');
+            if (parts.length >= 2) {
+                _excLog('DIAG@20s: mainState=' + parts[1].charAt(0));
+            }
+        } catch(e) {}
+        // Log per-PC crash counts
+        var pcList = [];
+        for (var k in _patchedAddrs) {
+            if (k.indexOf('pc_') === 0) {
+                pcList.push(k.substring(3) + '×' + _patchedAddrs[k]);
+            }
+        }
+        if (pcList.length > 0) {
+            _excLog('DIAG@20s: crashPCs: ' + pcList.join(', '));
+        }
+    }, 20000);
+
+    // Signal to main thread that Frida hooks are installed and ready.
+    // The <clinit> bypass polls for this property before calling loadLibrary("SecShell").
+    try {
+        Java.use('java.lang.System').setProperty('hspatch.frida.ready', '1');
+        _excLog('Set hspatch.frida.ready — main thread can proceed with SecShell');
+    } catch(e) { _excLog('Failed to set frida.ready: ' + e); }
+
+    _excLog('SecShell generic bypass active (pkg=' + _pkgName + ')');
+}
+
+// --- Castle pre-init: file hooks + hidden API bypass (before SecShell loads) ---
+function _secShellPreInit() {
+    var TAG = "HSPatch-SecShell";
+    var AndroidLog;
+    try { AndroidLog = Java.use('android.util.Log'); } catch(e) { return; }
+
+    // Read package name from /proc/self/cmdline
+    var pkgName = '';
+    try {
+        var br = Java.use('java.io.BufferedReader').$new(
+            Java.use('java.io.FileReader').$new('/proc/self/cmdline')
+        );
+        pkgName = (br.readLine() || '').replace(/\0/g, '');
+        br.close();
+    } catch(e) { return; }
+    if (!pkgName) return;
+
+    // Prevent duplicate pre-init (DelegateLastClassLoader may trigger second run)
+    if (globalThis._secShellPreInitDone) {
+        AndroidLog.i(TAG, 'SecShell pre-init already done, skipping');
+        return;
+    }
+    globalThis._secShellPreInitDone = true;
+
+    AndroidLog.i(TAG, 'SecShell pre-init for ' + pkgName + '...');
+
+    // Step 1: Get APK path (works during <clinit> before APK is memory-mapped)
+    var apkPath = null;
+
+    // Primary: ActivityThread.mBoundApplication.appInfo.sourceDir
+    try {
+        var AT = Java.use('android.app.ActivityThread');
+        var at = AT.currentActivityThread();
+        var bindData = at.mBoundApplication.value;
+        var appInfoField = bindData.getClass().getDeclaredField('appInfo');
+        appInfoField.setAccessible(true);
+        var appInfo = Java.cast(appInfoField.get(bindData), Java.use('android.content.pm.ApplicationInfo'));
+        apkPath = appInfo.sourceDir.value;
+        AndroidLog.i(TAG, 'APK path (ActivityThread): ' + apkPath);
+    } catch(e) {
+        AndroidLog.w(TAG, 'ActivityThread path: ' + e);
+    }
+
+    // Fallback: try common SecShell Application classes for context
+    if (!apkPath) {
+        var secShellAppClasses = ['com.SecShell.SecShell.AW', 'com.SecShell.SecShell.ApplicationWrapper'];
+        for (var ci = 0; ci < secShellAppClasses.length; ci++) {
+            try {
+                var AppCls = Java.use(secShellAppClasses[ci]);
+                var ctx = AppCls.mC ? AppCls.mC.value : null;
+                if (ctx) {
+                    apkPath = ctx.getApplicationInfo().sourceDir.value;
+                    AndroidLog.i(TAG, 'APK path (' + secShellAppClasses[ci] + '.mC): ' + apkPath);
+                    break;
+                }
+            } catch(e) {}
+        }
+    }
+
+    // Fallback: scan /proc/self/maps
+    if (!apkPath) {
+        try {
+            var br2 = Java.use('java.io.BufferedReader').$new(
+                Java.use('java.io.FileReader').$new('/proc/self/maps')
+            );
+            var line;
+            while ((line = br2.readLine()) !== null) {
+                if (line.indexOf(pkgName) !== -1 && line.indexOf('base.apk') !== -1) {
+                    var parts = line.trim().split(/\s+/);
+                    apkPath = parts[parts.length - 1];
+                    break;
+                }
+            }
+            br2.close();
+            if (apkPath) AndroidLog.i(TAG, 'APK path (maps): ' + apkPath);
+        } catch(e) {}
+    }
+
+    if (!apkPath) {
+        AndroidLog.w(TAG, 'APK path not found (hookApkPath deferred)');
+    }
+
+    // Step 2: Load libSignatureKiller.so + extract origin.apk + hookApkPath
+    var dataDir = '/data/data/' + pkgName;
+    var originPath = dataDir + '/origin.apk';
+
+    if (apkPath) {
+        // Extract origin.apk from modified APK assets
+        try {
+            var ZipFile = Java.use('java.util.zip.ZipFile');
+            var FileJava = Java.use('java.io.File');
+            var FileOutputStream = Java.use('java.io.FileOutputStream');
+            var zip = ZipFile.$new(apkPath);
+            var entry = zip.getEntry('assets/SignatureKiller/origin.apk');
+            if (entry) {
+                var expectedSize = entry.getSize();
+                var existingFile = FileJava.$new(originPath);
+                if (!existingFile.exists() || existingFile.length() !== expectedSize) {
+                    AndroidLog.i(TAG, 'Extracting origin.apk (' + expectedSize + ' bytes)...');
+                    var inputStream = zip.getInputStream(entry);
+                    var fos = FileOutputStream.$new(originPath);
+                    var buf = Java.array('byte', new Array(8192).fill(0));
+                    var len;
+                    while ((len = inputStream.read(buf)) !== -1) {
+                        fos.write(buf, 0, len);
+                    }
+                    inputStream.close();
+                    fos.close();
+                    AndroidLog.i(TAG, 'origin.apk extracted');
+                } else {
+                    AndroidLog.i(TAG, 'origin.apk already exists, skipping');
+                }
+            } else {
+                AndroidLog.w(TAG, 'origin.apk not in APK assets');
+            }
+            zip.close();
+        } catch(e) {
+            AndroidLog.e(TAG, 'Extract failed: ' + e);
+        }
+
+        // Load libSignatureKiller.so early
+        try {
+            var libSkDir = apkPath.replace(/\/base\.apk$/, '/lib/arm64');
+            var libSkPath = libSkDir + '/libSignatureKiller.so';
+            Java.use('java.lang.System').load(libSkPath);
+            AndroidLog.i(TAG, 'libSignatureKiller.so loaded from ' + libSkPath);
+        } catch(e) {
+            AndroidLog.w(TAG, 'System.load SignatureKiller: ' + e);
+        }
+
+        try {
+            var sigKillerMod = Process.findModuleByName('libSignatureKiller.so');
+            if (sigKillerMod) {
+                AndroidLog.i(TAG, 'libSignatureKiller at ' + sigKillerMod.base);
+                var hookApkPathAddr = sigKillerMod.findExportByName('Java_bin_mt_signature_KillerApplication_hookApkPath');
+                var xhookRefreshAddr = sigKillerMod.findExportByName('xhook_refresh');
+
+                if (!hookApkPathAddr) {
+                    var exports = sigKillerMod.enumerateExports();
+                    for (var i = 0; i < exports.length; i++) {
+                        if (exports[i].name.indexOf('hookApkPath') !== -1) hookApkPathAddr = exports[i].address;
+                        if (exports[i].name.indexOf('xhook_refresh') !== -1 && !xhookRefreshAddr) xhookRefreshAddr = exports[i].address;
+                    }
+                }
+
+                if (hookApkPathAddr) {
+                    var env = Java.vm.getEnv();
+                    var apkPathJstr = env.newStringUtf(apkPath);
+                    var originPathJstr = env.newStringUtf(originPath);
+                    var hookApkPathFn = new NativeFunction(hookApkPathAddr, 'void',
+                        ['pointer', 'pointer', 'pointer', 'pointer']);
+                    hookApkPathFn(env.handle, ptr(0), apkPathJstr, originPathJstr);
+                    AndroidLog.i(TAG, 'hookApkPath: ' + apkPath + ' -> ' + originPath);
+                }
+
+                if (xhookRefreshAddr) {
+                    var xhookRefreshFn = new NativeFunction(xhookRefreshAddr, 'int', []);
+                    xhookRefreshFn();
+                    globalThis._xhookRefreshFn = xhookRefreshFn;
+                    AndroidLog.i(TAG, 'xhook_refresh called (initial)');
+                }
+            }
+        } catch(e) {
+            AndroidLog.e(TAG, 'hookApkPath error: ' + e);
+        }
+    }
+
+    // Step 3: Ensure xhookRefreshFn is available for generic bypass
+    if (!globalThis._xhookRefreshFn) {
+        try {
+            var skm = Process.findModuleByName('libSignatureKiller.so');
+            if (skm) {
+                var xra = skm.findExportByName('xhook_refresh');
+                if (xra) globalThis._xhookRefreshFn = new NativeFunction(xra, 'int', []);
+            }
+        } catch(e) {}
+    }
+
+    // Step 4: Hidden API bypass via Frida JNI
+    try {
+        var VMRuntime = Java.use('dalvik.system.VMRuntime');
+        var runtime = VMRuntime.getRuntime();
+        runtime.setHiddenApiExemptions(Java.array('java.lang.String', ['L']));
+        AndroidLog.i(TAG, 'Hidden API exemptions set');
+    } catch(e) {
+        AndroidLog.w(TAG, 'Hidden API bypass failed: ' + e);
+    }
+
+    // Step 5: Clear Parcel caches so killPM's CREATOR hook takes effect
+    try {
+        var ParcelClass = Java.use('android.os.Parcel').class;
+        var field = ParcelClass.getDeclaredField('mCreators');
+        field.setAccessible(true);
+        var map = Java.cast(field.get(null), Java.use('java.util.HashMap'));
+        map.clear();
+        AndroidLog.i(TAG, 'Parcel.mCreators cleared');
+    } catch(e) {
+        AndroidLog.w(TAG, 'mCreators clear: ' + e);
+    }
+
+    try {
+        var ParcelClass2 = Java.use('android.os.Parcel').class;
+        var field2 = ParcelClass2.getDeclaredField('sPairedCreators');
+        field2.setAccessible(true);
+        var map2 = Java.cast(field2.get(null), Java.use('java.util.HashMap'));
+        map2.clear();
+        AndroidLog.i(TAG, 'Parcel.sPairedCreators cleared');
+    } catch(e) {}
+
+    AndroidLog.i(TAG, 'SecShell pre-init complete for ' + pkgName);
+}
+
 function _hspatchMain() {
     var TAG = "HSPatch-Frida";
+
+    // SecShell pre-init: must run before SecShell loads (file hooks + hidden API)
+    // Generic: works for any SecShell-packed app (Castle, etc.)
+    try {
+        _secShellPreInit();
+    } catch(ssPreErr) {
+        try { Java.use('android.util.Log').e(TAG, 'secShellPreInit: ' + ssPreErr.message + '\nStack: ' + (ssPreErr.stack || 'none')); } catch(e2) {}
+    }
+
+    // Generic SecShell bypass: activated only when libSecShell.so is detected
+    try {
+        _secShellGenericBypass();
+    } catch(ssErr) {
+        try { Java.use('android.util.Log').e(TAG, 'secShellBypass: ' + ssErr.message); } catch(e2) {}
+    }
 
     // Diagnostic: log Frida script engine status
     try {
@@ -30,7 +1191,7 @@ function _hspatchMain() {
 
         console.log('');
         console.log('======================================================');
-        console.log('[#] HSPatch Universal Bypass Suite v3.52              [#]');
+        console.log('[#] HSPatch Universal Bypass Suite v3.57              [#]');
         console.log('======================================================');
 
         // =====================================================
@@ -98,18 +1259,141 @@ function _hspatchMain() {
 
         var Log = Java.use('android.util.Log');
 
+        // =====================================================
+        // 0b. CLASSLOADER FIX
+        //     Frida gadget may default to its own classloader which
+        //     only has frida*.dex. Switch to the app's classloader
+        //     so Java.use() can find app-specific classes (OkHttp,
+        //     Chromium, Retrofit, etc.)
+        // =====================================================
+        var _webviewClassLoader = null;
+        var _appClassLoaderSwitched = false;
+
+        function _switchToAppClassLoader() {
+            if (_appClassLoaderSwitched) return true;
+            try {
+                var _appCtxForCL = Java.use('android.app.ActivityThread').currentApplication();
+                if (_appCtxForCL) {
+                    Java.classFactory.loader = _appCtxForCL.getClassLoader();
+                    _appClassLoaderSwitched = true;
+                    Log.i(TAG, '[+] Classloader switched to app context classloader');
+                    return true;
+                }
+            } catch(e) {}
+            return false;
+        }
+
+        // First try: get classloader from Application context
+        _switchToAppClassLoader();
+
+        // If classloader switch failed, retry after delay (app may not be initialized yet)
+        if (!_appClassLoaderSwitched) {
+            Log.w(TAG, '[-] App context not ready, scheduling classloader retry...');
+            var _clRetries = 0;
+            var _clInterval = setInterval(function() {
+                _clRetries++;
+                try {
+                    Java.perform(function() {
+                        if (_switchToAppClassLoader()) {
+                            clearInterval(_clInterval);
+                        } else if (_clRetries >= 10) {
+                            clearInterval(_clInterval);
+                            // Last resort: enumerate classloaders to find one with app classes
+                            try {
+                                Java.enumerateClassLoaders({
+                                    onMatch: function(loader) {
+                                        if (_appClassLoaderSwitched) return;
+                                        try {
+                                            loader.loadClass('in.startv.hotstar.HsApplication');
+                                            Java.classFactory.loader = loader;
+                                            _appClassLoaderSwitched = true;
+                                            Log.i(TAG, '[+] Classloader switched via enumeration (app class found)');
+                                        } catch(e) {}
+                                    },
+                                    onComplete: function() {}
+                                });
+                            } catch(e) {}
+                        }
+                    });
+                } catch(e) {}
+            }, 500);
+        }
+
+        // Also discover WebView's classloader for Chromium-internal classes
+        try {
+            Java.enumerateClassLoaders({
+                onMatch: function(loader) {
+                    try {
+                        loader.loadClass('org.chromium.net.X509Util');
+                        _webviewClassLoader = loader;
+                        Log.i(TAG, '[+] Found WebView classloader with X509Util');
+                    } catch(e) {}
+                },
+                onComplete: function() {}
+            });
+        } catch(eCL2) {
+            Log.w(TAG, '[-] Classloader enumeration failed: ' + eCL2);
+        }
+
         // SSL bypass is PERMANENT — always enabled, no file toggle
         {
-            // Trust-all X509TrustManager (created once, reused everywhere)
-            var _TrustAll = Java.registerClass({
-                name: 'com.hspatch.ssl.TrustAll',
-                implements: [Java.use('javax.net.ssl.X509TrustManager')],
-                methods: {
-                    checkClientTrusted: function(chain, authType) {},
-                    checkServerTrusted: function(chain, authType) {},
-                    getAcceptedIssuers: function() { return []; }
-                }
-            });
+            // Trust-all X509ExtendedTrustManager (covers WebView/Chromium 4-param check)
+            var _TrustAll;
+            try {
+                _TrustAll = Java.registerClass({
+                    name: 'com.hspatch.ssl.TrustAll',
+                    superClass: Java.use('javax.net.ssl.X509ExtendedTrustManager'),
+                    methods: {
+                        checkClientTrusted: [{
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String'],
+                            implementation: function(chain, authType) {}
+                        }, {
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'java.net.Socket'],
+                            implementation: function(chain, authType, socket) {}
+                        }, {
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'javax.net.ssl.SSLEngine'],
+                            implementation: function(chain, authType, engine) {}
+                        }],
+                        checkServerTrusted: [{
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String'],
+                            implementation: function(chain, authType) {}
+                        }, {
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'java.net.Socket'],
+                            implementation: function(chain, authType, socket) {}
+                        }, {
+                            returnType: 'void',
+                            argumentTypes: ['[Ljava.security.cert.X509Certificate;', 'java.lang.String', 'javax.net.ssl.SSLEngine'],
+                            implementation: function(chain, authType, engine) {}
+                        }],
+                        getAcceptedIssuers: [{
+                            returnType: '[Ljava.security.cert.X509Certificate;',
+                            argumentTypes: [],
+                            implementation: function() {
+                                return Java.array('java.security.cert.X509Certificate', []);
+                            }
+                        }]
+                    }
+                });
+            } catch(extErr) {
+                // Fallback: use basic X509TrustManager if X509ExtendedTrustManager fails
+                _TrustAll = Java.registerClass({
+                    name: 'com.hspatch.ssl.TrustAll',
+                    implements: [Java.use('javax.net.ssl.X509TrustManager')],
+                    methods: {
+                        checkClientTrusted: function(chain, authType) {},
+                        checkServerTrusted: function(chain, authType) {},
+                        getAcceptedIssuers: function() {
+                            return Java.array('java.security.cert.X509Certificate', []);
+                        }
+                    }
+                });
+                Log.w(TAG, '[*] TrustAll: fallback to X509TrustManager (Extended not available)');
+            }
             var _ta = _TrustAll.$new();
 
             // Accept-all HostnameVerifier (created once)
@@ -274,6 +1558,283 @@ function _hspatchMain() {
             } catch(e) {}
 
             Log.i(TAG, '[*] SSL bypass PERMANENT: SSLContext + TrustManager + Conscrypt + OkHttp + NetSecCfg');
+
+            // =====================================================
+            // 1a-1b. WEBVIEW BoringSSL BYPASS
+            //        Chromium WebView uses its own statically-linked BoringSSL
+            //        that is NOT reached by Java SSL hooks above.
+            //        This hooks the Java WebViewClient API to suppress SSL errors.
+            // =====================================================
+            try {
+                var SslErrorHandler = Java.use('android.webkit.SslErrorHandler');
+                var WebViewClient = Java.use('android.webkit.WebViewClient');
+                WebViewClient.onReceivedSslError.implementation = function(view, handler, error) {
+                    Log.i(TAG, '[+] WebView SSL error BYPASSED: ' + error.toString());
+                    handler.proceed();
+                };
+                Log.d(TAG, '[+] WebViewClient.onReceivedSslError hooked (always proceed)');
+            } catch(eWvSsl) {
+                Log.w(TAG, '[-] WebViewClient.onReceivedSslError: ' + eWvSsl);
+            }
+
+            // Hook subclasses of WebViewClient that override onReceivedSslError
+            // by intercepting SslErrorHandler.cancel to convert it to proceed
+            try {
+                var _SslErrHandler = Java.use('android.webkit.SslErrorHandler');
+                _SslErrHandler.cancel.implementation = function() {
+                    Log.i(TAG, '[+] SslErrorHandler.cancel() -> proceed() (WebView SSL bypass)');
+                    this.proceed();
+                };
+                Log.d(TAG, '[+] SslErrorHandler.cancel hooked -> proceed');
+            } catch(eSslCancel) {
+                Log.w(TAG, '[-] SslErrorHandler.cancel hook: ' + eSslCancel);
+            }
+
+            // Force WebView to accept all certificates by hooking WebSettings
+            var _wvClassloaderCaptured = false;
+            function _captureWebViewClassloader(webView) {
+                if (_wvClassloaderCaptured || _wvHooksComplete) return;
+                try {
+                    var mProviderField = Java.use('android.webkit.WebView').class.getDeclaredField('mProvider');
+                    mProviderField.setAccessible(true);
+                    var provider = mProviderField.get(webView);
+                    if (provider) {
+                        var chromiumLoader = provider.getClass().getClassLoader();
+                        var factory = Java.ClassFactory.get(chromiumLoader);
+                        if (!_x509Hooked) {
+                            try { _hookX509Util(factory); _x509Hooked = true; } catch(e) {}
+                        }
+                        try { _hookAndroidNetworkLibrary(factory); } catch(e) {}
+                        _wvHooksComplete = true;
+                        _wvClassloaderCaptured = true;
+                        Log.i(TAG, '[+] WebView hooks installed via mProvider classloader');
+                    }
+                } catch(e) {
+                    Log.d(TAG, '[-] mProvider capture: ' + e);
+                }
+            }
+            try {
+                var _WebView = Java.use('android.webkit.WebView');
+                // Enable mixed content mode to allow HTTP resources in HTTPS pages
+                var origLoadUrl = _WebView.loadUrl.overload('java.lang.String');
+                origLoadUrl.implementation = function(url) {
+                    try {
+                        var settings = this.getSettings();
+                        // MIXED_CONTENT_ALWAYS_ALLOW = 0
+                        settings.setMixedContentMode(0);
+                    } catch(eMix) {}
+                    _captureWebViewClassloader(this);
+                    origLoadUrl.call(this, url);
+                };
+                var origLoadUrlHeaders = _WebView.loadUrl.overload('java.lang.String', 'java.util.Map');
+                origLoadUrlHeaders.implementation = function(url, headers) {
+                    try {
+                        var settings = this.getSettings();
+                        settings.setMixedContentMode(0);
+                    } catch(eMix) {}
+                    _captureWebViewClassloader(this);
+                    origLoadUrlHeaders.call(this, url, headers);
+                };
+                Log.d(TAG, '[+] WebView.loadUrl hooked (mixed content allowed)');
+            } catch(eWvLoad) {
+                Log.w(TAG, '[-] WebView.loadUrl hook: ' + eWvLoad);
+            }
+
+            // =====================================================
+            // 1a-1c. CHROMIUM X509Util BYPASS
+            //        Hooks Chromium's internal certificate verification layer.
+            //        This is what actually validates certs in WebView's native stack.
+            //        X509Util lives in WebView's classloader, not the app's.
+            // =====================================================
+            function _hookX509Util(factory) {
+                var X509Util = factory.use('org.chromium.net.X509Util');
+                try {
+                    X509Util.verifyServerCertificateChain.overloads.forEach(function(ov) {
+                        ov.implementation = function() { return 0; };
+                    });
+                    Log.d(TAG, '[+] X509Util.verifyServerCertificateChain hooked (always OK)');
+                } catch(e) { Log.w(TAG, '[-] X509Util.verifyServerCertificateChain: ' + e); }
+                try {
+                    X509Util.checkTrustByCerts.overloads.forEach(function(ov) {
+                        ov.implementation = function() { return 0; };
+                    });
+                } catch(e) {}
+            }
+
+            // Try with discovered WebView classloader first, then default, then delayed retry
+            var _x509Hooked = false;
+            if (_webviewClassLoader) {
+                try {
+                    var wvFactory = Java.ClassFactory.get(_webviewClassLoader);
+                    _hookX509Util(wvFactory);
+                    _x509Hooked = true;
+                } catch(e) {
+                    Log.w(TAG, '[-] X509Util via WebView classloader failed: ' + e);
+                }
+            }
+            if (!_x509Hooked) {
+                try {
+                    _hookX509Util(Java.classFactory);
+                    _x509Hooked = true;
+                } catch(eX509) {
+                    Log.w(TAG, '[-] X509Util not found yet, scheduling classloader scan');
+                    // Retry with classloader enumeration after WebView loads
+                    setTimeout(function() {
+                        Java.perform(function() {
+                            try {
+                                // Re-scan classloaders since WebView may have loaded
+                                Java.enumerateClassLoaders({
+                                    onMatch: function(loader) {
+                                        if (_x509Hooked) return;
+                                        try {
+                                            loader.loadClass('org.chromium.net.X509Util');
+                                            var factory = Java.ClassFactory.get(loader);
+                                            _hookX509Util(factory);
+                                            _x509Hooked = true;
+                                        } catch(e) {}
+                                    },
+                                    onComplete: function() {
+                                        if (!_x509Hooked) {
+                                            Log.w(TAG, '[-] X509Util not found in any classloader');
+                                        }
+                                    }
+                                });
+                            } catch(e2) { Log.w(TAG, '[-] X509Util delayed retry failed: ' + e2); }
+                        });
+                    }, 5000);
+                }
+            }
+
+            // Hook Android's Chromium NetworkSecurityPolicy to allow cleartext
+            try {
+                var NetSecPolicy = Java.use('android.security.NetworkSecurityPolicy');
+                NetSecPolicy.isCleartextTrafficPermitted.overload().implementation = function() { return true; };
+                try {
+                    NetSecPolicy.isCleartextTrafficPermitted.overload('java.lang.String').implementation = function(host) { return true; };
+                } catch(e) {}
+            } catch(e) {}
+
+            // =====================================================
+            // 1a-1d. CHROMIUM AndroidNetworkLibrary BYPASS
+            //        In Chrome/WebView v100+, certificate verification can go through
+            //        AndroidNetworkLibrary.verifyServerCertificates() instead of X509Util.
+            //        Also hooks X509Util.createDefaultTrustManager to return our TrustAll.
+            // =====================================================
+            function _hookAndroidNetworkLibrary(factory) {
+                try {
+                    var ANL = factory.use('org.chromium.net.AndroidNetworkLibrary');
+                    try {
+                        ANL.verifyServerCertificates.overloads.forEach(function(ov) {
+                            ov.implementation = function() {
+                                Log.d(TAG, '[+] AndroidNetworkLibrary.verifyServerCertificates BYPASSED');
+                                // Return AndroidCertVerifyResult with status=0 (OK)
+                                try {
+                                    var Result = factory.use('org.chromium.net.AndroidCertVerifyResult');
+                                    return Result.$new(0, false, Java.array('byte[]', []));
+                                } catch(e) {
+                                    // Some versions have different constructor
+                                    try {
+                                        var Result2 = factory.use('org.chromium.net.AndroidCertVerifyResult');
+                                        return Result2.$new(0);
+                                    } catch(e2) {
+                                        return ov.call(this);
+                                    }
+                                }
+                            };
+                        });
+                        Log.d(TAG, '[+] AndroidNetworkLibrary.verifyServerCertificates hooked');
+                    } catch(e) {}
+                } catch(e) {}
+            }
+
+            // Hook AndroidNetworkLibrary via known classloaders
+            if (_webviewClassLoader) {
+                try {
+                    _hookAndroidNetworkLibrary(Java.ClassFactory.get(_webviewClassLoader));
+                } catch(e) {}
+            }
+            try { _hookAndroidNetworkLibrary(Java.classFactory); } catch(e) {}
+
+            // =====================================================
+            // 1a-1e. DELAYED WEBVIEW CLASSLOADER HOOKS
+            //        WebView loads on a separate thread. By the time the initial
+            //        hooks run, the WebView classloader may not exist yet.
+            //        This schedules aggressive classloader re-scans at 3s, 8s, 15s
+            //        to catch X509Util and AndroidNetworkLibrary.
+            // =====================================================
+            var _wvHooksComplete = _x509Hooked;
+            function _delayedWebViewHooks() {
+                if (_wvHooksComplete) return;
+                try {
+                    Java.perform(function() {
+                        // Strategy 1: Get WebView classloader via WebViewFactory.sProviderInstance
+                        try {
+                            var WebViewFactory = Java.use('android.webkit.WebViewFactory');
+                            var providerField = WebViewFactory.class.getDeclaredField('sProviderInstance');
+                            providerField.setAccessible(true);
+                            var provider = providerField.get(null);
+                            if (provider) {
+                                var wvLoader = provider.getClass().getClassLoader();
+                                var factory = Java.ClassFactory.get(wvLoader);
+                                if (!_x509Hooked) {
+                                    try { _hookX509Util(factory); _x509Hooked = true; } catch(e) {}
+                                }
+                                try { _hookAndroidNetworkLibrary(factory); } catch(e) {}
+                                _wvHooksComplete = true;
+                                Log.i(TAG, '[+] WebView hooks installed via WebViewFactory classloader');
+                                return;
+                            }
+                        } catch(e) {
+                            Log.d(TAG, '[-] WebViewFactory approach: ' + e);
+                        }
+
+                        // Strategy 2: createPackageContext for WebView package
+                        try {
+                            var app = Java.use('android.app.ActivityThread').currentApplication();
+                            if (app) {
+                                var wvPkgs = ['com.google.android.webview', 'com.android.webview', 'com.google.android.trichromelibrary'];
+                                for (var pi = 0; pi < wvPkgs.length; pi++) {
+                                    try {
+                                        var ctx = app.createPackageContext(wvPkgs[pi], 3);
+                                        var wvLoader2 = ctx.getClassLoader();
+                                        var factory2 = Java.ClassFactory.get(wvLoader2);
+                                        try { factory2.use('org.chromium.net.X509Util'); } catch(e) { continue; }
+                                        if (!_x509Hooked) {
+                                            try { _hookX509Util(factory2); _x509Hooked = true; } catch(e) {}
+                                        }
+                                        try { _hookAndroidNetworkLibrary(factory2); } catch(e) {}
+                                        _wvHooksComplete = true;
+                                        Log.i(TAG, '[+] WebView hooks installed via package context: ' + wvPkgs[pi]);
+                                        return;
+                                    } catch(e) {}
+                                }
+                            }
+                        } catch(e) {}
+
+                        // Strategy 3: Enumerate classloaders (original approach)
+                        Java.enumerateClassLoaders({
+                            onMatch: function(loader) {
+                                if (_wvHooksComplete) return;
+                                try {
+                                    loader.loadClass('org.chromium.net.X509Util');
+                                    var factory = Java.ClassFactory.get(loader);
+                                    if (!_x509Hooked) {
+                                        _hookX509Util(factory);
+                                        _x509Hooked = true;
+                                    }
+                                    _hookAndroidNetworkLibrary(factory);
+                                    _wvHooksComplete = true;
+                                    Log.i(TAG, '[+] WebView hooks installed via classloader enumeration');
+                                } catch(e) {}
+                            },
+                            onComplete: function() {}
+                        });
+                    });
+                } catch(e) {}
+            }
+            setTimeout(_delayedWebViewHooks, 3000);
+            setTimeout(_delayedWebViewHooks, 8000);
+            setTimeout(_delayedWebViewHooks, 15000);
 
             // =====================================================
             // 1a-2. SECURITY ERROR DIALOG SUPPRESSION
@@ -539,11 +2100,72 @@ function _hspatchMain() {
 
         // Try immediate hook on known BoringSSL/Cronet library names
         // libwebviewchromium.so is the system WebView (Chromium) with statically-linked BoringSSL
-        // NOTE: libwebviewchromium.so removed — BoringSSL is statically linked
-        // (not exported) and scanning its massive symbol table causes SIGSEGV.
-        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so'];
+        // Using findExportByName only (safe) — some WebView builds DO export SSL symbols
+        var _nativeSslLibs = ['libssl.so', 'libsscronet.so', 'libcronet.so', 'libcronet.102.0.5005.125.so', 'libwebviewchromium.so'];
         for (var nsi = 0; nsi < _nativeSslLibs.length; nsi++) {
             _nativeSslHooked += patchNativeSSLVerify(_nativeSslLibs[nsi]);
+        }
+
+        // Scan ALL loaded modules for WebView/Chromium libs by path (APK-embedded libs
+        // have paths like "/data/app/.../base.apk!/lib/arm64-v8a/libwebviewchromium.so")
+        try {
+            var _allMods = Process.enumerateModules();
+            for (var mi = 0; mi < _allMods.length; mi++) {
+                var _modPath = _allMods[mi].path || '';
+                var _modName = _allMods[mi].name || '';
+                // Skip already-tried names and non-SSL modules
+                if (_nativeSslLibs.indexOf(_modName) !== -1) continue;
+                if (_modPath.indexOf('webviewchromium') !== -1 || _modPath.indexOf('chromium') !== -1 ||
+                    _modName.indexOf('monochrome') !== -1 || _modName.indexOf('trichrome') !== -1) {
+                    var mp = patchNativeSSLVerify(_modName);
+                    if (mp > 0) {
+                        _nativeSslHooked += mp;
+                        console.log('[+] WebView module SSL hooked: ' + _modName + ' (' + mp + ' hooks)');
+                    }
+                }
+            }
+        } catch(eModScan) {
+            console.log('[-] Module scan error: ' + eModScan);
+        }
+
+        // Global fallback: use Module.findExportByName(null, ...) to find SSL functions
+        // in ANY loaded module (catches WebView's BoringSSL if exported)
+        try {
+            var _globalSslFns = ['SSL_CTX_set_custom_verify', 'SSL_set_custom_verify',
+                                  'SSL_CTX_set_verify', 'SSL_set_verify', 'SSL_get_verify_result'];
+            var _alwaysOkCb = new NativeCallback(function(ssl, out_alert) { return 0; }, 'int', ['pointer', 'pointer']);
+            for (var gsi = 0; gsi < _globalSslFns.length; gsi++) {
+                try {
+                    var gAddr = Module.findExportByName(null, _globalSslFns[gsi]);
+                    if (gAddr) {
+                        // Check if this address is already hooked (skip libssl.so addresses)
+                        var gMod = Process.findModuleByAddress(gAddr);
+                        if (gMod && gMod.name === 'libssl.so') continue; // already hooked above
+                        var gFnName = _globalSslFns[gsi];
+                        if (gFnName === 'SSL_get_verify_result') {
+                            Interceptor.replace(gAddr, new NativeCallback(function(ssl) { return 0; }, 'long', ['pointer']));
+                        } else if (gFnName.indexOf('custom_verify') !== -1) {
+                            var origGFn = new NativeFunction(gAddr, 'void', ['pointer', 'int', 'pointer']);
+                            (function(fn, addr) {
+                                Interceptor.replace(addr, new NativeCallback(function(ctx, mode, cb) {
+                                    fn(ctx, mode, _alwaysOkCb);
+                                }, 'void', ['pointer', 'int', 'pointer']));
+                            })(origGFn, gAddr);
+                        } else {
+                            var origSFn = new NativeFunction(gAddr, 'void', ['pointer', 'int', 'pointer']);
+                            (function(fn, addr) {
+                                Interceptor.replace(addr, new NativeCallback(function(ctx, mode, cb) {
+                                    fn(ctx, 0, ptr(0)); // SSL_VERIFY_NONE
+                                }, 'void', ['pointer', 'int', 'pointer']));
+                            })(origSFn, gAddr);
+                        }
+                        _nativeSslHooked++;
+                        console.log('[+] Global SSL hook: ' + gFnName + ' in ' + (gMod ? gMod.name : 'unknown'));
+                    }
+                } catch(gse) {}
+            }
+        } catch(eGlobal) {
+            console.log('[-] Global SSL scan error: ' + eGlobal);
         }
 
         // NOTE: broad "scan ALL modules" loop REMOVED in v3.41.
@@ -551,25 +2173,35 @@ function _hspatchMain() {
         // caused SIGSEGV in Frida's ELF reader (__fseeko64 null FILE*).
         // The named libs above cover all real-world SSL scenarios.
 
-        // Watch for late-loaded SSL libs by name only (safe — no broad scan)
+        // Watch for late-loaded SSL libs by name or path (safe — no broad scan)
+        var _patchedModules = {};
         try {
-            var _patchedModules = {};
             Process.attachModuleObserver({
                 onAdded: function(mod) {
                     var name = mod.name;
+                    var path = mod.path || '';
                     if (_patchedModules[name]) return;
-                    // Only check libs whose name suggests SSL/Cronet
-                    if (name.indexOf('ssl') === -1 && name.indexOf('cronet') === -1 &&
-                        name.indexOf('boringssl') === -1) return;
+                    // Check both name AND path for SSL/Cronet/WebView indicators
+                    var isSSLRelated = (name.indexOf('ssl') !== -1 || name.indexOf('cronet') !== -1 ||
+                        name.indexOf('boringssl') !== -1 || name.indexOf('webviewchromium') !== -1 ||
+                        name.indexOf('monochrome') !== -1 || name.indexOf('trichrome') !== -1 ||
+                        path.indexOf('webviewchromium') !== -1 || path.indexOf('chromium') !== -1);
+                    if (!isSSLRelated) return;
                     if (name.indexOf('frida') !== -1 || name.indexOf('gadget') !== -1) return;
-                    try {
-                        _patchedModules[name] = true;
-                        var p = patchNativeSSLVerify(name);
-                        if (p > 0) {
-                            _nativeSslHooked += p;
-                            console.log('[+] Late-loaded SSL lib patched: ' + name + ' (' + p + ' hooks)');
-                        }
-                    } catch(lateE) {}
+                    // IMPORTANT: Defer patching — module may still be loading (linker not finished).
+                    // Immediate access to exports during dlopen causes linker CHECK failures.
+                    _patchedModules[name] = true;
+                    (function(modName) {
+                        setTimeout(function() {
+                            try {
+                                var p = patchNativeSSLVerify(modName);
+                                if (p > 0) {
+                                    _nativeSslHooked += p;
+                                    console.log('[+] Late-loaded SSL lib patched: ' + modName + ' (' + p + ' hooks)');
+                                }
+                            } catch(lateE) {}
+                        }, 1500);
+                    })(name);
                 }
             });
         } catch (e) {
@@ -583,6 +2215,52 @@ function _hspatchMain() {
         }
 
         Log.i(TAG, '[*] Native BoringSSL bypass: ' + _nativeSslHooked + ' hooks installed');
+
+        // Delayed rescan: WebView may not be loaded yet at hook time.
+        // Scan for webviewchromium module by path at 3s and 8s intervals.
+        function _delayedNativeSSLScan() {
+            try {
+                var mods = Process.enumerateModules();
+                for (var di = 0; di < mods.length; di++) {
+                    var dPath = mods[di].path || '';
+                    var dName = mods[di].name || '';
+                    if (dPath.indexOf('webviewchromium') !== -1 || dName.indexOf('webviewchromium') !== -1 ||
+                        dName.indexOf('monochrome') !== -1 || dName.indexOf('trichrome') !== -1) {
+                        if (!_patchedModules || !_patchedModules[dName]) {
+                            var dp = patchNativeSSLVerify(dName);
+                            if (dp > 0) {
+                                _nativeSslHooked += dp;
+                                if (_patchedModules) _patchedModules[dName] = true;
+                                console.log('[+] Delayed WebView native SSL: ' + dName + ' (' + dp + ' hooks)');
+                            }
+                        }
+                    }
+                }
+                // Also try global search for any new SSL exports
+                var gFns = ['SSL_CTX_set_custom_verify', 'SSL_set_custom_verify'];
+                var _okCb = new NativeCallback(function(ssl, out_alert) { return 0; }, 'int', ['pointer', 'pointer']);
+                for (var gi = 0; gi < gFns.length; gi++) {
+                    try {
+                        var gA = Module.findExportByName(null, gFns[gi]);
+                        if (gA) {
+                            var gM = Process.findModuleByAddress(gA);
+                            if (gM && gM.name !== 'libssl.so' && (!_patchedModules || !_patchedModules[gM.name + '_' + gFns[gi]])) {
+                                var origF = new NativeFunction(gA, 'void', ['pointer', 'int', 'pointer']);
+                                (function(fn, addr, cb) {
+                                    Interceptor.replace(addr, new NativeCallback(function(ctx, mode, callback) {
+                                        fn(ctx, mode, cb);
+                                    }, 'void', ['pointer', 'int', 'pointer']));
+                                })(origF, gA, _okCb);
+                                if (_patchedModules) _patchedModules[gM.name + '_' + gFns[gi]] = true;
+                                console.log('[+] Delayed global SSL: ' + gFns[gi] + ' in ' + gM.name);
+                            }
+                        }
+                    } catch(e) {}
+                }
+            } catch(e) {}
+        }
+        setTimeout(_delayedNativeSSLScan, 5000);
+        setTimeout(_delayedNativeSSLScan, 10000);
 
 
         // =====================================================
@@ -2039,8 +3717,42 @@ function _hspatchMain() {
             return host;
         }
 
+        // Payment gateway domains that should NEVER be blocked
+        var _paymentWhitelist = [
+            'razorpay.com', 'razorpay.in',
+            'juspay.in', 'juspay.io',
+            'paytm.com', 'paytmpayments.com',
+            'phonepe.com',
+            'gpay.app', 'google.com/pay',
+            'setu.co',
+            'npci.org.in',
+            'simpl.in',
+            'lazypay.in',
+            'mobikwik.com',
+            'freecharge.in',
+            'amazonpay.in',
+            'payumoney.com', 'payu.in',
+            'billdesk.com',
+            'cashfree.com',
+            'subscriptionapi.hotstar.com',
+            'api.hotstar.com/o/v1/pay',
+            'api.hotstar.com/o/v2/pay',
+            'payments.hotstar.com'
+        ];
+
+        function _isPaymentDomain(url) {
+            if (!url) return false;
+            var lower = url.toLowerCase();
+            for (var i = 0; i < _paymentWhitelist.length; i++) {
+                if (lower.indexOf(_paymentWhitelist[i]) !== -1) return true;
+            }
+            return false;
+        }
+
         function shouldBlock(url) {
             if (!trafficMonitorEnabled) return null;
+            // Never block payment gateway URLs
+            if (_isPaymentDomain(url)) return null;
 
             // Fast path: check domain hash O(1)
             var host = _extractHost(url);
@@ -2071,6 +3783,8 @@ function _hspatchMain() {
         // DNS-safe version: only checks domain-level rules (no path patterns)
         function shouldBlockDNS(hostname) {
             if (!trafficMonitorEnabled) return null;
+            // Never block payment gateway domains
+            if (_isPaymentDomain(hostname)) return null;
             var hostLower = hostname.toLowerCase();
 
             // Fast path: exact domain hash match

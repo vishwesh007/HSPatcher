@@ -46,6 +46,46 @@
     return-void
 .end method
 
+# ===== Java file copy helper =====
+.method private static copyFile(Ljava/io/File;Ljava/io/File;)Z
+    .locals 5
+
+    :try_start_copy
+    new-instance v0, Ljava/io/FileInputStream;
+    invoke-direct {v0, p0}, Ljava/io/FileInputStream;-><init>(Ljava/io/File;)V
+
+    new-instance v1, Ljava/io/FileOutputStream;
+    invoke-direct {v1, p1}, Ljava/io/FileOutputStream;-><init>(Ljava/io/File;)V
+
+    const/16 v2, 0x1000
+    new-array v2, v2, [B
+
+    :copy_loop
+    invoke-virtual {v0, v2}, Ljava/io/InputStream;->read([B)I
+    move-result v3
+    const/4 v4, -0x1
+    if-eq v3, v4, :copy_done
+
+    const/4 v4, 0x0
+    invoke-virtual {v1, v2, v4, v3}, Ljava/io/OutputStream;->write([BII)V
+    goto :copy_loop
+
+    :copy_done
+    invoke-virtual {v1}, Ljava/io/OutputStream;->close()V
+    invoke-virtual {v0}, Ljava/io/InputStream;->close()V
+
+    const/4 v0, 0x1
+    return v0
+
+    :try_end_copy
+    .catchall {:try_start_copy .. :try_end_copy} :catch_copy
+
+    :catch_copy
+    move-exception v0
+    const/4 v0, 0x0
+    return v0
+.end method
+
 # ===== Shell helper: runs command and returns stdout =====
 .method public static shellExecOutput(Ljava/lang/String;)Ljava/lang/String;
     .locals 6
@@ -867,67 +907,43 @@
     return-object v0
 
     :export_ok
-    # Try to copy to Downloads/HSPatch/<package>/ folder
-    # First get the package name for the folder structure
+    # Try to copy to Downloads/HSPatch/<package>/ using Java file I/O
     invoke-virtual {p0}, Landroid/content/Context;->getPackageName()Ljava/lang/String;
     move-result-object v7
 
-    # Build target directory: /storage/emulated/0/Download/HSPatch/<package>/
-    new-instance v4, Ljava/lang/StringBuilder;
-    invoke-direct {v4}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v5, "/storage/emulated/0/Download/HSPatch/"
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-    move-result-object v7
-
-    # mkdir -p for dedicated folder
-    new-instance v4, Ljava/lang/StringBuilder;
-    invoke-direct {v4}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v5, "mkdir -p \""
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v5, "\""
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    # Get Downloads directory via Environment API
+    sget-object v4, Landroid/os/Environment;->DIRECTORY_DOWNLOADS:Ljava/lang/String;
+    invoke-static {v4}, Landroid/os/Environment;->getExternalStoragePublicDirectory(Ljava/lang/String;)Ljava/io/File;
     move-result-object v4
-    invoke-static {v4}, Lin/startv/hotstar/ProfileManager;->shellExec(Ljava/lang/String;)V
 
-    # cp zip to dedicated folder
-    new-instance v4, Ljava/lang/StringBuilder;
-    invoke-direct {v4}, Ljava/lang/StringBuilder;-><init>()V
-    const-string v5, "cp \""
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v5, "\" \""
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v5, "/"
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v5, "\""
-    invoke-virtual {v4, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v4}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
-    move-result-object v4
-    invoke-static {v4}, Lin/startv/hotstar/ProfileManager;->shellExec(Ljava/lang/String;)V
-
-    # Check if copy exists in dedicated folder
-    new-instance v4, Ljava/io/File;
+    # Build HSPatch/<package> subfolder
     new-instance v5, Ljava/lang/StringBuilder;
     invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v0, "HSPatch/"
+    invoke-virtual {v5, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v5, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    const-string v7, "/"
-    invoke-virtual {v5, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
     move-result-object v5
-    invoke-direct {v4, v5}, Ljava/io/File;-><init>(Ljava/lang/String;)V
-    invoke-virtual {v4}, Ljava/io/File;->exists()Z
-    move-result v7
-    if-eqz v7, :keep_ext_path
 
-    # Use dedicated folder path
-    move-object v3, v5
+    # Create target directory
+    new-instance v0, Ljava/io/File;
+    invoke-direct {v0, v4, v5}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+    invoke-virtual {v0}, Ljava/io/File;->mkdirs()Z
+
+    # Target file
+    new-instance v4, Ljava/io/File;
+    invoke-direct {v4, v0, v6}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+
+    # Copy using Java I/O
+    invoke-static {v2, v4}, Lin/startv/hotstar/ProfileManager;->copyFile(Ljava/io/File;Ljava/io/File;)Z
+    move-result v5
+
+    # Check if copy succeeded
+    if-eqz v5, :keep_ext_path
+
+    # Use Downloads path
+    invoke-virtual {v4}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v3
     move-object v2, v4
 
     :keep_ext_path

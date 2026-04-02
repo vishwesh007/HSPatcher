@@ -50,8 +50,24 @@ public class AppListActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         isBackupMode = getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false);
+        applyModernSystemUi();
         buildUI();
         loadApps(false);
+    }
+
+    private void applyModernSystemUi() {
+        try {
+            getWindow().setStatusBarColor(getColor(R.color.hsp_bg));
+            getWindow().setNavigationBarColor(getColor(R.color.hsp_bg));
+
+            View decorView = getWindow().getDecorView();
+            int flags = decorView.getSystemUiVisibility();
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decorView.setSystemUiVisibility(flags);
+        } catch (Throwable ignored) {
+            // Best-effort only.
+        }
     }
 
     private void buildUI() {
@@ -76,10 +92,10 @@ public class AppListActivity extends Activity {
         titleBar.addView(backBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
         TextView title = new TextView(this);
-        boolean bkMode = getIntent().getBooleanExtra(EXTRA_BACKUP_MODE, false);
-        title.setText("📱 Extract from Installed Apps");
+        title.setText("📱 Installed Apps");
         title.setTextSize(20);
         title.setTextColor(getColor(R.color.hsp_accent_green));
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
         titleBar.addView(title, titleLp);
 
@@ -93,7 +109,8 @@ public class AppListActivity extends Activity {
         backupBtn.setOnClickListener(v -> {
             isBackupMode = !isBackupMode;
             backupBtn.setTextColor(getColor(isBackupMode ? R.color.hsp_accent_amber : R.color.hsp_text));
-            title.setText(isBackupMode ? "💾 Select App to Backup" : "📱 Extract from Installed Apps");
+            title.setText(isBackupMode ? "💾 Backup Installed App" : "📱 Installed Apps");
+            statusText.setText(isBackupMode ? "Tap an app to return original APK paths" : "Tap an app to extract to temp workspace");
         });
         titleBar.addView(backupBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
@@ -203,8 +220,9 @@ public class AppListActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
         row.setClickable(true);
+        row.setFocusable(true);
 
-        row.setBackgroundResource(R.drawable.bg_card);
+        row.setBackgroundResource(R.drawable.bg_tools_option);
 
         LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -266,15 +284,21 @@ public class AppListActivity extends Activity {
 
         // Extract button (arrow icon)
         TextView extractBtn = new TextView(this);
-        extractBtn.setText("→");
-        extractBtn.setTextSize(20);
+        extractBtn.setText(isBackupMode ? "BACKUP" : "OPEN");
+        extractBtn.setTextSize(10);
         extractBtn.setTextColor(getColor(R.color.hsp_accent_green));
+        extractBtn.setTypeface(null, android.graphics.Typeface.BOLD);
+        extractBtn.setBackgroundResource(R.drawable.bg_chip);
         extractBtn.setGravity(Gravity.CENTER);
-        extractBtn.setPadding(dp(8), 0, 0, 0);
-        row.addView(extractBtn, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        extractBtn.setPadding(dp(8), dp(4), dp(8), dp(4));
+        row.addView(extractBtn, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // Click handler
         row.setOnClickListener(v -> onAppSelected(app));
+        row.setAlpha(0f);
+        row.setTranslationY(dp(8));
+        row.animate().alpha(1f).translationY(0f).setDuration(180).start();
 
         return row;
     }

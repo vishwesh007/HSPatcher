@@ -51,6 +51,10 @@
     new-instance v10, Landroid/widget/ScrollView;
     invoke-direct {v10, p0}, Landroid/widget/ScrollView;-><init>(Landroid/content/Context;)V
 
+    # Android 16 edge-to-edge fix
+    const/4 v0, 0x1
+    invoke-virtual {v10, v0}, Landroid/view/View;->setFitsSystemWindows(Z)V
+
     # Root Layout
     new-instance v1, Landroid/widget/LinearLayout;
     invoke-direct {v1, p0}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V

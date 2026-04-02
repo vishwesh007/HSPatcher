@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Animated transition from idle → loaded state -->
+<set xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <objectAnimator
+        android:propertyName="scaleX"
+        android:duration="500"
+        android:valueType="floatType"
+        android:valueFrom="1.0"
+        android:valueTo="1.2"
+        android:interpolator="@android:interpolator/decelerate_cubic" />
+
+    <objectAnimator
+        android:propertyName="scaleY"
+        android:duration="500"
+        android:valueType="floatType"
+        android:valueFrom="1.0"
+        android:valueTo="1.2"
+        android:interpolator="@android:interpolator/decelerate_cubic" />
+
+    <objectAnimator
+        android:propertyName="rotation"
+        android:duration="600"
+        android:valueType="floatType"
+        android:valueFrom="0"
+        android:valueTo="360"
+        android:interpolator="@android:interpolator/linear" />
+
+</set>

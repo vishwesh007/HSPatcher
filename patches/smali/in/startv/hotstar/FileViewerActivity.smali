@@ -471,6 +471,10 @@
     const v0, -0xf2eee9
     invoke-virtual {v1, v0}, Landroid/widget/LinearLayout;->setBackgroundColor(I)V
 
+    # Android 16 edge-to-edge fix
+    const/4 v0, 0x1
+    invoke-virtual {v1, v0}, Landroid/view/View;->setFitsSystemWindows(Z)V
+
     # TOOLBAR 64dp
     new-instance v2, Landroid/widget/LinearLayout;
     invoke-direct {v2, v12}, Landroid/widget/LinearLayout;-><init>(Landroid/content/Context;)V
