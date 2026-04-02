@@ -2322,25 +2322,24 @@ public class PatchEngine {
                     log("   ⚠️ No SignatureKiller .so for ABI: " + abi);
                     continue;
                 }
-                byte[] soData = readAllBytes(new FileInputStream(soFile));
-                addZipEntry(zos, new ByteArrayInputStream(soData),
-                           "lib/" + abi + "/libSignatureKiller.so");
+                try (FileInputStream soInput = new FileInputStream(soFile)) {
+                    addZipEntry(zos, soInput, "lib/" + abi + "/libSignatureKiller.so");
+                }
                 log("   🔒 SignatureKiller .so added for " + abi +
-                    " (" + (soData.length / 1024) + " KB)");
+                    " (" + (soFile.length() / 1024) + " KB)");
                 soAdded++;
             }
 
             // Embed original APK as assets/SignatureKiller/origin.apk
             // This is read by killOpen() at runtime — native open() calls are
             // redirected to this copy so integrity checks see the original APK.
-            byte[] originData = readAllBytes(new FileInputStream(originalApk));
             ZipEntry originEntry = new ZipEntry("assets/SignatureKiller/origin.apk");
             originEntry.setMethod(ZipEntry.DEFLATED); // compress to save space
             zos.putNextEntry(originEntry);
-            zos.write(originData);
+            copyStream(new FileInputStream(originalApk), zos, false);
             zos.closeEntry();
             log("   📦 Original APK embedded as origin.apk (" +
-                (originData.length / 1024 / 1024) + " MB)");
+                (originalApk.length() / 1024 / 1024) + " MB)");
 
             if (soAdded > 0) {
                 log("   ✅ SignatureKiller embedded for " + soAdded + " ABI(s)");

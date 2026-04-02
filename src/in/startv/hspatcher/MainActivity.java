@@ -47,6 +47,9 @@ import java.util.Random;
 
 public class MainActivity extends Activity {
 
+    private static final int MAX_LOG_CHARS = 24000;
+    private static final int MAX_FATAL_STACK_LINES = 12;
+
     private static final int PICK_APK = 1001;
     private static final int STORAGE_PERM = 1002;
     private static final int MANAGE_STORAGE = 1003;
@@ -1509,8 +1512,13 @@ public class MainActivity extends Activity {
                     log("   Error: " + msg);
                 } else {
                     log("\u274c FATAL: " + e.getClass().getName() + ": " + msg);
-                    for (StackTraceElement st : e.getStackTrace()) {
-                        log("   " + st.toString());
+                    StackTraceElement[] stack = e.getStackTrace();
+                    int limit = Math.min(stack.length, MAX_FATAL_STACK_LINES);
+                    for (int i = 0; i < limit; i++) {
+                        log("   " + stack[i].toString());
+                    }
+                    if (stack.length > limit) {
+                        log("   ... " + (stack.length - limit) + " more line(s)");
                     }
                 }
                 mainHandler.post(() -> {
@@ -2121,6 +2129,10 @@ public class MainActivity extends Activity {
         Log.d("HSPatcher", msg);
         mainHandler.post(() -> {
             logOutput.append(msg + "\n");
+            int excess = logOutput.length() - MAX_LOG_CHARS;
+            if (excess > 0) {
+                logOutput.getEditableText().delete(0, excess);
+            }
             if (!pendingLogAutoScroll) {
                 pendingLogAutoScroll = true;
                 logScroll.removeCallbacks(logAutoScrollRunnable);
