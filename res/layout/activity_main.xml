@@ -30,7 +30,7 @@
                 android:layout_height="52dp"
                 android:background="@drawable/bg_signal_badge"
                 android:gravity="center"
-                android:text="HP"
+                android:text="@string/app_badge_letters"
                 android:textAllCaps="true"
                 android:textColor="@color/hsp_text"
                 android:textSize="14sp"
@@ -57,7 +57,7 @@
                     android:id="@+id/title_text"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="HSPatcher"
+                    android:text="@string/app_name"
                     android:textSize="29sp"
                     android:textColor="@color/hsp_text"
                     android:textStyle="bold" />

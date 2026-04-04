@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">HSPatcher</string>
+    <string name="app_name">Frida Packer</string>
+    <string name="app_badge_letters">FP</string>
+    <string name="check_github_updates">GitHub Release</string>
+    <string name="check_github_updates_title">Check for updates</string>
+    <string name="check_github_updates_desc">Check GitHub for the latest Frida Packer release</string>
 </resources>

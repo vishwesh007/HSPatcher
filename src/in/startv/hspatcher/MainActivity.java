@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.SharedPreferences;
 import android.util.Log;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -36,7 +38,6 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.content.SharedPreferences;
 
 import java.io.*;
 import java.text.SimpleDateFormat;
@@ -47,6 +48,46 @@ import java.util.Locale;
 import java.util.Random;
 
 public class MainActivity extends Activity {
+
+    private static final String APP_GITHUB_REPO = "vishwesh007/HSPatcher";
+
+    private static final String PREFS_NAME = "hspatcher_prefs";
+    private static final String APP_SETTINGS_PREFS_NAME = "Settings";
+    private static final String PREF_APP_ORIENTATION_MODE = "app_orientation_mode";
+    private static final int ORIENTATION_MODE_PORTRAIT = 0;
+    private static final int ORIENTATION_MODE_LANDSCAPE = 1;
+    private static final String PREF_CERT_NAME = "ca_cert_name";
+    private static final String PREF_WALKTHROUGH_SHOWN = "walkthrough_shown";
+    private static final String WALKTHROUGH_HINT = "You can reopen this guide from the tools button any time.";
+    private static final String[] WALKTHROUGH_ICONS = {"🧰", "🧩", "🛠", "🔐", "🚀"};
+    private static final String[] WALKTHROUGH_TITLES = {
+        "Start from Patch Workshop",
+        "Select the APK or app",
+        "Patch or open the workspace",
+        "Rebuild, sign, and reinstall",
+        "Keep support tools close"
+    };
+    private static final String[] WALKTHROUGH_BODIES = {
+        "This home screen is the fast lane. Pick an APK, extract one from an installed app, or jump into the utility deck from the tools button.",
+        "Use Select APK for a file you already have, or Extract From Installed App when you want to pull the target directly from the device before modifying it.",
+        "APK Workspace opens the editor pipeline for deep changes. It is the right path for decode, smali edits, raw assets, rebuild, and install-ready output.",
+        "After changes are done, use the built-in signer and install flow so the patched APK is aligned, signed, and ready to go back onto the phone.",
+        "The tools sheet also gives you DB Editor, patched-app maintenance, GitHub release checks, Play update helpers, and this walkthrough whenever you need a refresher."
+    };
+    private static final int[] WALKTHROUGH_ACCENTS = {
+        0xFF43D9C7,
+        0xFF59B8FF,
+        0xFF9EF01A,
+        0xFFFFB84D,
+        0xFF7C8CFF
+    };
+
+    private static final String[] XED_PACKAGES = new String[] {
+        "com.rk.xededitor.debug",
+        "com.rk.xededitor"
+    };
+    private static final String MERGED_XED_ACTIVITY = "com.rk.activities.main.MainActivity";
+    private static final String XED_GITHUB_URL = "https://github.com/Xed-Editor/Xed-Editor";
 
     private static final int MAX_LOG_CHARS = 24000;
     private static final int MAX_FATAL_STACK_LINES = 12;
@@ -130,6 +171,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        applyPreferredOrientation();
         setContentView(R.layout.activity_main);
         mainHandler = new Handler(Looper.getMainLooper());
 
@@ -195,6 +237,8 @@ public class MainActivity extends Activity {
         requestStoragePermission();
         requestNotificationPermissionIfNeeded();
         setupPatchArcade();
+        mainHandler.postDelayed(this::maybeShowWalkthrough, 650);
+        GithubReleaseChecker.checkForUpdates(this, false, APP_GITHUB_REPO);
 
         // Auto-load APK if passed via intent
         String intentPath = getIntent().getStringExtra("apk_path");
@@ -219,25 +263,49 @@ public class MainActivity extends Activity {
 
     private void showToolsMenu() {
         View root = getLayoutInflater().inflate(R.layout.dialog_tools, null);
+        View walkthrough = root.findViewById(R.id.dialog_tools_walkthrough);
+        View apkEditor = root.findViewById(R.id.dialog_tools_apk_editor);
         View signer = root.findViewById(R.id.dialog_tools_signer);
         View dbEditor = root.findViewById(R.id.dialog_tools_db);
+        View xedEditor = root.findViewById(R.id.dialog_tools_xed);
+        View githubUpdate = root.findViewById(R.id.dialog_tools_github_update);
         View playStore = root.findViewById(R.id.dialog_tools_playstore);
         View patchedApps = root.findViewById(R.id.dialog_tools_patched_apps);
         View credits = root.findViewById(R.id.dialog_tools_credits);
+        View apkEditorIcon = root.findViewById(R.id.dialog_tools_apk_editor_icon);
         View signerIcon = root.findViewById(R.id.dialog_tools_signer_icon);
         View dbIcon = root.findViewById(R.id.dialog_tools_db_icon);
+        View xedIcon = root.findViewById(R.id.dialog_tools_xed_icon);
+        View githubUpdateIcon = root.findViewById(R.id.dialog_tools_github_update_icon);
         View playIcon = root.findViewById(R.id.dialog_tools_play_icon);
         View patchedIcon = root.findViewById(R.id.dialog_tools_patched_icon);
         View creditsIcon = root.findViewById(R.id.dialog_tools_credits_icon);
+        View walkthroughIcon = root.findViewById(R.id.dialog_tools_walkthrough_icon);
+        View apkEditorOk = root.findViewById(R.id.dialog_tools_apk_editor_ok);
         View signerOk = root.findViewById(R.id.dialog_tools_signer_ok);
         View dbOk = root.findViewById(R.id.dialog_tools_db_ok);
+        View xedOk = root.findViewById(R.id.dialog_tools_xed_ok);
+        View githubUpdateOk = root.findViewById(R.id.dialog_tools_github_update_ok);
         View playOk = root.findViewById(R.id.dialog_tools_play_ok);
         View patchedOk = root.findViewById(R.id.dialog_tools_patched_ok);
         View creditsOk = root.findViewById(R.id.dialog_tools_credits_ok);
+        View walkthroughOk = root.findViewById(R.id.dialog_tools_walkthrough_ok);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
             .setView(root)
             .create();
+
+        walkthrough.setOnClickListener(v -> {
+            dialog.dismiss();
+            showWalkthrough(true);
+        });
+
+        apkEditor.setOnClickListener(v -> {
+            dialog.dismiss();
+            Intent intent = new Intent(this, ApkEditorActivity.class);
+            intent.putExtra("hsp_direct_jar_workflow", true);
+            startActivity(intent);
+        });
 
         signer.setOnClickListener(v -> {
             dialog.dismiss();
@@ -247,6 +315,16 @@ public class MainActivity extends Activity {
         dbEditor.setOnClickListener(v -> {
             dialog.dismiss();
             startActivity(new Intent(this, DbEditorActivity.class));
+        });
+
+        xedEditor.setOnClickListener(v -> {
+            dialog.dismiss();
+            launchXedEditorAppOrGitHub();
+        });
+
+        githubUpdate.setOnClickListener(v -> {
+            dialog.dismiss();
+            GithubReleaseChecker.checkForUpdates(this, true, APP_GITHUB_REPO);
         });
 
         playStore.setOnClickListener(v -> {
@@ -264,9 +342,11 @@ public class MainActivity extends Activity {
             startActivity(new Intent(this, CreditsActivity.class));
         });
 
-        dialog.setOnShowListener(d -> animateToolsDialog(root, signer, dbEditor, playStore,
-            patchedApps, credits, signerIcon, dbIcon, playIcon, patchedIcon, creditsIcon,
-            signerOk, dbOk, playOk, patchedOk, creditsOk));
+        dialog.setOnShowListener(d -> animateToolsDialog(root, apkEditor, signer, dbEditor, xedEditor, githubUpdate,
+            playStore, patchedApps, credits, walkthrough, apkEditorIcon, signerIcon, dbIcon, xedIcon,
+            githubUpdateIcon, playIcon, patchedIcon, creditsIcon, walkthroughIcon, apkEditorOk, signerOk,
+            dbOk, xedOk, githubUpdateOk, playOk, patchedOk, creditsOk,
+            walkthroughOk));
         dialog.show();
 
         if (dialog.getWindow() != null) {
@@ -276,6 +356,162 @@ public class MainActivity extends Activity {
             lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.94f);
             dialog.getWindow().setAttributes(lp);
         }
+    }
+
+    private void maybeShowWalkthrough() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        if (!prefs.getBoolean(PREF_WALKTHROUGH_SHOWN, false) && !isFinishing()) {
+            showWalkthrough(false);
+        }
+    }
+
+    private void showWalkthrough(boolean manualOpen) {
+        View root = getLayoutInflater().inflate(R.layout.dialog_app_walkthrough, null);
+        TextView title = root.findViewById(R.id.walkthrough_title);
+        TextView subtitle = root.findViewById(R.id.walkthrough_subtitle);
+        TextView icon = root.findViewById(R.id.walkthrough_icon);
+        TextView badge = root.findViewById(R.id.walkthrough_step_badge);
+        TextView stepTitle = root.findViewById(R.id.walkthrough_step_title);
+        TextView stepBody = root.findViewById(R.id.walkthrough_step_body);
+        TextView hint = root.findViewById(R.id.walkthrough_hint);
+        LinearLayout card = root.findViewById(R.id.walkthrough_card);
+        Button skip = root.findViewById(R.id.walkthrough_skip);
+        Button next = root.findViewById(R.id.walkthrough_next);
+
+        View[] dots = new View[] {
+            root.findViewById(R.id.walkthrough_dot_1),
+            root.findViewById(R.id.walkthrough_dot_2),
+            root.findViewById(R.id.walkthrough_dot_3),
+            root.findViewById(R.id.walkthrough_dot_4),
+            root.findViewById(R.id.walkthrough_dot_5)
+        };
+
+        title.setText(manualOpen ? getAppDisplayName() + " walkthrough" : "Welcome to " + getAppDisplayName());
+        subtitle.setText(manualOpen
+            ? "A quick tour of the patch flow so you can jump back in without hunting through menus."
+            : "A fast guided run through the patch flow: pick a target, open the workspace, rebuild, sign, and install.");
+        hint.setText(WALKTHROUGH_HINT);
+
+        final int[] stepIndex = {0};
+        final Runnable[] pulseLoop = new Runnable[1];
+
+        Runnable bindStep = new Runnable() {
+            @Override
+            public void run() {
+                int index = stepIndex[0];
+                icon.setText(WALKTHROUGH_ICONS[index]);
+                badge.setText("STEP " + (index + 1) + " / " + WALKTHROUGH_TITLES.length);
+                stepTitle.setText(WALKTHROUGH_TITLES[index]);
+                stepBody.setText(WALKTHROUGH_BODIES[index]);
+                badge.setTextColor(WALKTHROUGH_ACCENTS[index]);
+                icon.setTextColor(WALKTHROUGH_ACCENTS[index]);
+
+                for (int i = 0; i < dots.length; i++) {
+                    dots[i].setAlpha(i == index ? 1f : 0.35f);
+                    dots[i].getLayoutParams().width = (int) (getResources().getDisplayMetrics().density * (i == index ? 28 : 10));
+                    dots[i].requestLayout();
+                    dots[i].setBackgroundColor(i == index ? WALKTHROUGH_ACCENTS[index] : 0x5534D2F3);
+                }
+
+                next.setText(index == WALKTHROUGH_TITLES.length - 1 ? "Start patching" : "Next");
+                card.setAlpha(0f);
+                card.setTranslationX(40f);
+                card.animate().alpha(1f).translationX(0f).setDuration(240).setInterpolator(new DecelerateInterpolator()).start();
+            }
+        };
+
+        pulseLoop[0] = new Runnable() {
+            private boolean expanded;
+
+            @Override
+            public void run() {
+                expanded = !expanded;
+                float scale = expanded ? 1.08f : 0.94f;
+                icon.animate().scaleX(scale).scaleY(scale).setDuration(700).setInterpolator(new AccelerateDecelerateInterpolator()).start();
+                mainHandler.postDelayed(this, 760);
+            }
+        };
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+            .setView(root)
+            .create();
+
+        dialog.setOnShowListener(d -> {
+            bindStep.run();
+            mainHandler.post(pulseLoop[0]);
+            root.setAlpha(0f);
+            root.setTranslationY(32f);
+            root.animate().alpha(1f).translationY(0f).setDuration(260).setInterpolator(new OvershootInterpolator(0.9f)).start();
+        });
+
+        dialog.setOnDismissListener(d -> {
+            mainHandler.removeCallbacks(pulseLoop[0]);
+            icon.animate().cancel();
+            icon.setScaleX(1f);
+            icon.setScaleY(1f);
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(PREF_WALKTHROUGH_SHOWN, true).apply();
+        });
+
+        skip.setOnClickListener(v -> dialog.dismiss());
+        next.setOnClickListener(v -> {
+            if (stepIndex[0] >= WALKTHROUGH_TITLES.length - 1) {
+                dialog.dismiss();
+                return;
+            }
+            stepIndex[0] += 1;
+            bindStep.run();
+        });
+
+        dialog.show();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            dialog.getWindow().setDimAmount(0.78f);
+            WindowManager.LayoutParams lp = dialog.getWindow().getAttributes();
+            lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.94f);
+            dialog.getWindow().setAttributes(lp);
+        }
+    }
+
+    private void launchXedEditorAppOrGitHub() {
+        if (launchXedEditorApp()) {
+            return;
+        }
+
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(XED_GITHUB_URL)));
+            Toast.makeText(this, "Xed Editor not installed. Opening GitHub.", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Xed Editor not installed", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private boolean launchXedEditorApp() {
+        Intent mergedIntent = new Intent();
+        mergedIntent.setClassName(getPackageName(), MERGED_XED_ACTIVITY);
+        mergedIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (mergedIntent.resolveActivity(getPackageManager()) != null) {
+            try {
+                startActivity(mergedIntent);
+                Toast.makeText(this, "Opening Xed Editor", Toast.LENGTH_SHORT).show();
+                return true;
+            } catch (Exception ignored) {
+            }
+        }
+
+        try {
+            for (String xedPackage : XED_PACKAGES) {
+                Intent launchIntent = getPackageManager().getLaunchIntentForPackage(xedPackage);
+                if (launchIntent == null) {
+                    continue;
+                }
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(launchIntent);
+                Toast.makeText(this, "Opening Xed Editor", Toast.LENGTH_SHORT).show();
+                return true;
+            }
+        } catch (Exception e) {
+        }
+        return false;
     }
 
     private void animateToolsDialog(View root, View... cards) {
@@ -486,6 +722,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        applyPreferredOrientation();
         if (isPatching) {
             startPatchEntertainment();
             setPatchArcadeActive(true);
@@ -506,6 +743,17 @@ public class MainActivity extends Activity {
                     doInstall();
                 }
             }, 500);
+        }
+    }
+
+    private void applyPreferredOrientation() {
+        SharedPreferences appSettings = getSharedPreferences(APP_SETTINGS_PREFS_NAME, MODE_PRIVATE);
+        int orientationMode = appSettings.getInt(PREF_APP_ORIENTATION_MODE, ORIENTATION_MODE_PORTRAIT);
+        int requested = orientationMode == ORIENTATION_MODE_LANDSCAPE
+            ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            : ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT;
+        if (getRequestedOrientation() != requested) {
+            setRequestedOrientation(requested);
         }
     }
 
@@ -1271,7 +1519,7 @@ public class MainActivity extends Activity {
         if (selectedApkPatchedVersion != null) {
             new AlertDialog.Builder(this)
                 .setTitle("\u26a0\ufe0f Already Patched")
-                .setMessage("This APK was previously patched by HSPatcher (v"
+                .setMessage("This APK was previously patched by " + getAppDisplayName() + " (v"
                     + selectedApkPatchedVersion + ").\n\n"
                     + "Re-patching may cause:\n"
                     + "\u2022 App crashes from duplicate hooks\n"
@@ -1315,7 +1563,7 @@ public class MainActivity extends Activity {
                     .setInterpolator(new OvershootInterpolator(1.5f)).start();
             } catch (Throwable ignored) {}
 
-            log("⚡ HSPatcher " + getDisplayVersionLabel() + " — Starting one-click patch");
+            log("⚡ " + getAppDisplayName() + " " + getDisplayVersionLabel() + " — Starting one-click patch");
             log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
             new Thread(() -> {
@@ -1505,7 +1753,7 @@ public class MainActivity extends Activity {
                 String msg = e.getMessage();
                 if (msg != null && msg.startsWith("APK_ALREADY_PATCHED")) {
                     log("");
-                    log("\u26d4 ABORTED: This APK is already patched by HSPatcher.");
+                    log("\u26d4 ABORTED: This APK is already patched by " + getAppDisplayName() + ".");
                     log("   Please use the ORIGINAL (unmodified) APK file.");
                     log("   If you extracted this from an installed app, it was already patched.");
                                 } else if (e instanceof OutOfMemoryError) {
@@ -1549,7 +1797,7 @@ public class MainActivity extends Activity {
         // Check install from unknown sources permission (Android 8+)
         if (Build.VERSION.SDK_INT >= 26) {
             if (!getPackageManager().canRequestPackageInstalls()) {
-                log("⚠️ Install from unknown sources not enabled for HSPatcher");
+                log("⚠️ Install from unknown sources not enabled for " + getAppDisplayName());
                 log("↪ Opening settings to grant permission...");
                 try {
                     Intent intent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
@@ -1767,7 +2015,7 @@ public class MainActivity extends Activity {
             apkIn.close();
 
             // Use BroadcastReceiver for session callback (required on Android 14+)
-            Intent callbackIntent = new Intent("in.startv.hspatcher.INSTALL_STATUS");
+            Intent callbackIntent = new Intent(getPackageName() + ".INSTALL_STATUS");
             callbackIntent.setPackage(getPackageName());
             android.app.PendingIntent pi = android.app.PendingIntent.getBroadcast(
                 this, sessionId, callbackIntent,
@@ -2226,10 +2474,11 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ======================== CA CERTIFICATE MANAGEMENT ========================
+    private String getAppDisplayName() {
+        return getString(R.string.app_name);
+    }
 
-    private static final String PREFS_NAME = "hspatcher_prefs";
-    private static final String PREF_CERT_NAME = "ca_cert_name";
+    // ======================== CA CERTIFICATE MANAGEMENT ========================
 
     private File getCaCertFile() {
         return new File(getFilesDir(), "user_ca.crt");

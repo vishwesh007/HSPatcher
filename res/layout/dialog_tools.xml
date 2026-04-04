@@ -1,12 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/dialog_tools_root"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@drawable/bg_dialog_tools_shell"
     android:clipToPadding="false"
-    android:orientation="vertical"
-    android:padding="22dp">
+    android:fillViewport="true"
+    android:overScrollMode="ifContentScrolls"
+    android:scrollbars="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_dialog_tools_shell"
+        android:clipToPadding="false"
+        android:orientation="vertical"
+        android:padding="22dp">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -100,6 +108,178 @@
         android:textSize="10sp"
         android:textStyle="bold"
         android:letterSpacing="0.14" />
+
+    <LinearLayout
+        android:id="@+id/dialog_tools_walkthrough"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:background="@drawable/bg_tools_option"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:minHeight="86dp"
+        android:orientation="horizontal"
+        android:padding="16dp">
+
+        <View
+            android:layout_width="6dp"
+            android:layout_height="42dp"
+            android:background="@drawable/btn_primary_signer" />
+
+        <TextView
+            android:id="@+id/dialog_tools_walkthrough_icon"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:text="✨"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="GUIDED FLOW"
+                android:textAllCaps="true"
+                android:textColor="@color/hsp_accent_blue"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="App walkthrough"
+                android:textColor="@color/hsp_text"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="See the patch flow from APK selection through rebuild, signing, and install"
+                android:textColor="@color/hsp_text_muted"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=">"
+            android:textColor="@color/hsp_text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/dialog_tools_walkthrough_ok"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_chip"
+            android:paddingLeft="8dp"
+            android:paddingTop="2dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="2dp"
+            android:text="GUIDE"
+            android:textColor="@color/hsp_accent_blue"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/dialog_tools_apk_editor"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:background="@drawable/bg_tools_option"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:minHeight="86dp"
+        android:orientation="horizontal"
+        android:padding="16dp">
+
+        <View
+            android:layout_width="6dp"
+            android:layout_height="42dp"
+            android:background="@drawable/btn_primary_teal" />
+
+        <TextView
+            android:id="@+id/dialog_tools_apk_editor_icon"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:text="🧩"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="APK WORKSPACE"
+                android:textAllCaps="true"
+                android:textColor="@color/hsp_accent_teal"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="APK Editor"
+                android:textColor="@color/hsp_text"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="Decompile, browse files, edit smali and raw assets, rebuild, sign, and install"
+                android:textColor="@color/hsp_text_muted"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=">"
+            android:textColor="@color/hsp_text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/dialog_tools_apk_editor_ok"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_chip"
+            android:paddingLeft="8dp"
+            android:paddingTop="2dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="2dp"
+            android:text="NEW"
+            android:textColor="@color/hsp_accent_teal"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 
     <LinearLayout
         android:id="@+id/dialog_tools_signer"
@@ -273,6 +453,92 @@
             android:textStyle="bold" />
     </LinearLayout>
 
+    <LinearLayout
+        android:id="@+id/dialog_tools_xed"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/bg_tools_option"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:minHeight="86dp"
+        android:orientation="horizontal"
+        android:padding="16dp">
+
+        <View
+            android:layout_width="6dp"
+            android:layout_height="42dp"
+            android:background="@drawable/btn_primary_teal" />
+
+        <TextView
+            android:id="@+id/dialog_tools_xed_icon"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:text="✍"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="CODE EDITOR"
+                android:textAllCaps="true"
+                android:textColor="@color/hsp_accent_teal"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Xed Editor"
+                android:textColor="@color/hsp_text"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="Launch the upstream code editor for richer text and source-file editing"
+                android:textColor="@color/hsp_text_muted"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=">"
+            android:textColor="@color/hsp_text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/dialog_tools_xed_ok"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_chip"
+            android:paddingLeft="8dp"
+            android:paddingTop="2dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="2dp"
+            android:text="OPEN"
+            android:textColor="@color/hsp_accent_teal"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -371,6 +637,92 @@
     </LinearLayout>
 
     <LinearLayout
+        android:id="@+id/dialog_tools_github_update"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/bg_tools_option"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:minHeight="86dp"
+        android:orientation="horizontal"
+        android:padding="16dp">
+
+        <View
+            android:layout_width="6dp"
+            android:layout_height="42dp"
+            android:background="@drawable/btn_primary_teal" />
+
+        <TextView
+            android:id="@+id/dialog_tools_github_update_icon"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center"
+            android:text="⬆"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="UPDATES"
+                android:textAllCaps="true"
+                android:textColor="@color/hsp_accent_blue"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/check_github_updates"
+                android:textColor="@color/hsp_text"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="@string/check_github_updates_desc"
+                android:textColor="@color/hsp_text_muted"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=">"
+            android:textColor="@color/hsp_text"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/dialog_tools_github_update_ok"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_chip"
+            android:paddingLeft="8dp"
+            android:paddingTop="2dp"
+            android:paddingRight="8dp"
+            android:paddingBottom="2dp"
+            android:text="CHECK"
+            android:textColor="@color/hsp_accent_blue"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
         android:id="@+id/dialog_tools_patched_apps"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -427,7 +779,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="3dp"
-                android:text="Detect HSPatcher installs and update them from Play in one flow"
+                android:text="Detect Frida Packer installs and update them from Play in one flow"
                 android:textColor="@color/hsp_text_muted"
                 android:textSize="12sp" />
         </LinearLayout>
@@ -553,12 +905,13 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="end"
-        android:layout_marginTop="12dp"
-        android:text="Fast patching, direct downloads, and cleaner project visibility"
-        android:textColor="@color/hsp_text_faint"
-        android:textSize="11sp" />
-</LinearLayout>
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:layout_marginTop="12dp"
+            android:text="Fast patching, direct downloads, and cleaner project visibility"
+            android:textColor="@color/hsp_text_faint"
+            android:textSize="11sp" />
+    </LinearLayout>
+</ScrollView>

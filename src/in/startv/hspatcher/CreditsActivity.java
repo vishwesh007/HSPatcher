@@ -71,7 +71,7 @@ public class CreditsActivity extends Activity {
         main.addView(title);
 
         TextView sub = new TextView(this);
-        sub.setText("HSPatcher 3.60 combines Play Store downloads, split merge, Frida-based patching, persistent signing, patched-app updates, large-APK memory fixes, and stronger error recovery in one app.");
+        sub.setText("Frida Packer 3.62 combines Play Store downloads, split merge, Frida-based patching, persistent signing, patched-app updates, large-APK memory fixes, GitHub release checks, and stronger error recovery in one app.");
         sub.setTextSize(13f);
         sub.setTextColor(getColor(R.color.hsp_text_muted));
         sub.setLineSpacing(0f, 1.1f);

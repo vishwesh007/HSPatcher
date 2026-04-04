@@ -1,5 +1,14 @@
 # HSPatcher Changelog
 
+## v3.62 - 2026-04-04: Frida Packer Rename + GitHub Release Checks
+
+### Summary
+- Renamed the visible app branding from HSPatcher to Frida Packer across the launcher label and core root-app UI.
+- Added a root-app GitHub release checker that can be triggered from the tools sheet and also runs on a launch cooldown in the background.
+- Updated the patch marker version from 3.61.1 to 3.62 and prepared a fresh local signed release build.
+
+---
+
 ## v3.61.1 - 2026-04-02: Local Rerelease After CI Signing Bug
 
 ### Summary

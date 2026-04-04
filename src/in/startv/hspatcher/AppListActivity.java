@@ -558,7 +558,7 @@ public class AppListActivity extends Activity {
         if (hasApps) return;
         if (allApps.isEmpty()) {
             emptyState.setText(patchedOnlyMode
-                ? "No HSPatcher-installed apps were detected on this device yet."
+                ? "No Frida Packer-installed apps were detected on this device yet."
                 : "No apps were returned by the package scan. Try enabling system apps or refresh the screen.");
             return;
         }
@@ -586,7 +586,7 @@ public class AppListActivity extends Activity {
 
     private String getHeroSubtitle() {
         if (directPlayUpdateMode) {
-            return "Review HSPatcher-managed installs and jump straight into the Play update handoff with clean package metadata.";
+            return "Review Frida Packer-managed installs and jump straight into the Play update handoff with clean package metadata.";
         }
         if (patchedOnlyMode) {
             return "Filter the installed library down to patched targets so updates and maintenance stay fast and deliberate.";
@@ -599,7 +599,7 @@ public class AppListActivity extends Activity {
 
     private String getListHeaderText() {
         if (directPlayUpdateMode) return "Version-aware rows tuned for direct Play update selection.";
-        if (patchedOnlyMode) return "Only HSPatcher-managed installs are shown in this list.";
+        if (patchedOnlyMode) return "Only Frida Packer-managed installs are shown in this list.";
         return "Large touch targets, metadata chips, and fast selection for extraction.";
     }
 
@@ -659,7 +659,7 @@ public class AppListActivity extends Activity {
 
     private String getStatusText(int visibleCount, int totalCount) {
         if (patchedOnlyMode) {
-            if (totalCount == 0) return "No HSPatcher-installed apps found";
+            if (totalCount == 0) return "No Frida Packer-installed apps found";
             if (visibleCount == totalCount) {
                 return totalCount + " patched app" + (totalCount == 1 ? "" : "s")
                     + (directPlayUpdateMode ? " ready for Play update" : " found");
