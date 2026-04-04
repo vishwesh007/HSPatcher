@@ -1,0 +1,122 @@
+plugins {
+    id 'com.android.library'
+    id 'maven-publish'
+}
+
+def sanitizedLibDir = layout.buildDirectory.dir('sanitized-libs')
+
+def sanitizeJar = { String taskName, String jarPath, List<String> excludes ->
+    tasks.register(taskName, Jar) {
+        archiveFileName = new File(jarPath).name
+        destinationDirectory = sanitizedLibDir
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+        from(zipTree(file(jarPath))) {
+            excludes.each { pattern ->
+                exclude pattern
+            }
+        }
+    }
+}
+
+def sanitizedApktoolJar = sanitizeJar('sanitizeApktoolJar', 'libs/apktool_2.9.3.jar', [
+        'org/apache/commons/io/**',
+        'com/google/common/util/concurrent/ListenableFuture.class',
+        'META-INF/maven/com.google.guava/listenablefuture/**'
+])
+
+def sanitizedArscLibJar = sanitizeJar('sanitizeArscLibJar', 'libs/ARSCLib-1.3.8.jar', [
+        'android/**',
+        'org/xmlpull/**'
+])
+
+group = 'in.startv'
+version = '4.0.0'
+
+android {
+    namespace 'in.startv.hspatcher'
+    compileSdk 36
+
+    defaultConfig {
+        minSdk 26
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.importable.xml'
+            java.srcDirs = ['src']
+            res.srcDirs = ['res']
+            assets.srcDirs = ['assets']
+        }
+    }
+
+    buildTypes {
+        debug {
+        }
+
+        release {
+            minifyEnabled false
+        }
+
+        staging {
+            initWith release
+            debuggable true
+            matchingFallbacks = ['release', 'debug']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    lint {
+        abortOnError false
+        targetSdk 36
+    }
+
+    publishing {
+        singleVariant('release') {
+            withSourcesJar()
+        }
+    }
+}
+
+dependencies {
+    implementation files(sanitizedApktoolJar)
+    implementation files(sanitizedArscLibJar)
+    implementation files('libs/apksig-8.7.3.jar')
+}
+
+publishing {
+    publications {
+        release(MavenPublication) {
+            groupId = 'in.startv'
+            artifactId = 'hspatcher'
+            version = project.version
+
+            afterEvaluate {
+                from components.release
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            name = 'localHspatcher'
+            url = layout.buildDirectory.dir('repo')
+        }
+    }
+}
+
+tasks.register('printImportCoordinates') {
+    doLast {
+        println "implementation 'in.startv:hspatcher:${project.version}'"
+        println "Repository: ${layout.buildDirectory.dir('repo').get().asFile}"
+    }
+}
