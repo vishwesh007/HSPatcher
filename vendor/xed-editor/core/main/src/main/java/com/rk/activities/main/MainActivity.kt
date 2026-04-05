@@ -27,6 +27,7 @@ import com.rk.hspatcher.HSPatcherWorkspaceIntegration
 import com.rk.lsp.LspRegistry
 import com.rk.resources.getFilledString
 import com.rk.resources.strings
+import com.rk.settings.AppOrientation
 import com.rk.settings.Settings
 import com.rk.settings.support.handleSupport
 import com.rk.tabs.editor.EditorTab
@@ -79,6 +80,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppOrientation.apply(this)
         isPaused = false
         instance = this
         lifecycleScope.launch(Dispatchers.IO) {
@@ -380,6 +382,7 @@ class MainActivity : AppCompatActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         AppCompatDelegate.setDefaultNightMode(Settings.theme_mode)
+        AppOrientation.apply(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         instance = this

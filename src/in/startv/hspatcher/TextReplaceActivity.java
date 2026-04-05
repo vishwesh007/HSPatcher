@@ -61,6 +61,7 @@ public class TextReplaceActivity extends Activity {
 
     // --- Current file state ---
     private Uri currentUri;
+    private File currentFile;
     private String currentDisplayName;
     private long currentFileSize = -1;
     private Charset detectedCharset = StandardCharsets.UTF_8;
@@ -96,8 +97,24 @@ public class TextReplaceActivity extends Activity {
         applyModernSystemUi();
         buildUi();
 
+        String filePath = getIntent() != null ? getIntent().getStringExtra("file_path") : null;
+        if (filePath != null && !filePath.trim().isEmpty()) {
+            File file = new File(filePath);
+            if (file.isFile()) {
+                openFile(file);
+                return;
+            }
+        }
+
         Uri intentData = getIntent() != null ? getIntent().getData() : null;
         if (intentData != null) {
+            if ("file".equalsIgnoreCase(intentData.getScheme())) {
+                File file = new File(intentData.getPath());
+                if (file.isFile()) {
+                    openFile(file);
+                    return;
+                }
+            }
             openUri(intentData, true);
         }
     }
@@ -426,6 +443,7 @@ public class TextReplaceActivity extends Activity {
         }
 
         currentUri = uri;
+        currentFile = null;
         currentDisplayName = queryDisplayName(uri);
         currentFileSize = queryFileSize(uri);
         isLargeFile = currentFileSize > LARGE_FILE_THRESHOLD;
@@ -436,6 +454,19 @@ public class TextReplaceActivity extends Activity {
         tvFile.setText("Loading: " + nameLabel + " (" + sizeLabel + ")");
 
         loadFileAsync(uri);
+    }
+
+    private void openFile(File file) {
+        if (file == null || !file.isFile()) return;
+        if (isWorking()) { toast("Operation in progress"); return; }
+
+        currentFile = file;
+        currentUri = null;
+        currentDisplayName = file.getName();
+        currentFileSize = file.length();
+        isLargeFile = currentFileSize > LARGE_FILE_THRESHOLD;
+        tvFile.setText("Loading: " + currentDisplayName + " (" + formatSize(currentFileSize) + ")");
+        loadFileAsync(null);
     }
 
     /** Loads the file on a background thread with progress reporting. */
@@ -467,7 +498,7 @@ public class TextReplaceActivity extends Activity {
     private void loadSmallFile(Uri uri) throws IOException {
         long total = currentFileSize > 0 ? currentFileSize : 1;
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
+        try (InputStream in = openInputStream(uri)) {
             if (in == null) throw new IOException("Cannot open file");
             BufferedInputStream bin = new BufferedInputStream(in, 32768);
             byte[] buf = new byte[32768];
@@ -526,7 +557,7 @@ public class TextReplaceActivity extends Activity {
         int previewSize = (int) Math.min(MAX_PREVIEW_BYTES, total);
         byte[] preview = new byte[previewSize];
         int read = 0;
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
+        try (InputStream in = openInputStream(uri)) {
             if (in == null) throw new IOException("Cannot open file");
             BufferedInputStream bin = new BufferedInputStream(in, 32768);
             int n;
@@ -571,12 +602,18 @@ public class TextReplaceActivity extends Activity {
     }
 
     private void saveToCurrent() {
-        if (currentUri == null) { toast("No file loaded. Use SAVE AS."); return; }
         if (isWorking()) { toast("Operation in progress"); return; }
         if (isLargeFile) {
             toast("Large file \u2014 content was not fully loaded. Use Replace All.");
             return;
         }
+
+        if (currentFile != null) {
+            saveToFileAsync(currentFile, etContent.getText().toString(), "Saved");
+            return;
+        }
+
+        if (currentUri == null) { toast("No file loaded. Use SAVE AS."); return; }
         saveAsync(currentUri, etContent.getText().toString(), "Saved");
     }
 
@@ -609,8 +646,7 @@ public class TextReplaceActivity extends Activity {
                     ? detectedCharset : StandardCharsets.UTF_8;
                 byte[] bytes = (text != null ? text : "").getBytes(cs);
                 long total = bytes.length;
-                try (OutputStream out =
-                         getContentResolver().openOutputStream(uri, "wt")) {
+                 try (OutputStream out = openOutputStream(uri)) {
                     if (out == null) throw new IOException("Cannot open output");
                     BufferedOutputStream bos = new BufferedOutputStream(out, 32768);
                     int offset = 0;
@@ -629,6 +665,50 @@ public class TextReplaceActivity extends Activity {
                     setWorkingState(false);
                     toast(successMsg);
                     setStatus(successMsg);
+                });
+            } catch (Exception e) {
+                final String msg = safeMsg(e);
+                mainHandler.post(() -> {
+                    setWorkingState(false);
+                    if (!"Cancelled".equals(msg)) toast("Save failed: " + msg);
+                    setStatus(cancelRequested ? "Save cancelled" : "Save failed");
+                });
+            }
+        }, "FileSaver");
+        workerThread.start();
+    }
+
+    private void saveToFileAsync(File file, String text, String successMsg) {
+        cancelRequested = false;
+        setWorkingState(true);
+        setStatus("Saving...");
+
+        workerThread = new Thread(() -> {
+            try {
+                Charset cs = detectedCharset != null
+                    ? detectedCharset : StandardCharsets.UTF_8;
+                byte[] bytes = (text != null ? text : "").getBytes(cs);
+                long total = Math.max(1, bytes.length);
+                try (BufferedOutputStream bos = new BufferedOutputStream(
+                        new FileOutputStream(file, false), 32768)) {
+                    int offset = 0;
+                    while (offset < bytes.length) {
+                        if (cancelRequested) throw new IOException("Cancelled");
+                        int len = Math.min(32768, bytes.length - offset);
+                        bos.write(bytes, offset, len);
+                        offset += len;
+                        updateProgress((int) (offset * 1000L / total),
+                            "Saving... " + formatSize(offset)
+                                + " / " + formatSize(bytes.length));
+                    }
+                    bos.flush();
+                }
+                currentFileSize = file.length();
+                mainHandler.post(() -> {
+                    setWorkingState(false);
+                    toast(successMsg);
+                    setStatus(successMsg);
+                    tvFile.setText("Loaded: " + file.getName() + " (" + formatSize(file.length()) + ")");
                 });
             } catch (Exception e) {
                 final String msg = safeMsg(e);
@@ -726,7 +806,7 @@ public class TextReplaceActivity extends Activity {
             int firstMatchLine = -1;
             String firstMatchSnippet = null;
 
-            try (InputStream in = getContentResolver().openInputStream(currentUri)) {
+            try (InputStream in = openCurrentInputStream()) {
                 if (in == null) throw new IOException("Cannot open file");
                 BufferedReader reader = new BufferedReader(
                     new InputStreamReader(
@@ -916,7 +996,7 @@ public class TextReplaceActivity extends Activity {
     }
 
     /**
-     * Core large-file handler. Reads from currentUri line-by-line, applies
+    * Core large-file handler. Reads from the current source line-by-line, applies
      * find/replace, writes to a temp cache file, then streams the temp file
      * back to the original URI. Runs entirely on a background thread with
      * two-phase progress (processing + write-back).
@@ -941,8 +1021,7 @@ public class TextReplaceActivity extends Activity {
                 // Phase 1: Read source -> apply replacements -> write to temp
                 updateProgress(0, "Phase 1/2: Processing...");
 
-                try (InputStream in =
-                         getContentResolver().openInputStream(currentUri);
+                try (InputStream in = openCurrentInputStream();
                      BufferedWriter writer = new BufferedWriter(
                          new OutputStreamWriter(
                              new FileOutputStream(tempFile), detectedCharset),
@@ -994,8 +1073,7 @@ public class TextReplaceActivity extends Activity {
 
                 try (InputStream tempIn = new BufferedInputStream(
                          new FileInputStream(tempFile), 65536);
-                     OutputStream out = getContentResolver()
-                         .openOutputStream(currentUri, "wt")) {
+                     OutputStream out = openCurrentOutputStream()) {
 
                     if (out == null) throw new IOException("Cannot write output");
                     BufferedOutputStream bos =
@@ -1025,7 +1103,7 @@ public class TextReplaceActivity extends Activity {
                     toast("Replace All done: " + tr + " replacements");
                     setStatus(tr + " replacements in " + lp + " lines");
                     // Reload to show updated preview
-                    openUri(currentUri, false);
+                    reloadCurrentSource();
                 });
 
             } catch (IOException e) {
@@ -1159,6 +1237,45 @@ public class TextReplaceActivity extends Activity {
             }
         }
         return -1;
+    }
+
+    private InputStream openCurrentInputStream() throws IOException {
+        return openInputStream(currentUri);
+    }
+
+    private InputStream openInputStream(Uri uri) throws IOException {
+        if (currentFile != null) {
+            return new FileInputStream(currentFile);
+        }
+        if (uri == null) {
+            throw new IOException("No file selected");
+        }
+        return getContentResolver().openInputStream(uri);
+    }
+
+    private OutputStream openCurrentOutputStream() throws IOException {
+        if (currentFile != null) {
+            return new FileOutputStream(currentFile, false);
+        }
+        if (currentUri == null) {
+            throw new IOException("No file selected");
+        }
+        return openOutputStream(currentUri);
+    }
+
+    private OutputStream openOutputStream(Uri uri) throws IOException {
+        if (uri == null) {
+            throw new IOException("No output target selected");
+        }
+        return getContentResolver().openOutputStream(uri, "wt");
+    }
+
+    private void reloadCurrentSource() {
+        if (currentFile != null) {
+            openFile(currentFile);
+        } else if (currentUri != null) {
+            openUri(currentUri, false);
+        }
     }
 
     private String queryDisplayName(Uri uri) {

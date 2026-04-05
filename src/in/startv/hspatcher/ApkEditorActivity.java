@@ -106,6 +106,9 @@ public class ApkEditorActivity extends Activity {
     private static final short DECODE_SOURCES_ONLY_MAIN = 16;
     private static final short DECODE_ASSETS_NONE = 0;
     private static final short DECODE_RESOURCES_RAW = 256;
+    private static final int DIRECT_WORKFLOW_UNSET = 0;
+    private static final int DIRECT_WORKFLOW_FAST = 1;
+    private static final int DIRECT_WORKFLOW_SLOW = 2;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<FileEntry> visibleEntries = new ArrayList<>();
@@ -146,6 +149,8 @@ public class ApkEditorActivity extends Activity {
     private File pendingReplaceTarget;
     private boolean busy;
     private boolean directJarWorkflow;
+    private int directWorkflowMode = DIRECT_WORKFLOW_UNSET;
+    private boolean openXedAfterDecode;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -203,7 +208,7 @@ public class ApkEditorActivity extends Activity {
         root.setPadding(pad, pad / 2, pad, pad / 2);
 
         TextView desc = new TextView(this);
-        desc.setText("Decode with APKEditor.jar in Ubuntu, then edit in Xed.");
+        desc.setText("Choose the faster Frida Packer unpack path or keep the slower REAndroid-in-Xed path for compatibility.");
         desc.setTextColor(0xFFCCCCCC);
         desc.setTextSize(13);
         root.addView(desc);
@@ -212,8 +217,22 @@ public class ApkEditorActivity extends Activity {
         spacer.setMinimumHeight(pad);
         root.addView(spacer);
 
-        addChooserButton(root, "\uD83D\uDCF1  Installed app", v -> pickInstalledApp());
-        addChooserButton(root, "\uD83D\uDCC2  APK file", v -> pickApk());
+        addChooserButton(root, "\u26A1  Faster: Installed app -> Frida Packer unpack -> Xed", v -> {
+            directWorkflowMode = DIRECT_WORKFLOW_FAST;
+            pickInstalledApp();
+        });
+        addChooserButton(root, "\u26A1  Faster: APK file -> Frida Packer unpack -> Xed", v -> {
+            directWorkflowMode = DIRECT_WORKFLOW_FAST;
+            pickApk();
+        });
+        addChooserButton(root, "\uD83D\uDC22  Slower: Installed app -> REAndroid in Xed", v -> {
+            directWorkflowMode = DIRECT_WORKFLOW_SLOW;
+            pickInstalledApp();
+        });
+        addChooserButton(root, "\uD83D\uDC22  Slower: APK file -> REAndroid in Xed", v -> {
+            directWorkflowMode = DIRECT_WORKFLOW_SLOW;
+            pickApk();
+        });
 
         if (hasResume) {
             addChooserButton(root, "\u25B6  Resume in Xed", v -> {
@@ -231,10 +250,20 @@ public class ApkEditorActivity extends Activity {
         scrollView.addView(root);
 
         jarChooserDialog = new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog)
-            .setTitle("APKEditor.jar workspace")
+            .setTitle("Choose unpack flow")
             .setView(scrollView)
             .setOnCancelListener(dialog -> finish())
             .show();
+    }
+
+    private void runDirectWorkflowAfterStage() {
+        if (directWorkflowMode == DIRECT_WORKFLOW_FAST) {
+            openXedAfterDecode = true;
+            decodeWorkspace();
+            return;
+        }
+        openXedAfterDecode = false;
+        decodeWorkspaceWithApkEditorJar();
     }
 
     private AlertDialog jarChooserDialog;
@@ -1089,7 +1118,7 @@ public class ApkEditorActivity extends Activity {
                 mainHandler.post(() -> {
                     setBusy(false, "APK ready for decompilation.");
                     if (directJarWorkflow) {
-                        decodeWorkspaceWithApkEditorJar();
+                        runDirectWorkflowAfterStage();
                     } else {
                         showWorkspaceShell();
                         refreshCurrentDirectory();
@@ -1143,7 +1172,7 @@ public class ApkEditorActivity extends Activity {
                 mainHandler.post(() -> {
                     setBusy(false, "Installed app ready.");
                     if (directJarWorkflow) {
-                        decodeWorkspaceWithApkEditorJar();
+                        runDirectWorkflowAfterStage();
                     } else {
                         showWorkspaceShell();
                         refreshCurrentDirectory();
@@ -1207,11 +1236,22 @@ public class ApkEditorActivity extends Activity {
                     setBusy(false, "Workspace ready.");
                     refreshCurrentDirectory();
                     updateBuildButtons();
+                    if (openXedAfterDecode) {
+                        openXedAfterDecode = false;
+                        if (launchXedImportWorkflow()) {
+                            finish();
+                            return;
+                        }
+                        toast("Xed Editor is not available");
+                    }
                 });
             } catch (Throwable e) {
                 logThrowable("Decompile failed", e);
                 log("❌ Decompile failed: " + safeMessage(e));
-                mainHandler.post(() -> setBusy(false, "Decompile failed."));
+                mainHandler.post(() -> {
+                    openXedAfterDecode = false;
+                    setBusy(false, "Decompile failed.");
+                });
             }
         }, "ApkDecode").start();
     }
@@ -1233,9 +1273,9 @@ public class ApkEditorActivity extends Activity {
         builtSignedApk = null;
 
         new Thread(() -> {
-            setBusy(true, "Opening Xed import workflow...");
+            setBusy(true, "Opening slower REAndroid workflow...");
             mainHandler.post(() -> {
-                setBusy(false, "Handing off to Xed.");
+                setBusy(false, "Handing off to Xed REAndroid path.");
                 if (launchXedImportWorkflow()) {
                     finish();
                 } else {

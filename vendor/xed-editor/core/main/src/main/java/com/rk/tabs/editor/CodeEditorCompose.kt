@@ -105,7 +105,7 @@ fun EditorTab.CodeEditor(
                         editorState.contentLoaded.await()
                         editorState.updateLock.withLock {
                             withContext(Dispatchers.Main) {
-                                setText(editorState.content?.toString().orEmpty())
+                                setText(editorState.content)
                                 editorState.contentRendered.complete(Unit)
                             }
                         }

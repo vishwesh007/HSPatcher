@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="unsupported_content">محتوى غير مدعوم</string>
+    <string name="restart_required">إعادة التشغيل مطلوبة</string>
+    <string name="save">حفظ</string>
+    <string name="open_directory">فتح مجلد</string>
+    <string name="new_file">ملف جديد</string>
+    <string name="wait">الرجاء الانتظار…</string>
+    <string name="report_issue">الإبلاغ عن مشكلة</string>
+    <string name="copy">نسخ</string>
+    <string name="save_all">حفظ الكل</string>
+    <string name="undo">تراجع</string>
+    <string name="settings">اعدادات</string>
+</resources>

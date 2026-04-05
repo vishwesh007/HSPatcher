@@ -62,10 +62,10 @@ import com.rk.tabs.base.Tab
 import com.rk.utils.errorDialog
 import com.rk.utils.getTempDir
 import com.rk.utils.hasBinaryChars
-import io.github.rosemoe.sora.text.ContentIO
 import java.lang.ref.WeakReference
 import java.nio.charset.Charset
 import java.nio.file.Paths
+import io.github.rosemoe.sora.text.ContentIO
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -179,7 +179,9 @@ open class EditorTab(override var file: FileObject, var projectRoot: FileObject?
             runCatching {
                 loadEditorConfig()
                 val loadedContent = withContext(Dispatchers.IO) {
-                    file.getInputStream().use { ContentIO.createFrom(it, charset) }
+                    file.useInputStream { stream ->
+                        ContentIO.createFrom(stream, charset)
+                    }
                 }
 
                 editorState.content = loadedContent
@@ -342,12 +344,14 @@ open class EditorTab(override var file: FileObject, var projectRoot: FileObject?
         scope.launch(Dispatchers.IO) {
             if (!file.exists() || !file.canRead()) return@launch
 
-            val newContent = file.getInputStream().use { ContentIO.createFrom(it, charset) }
+            val refreshedContent = file.useInputStream { stream ->
+                ContentIO.createFrom(stream, charset)
+            }
 
             withContext(Dispatchers.Main) {
                 editorState.updateLock.withLock {
-                    editorState.content = newContent
-                    editorState.editor.get()?.setText(newContent.toString())
+                    editorState.content = refreshedContent
+                    editorState.editor.get()?.setText(refreshedContent)
                     editorState.updateUndoRedo()
                     editorState.isDirty = false
                 }
@@ -365,7 +369,7 @@ open class EditorTab(override var file: FileObject, var projectRoot: FileObject?
                         return@withContext
                     }
 
-                    val content = editorState.content.toString()
+                    val content = editorState.editor.get()?.text?.toString().orEmpty()
                     val normalizedContent = editorState.editor.get()!!.lineEnding.applyOn(content)
                     file.writeText(normalizedContent, charset)
 

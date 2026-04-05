@@ -8,8 +8,12 @@ import com.rk.exec.isTerminalInstalled
 import com.rk.file.FileObject
 import com.rk.file.child
 import com.rk.file.sandboxHomeDir
+import com.rk.utils.application
 import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -364,6 +368,9 @@ object HSPatcherWorkspaceIntegration {
         val platformsDir = workspaceDir.child("platforms").child("android-$ANDROID_FRAMEWORK_VERSION")
             .also { it.mkdirs() }
         val projectDir = workspaceDir.child("framework-project").also { it.mkdirs() }
+        val apkEditorJar = toolsDir.child("APKEditor-$APK_EDITOR_VERSION.jar")
+        val sdkJar = platformsDir.child(SDK_JAR_FILE_NAME)
+        val frameworkApk = platformsDir.child(FRAMEWORK_FILE_NAME)
         val readme = projectDir.child("README.txt")
         if (!readme.exists()) {
             readme.writeText(
@@ -374,25 +381,30 @@ object HSPatcherWorkspaceIntegration {
             )
         }
 
+        runCatching {
+            stageReandroidArtifacts(apkEditorJar = apkEditorJar, sdkJar = sdkJar, frameworkApk = frameworkApk)
+        }.onFailure { error ->
+            return Result.failure(IllegalStateException(error.message ?: "Failed to stage REAndroid files", error))
+        }
+
         val shellScript = """
             set -e
             mkdir -p '${escapeForSingleQuotes(toolsDir.absolutePath)}' '${escapeForSingleQuotes(platformsDir.absolutePath)}'
-            if ! command -v curl >/dev/null 2>&1; then
-              apt-get update >/dev/null 2>&1
-              DEBIAN_FRONTEND=noninteractive apt-get install -y curl openjdk-17-jre-headless >/dev/null 2>&1
-            fi
             if ! command -v java >/dev/null 2>&1; then
+              if ! command -v apt-get >/dev/null 2>&1; then
+                echo 'openjdk-17-jre-headless is missing and apt-get is unavailable in the Ubuntu environment' >&2
+                exit 1
+              fi
               apt-get update >/dev/null 2>&1
               DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-17-jre-headless >/dev/null 2>&1
             fi
-                        test -f '${escapeForSingleQuotes(toolsDir.child("APKEditor-$APK_EDITOR_VERSION.jar").absolutePath)}' || \
-                            curl -L '${escapeForSingleQuotes(APK_EDITOR_URL)}' -o '${escapeForSingleQuotes(toolsDir.child("APKEditor-$APK_EDITOR_VERSION.jar").absolutePath)}'
                         STAGED_SDK_JAR="${'$'}{PUBLIC_HOME}/${STAGED_SDK_JAR_RELATIVE_PATH}"
                         if [ -f "${'$'}STAGED_SDK_JAR" ] && [ ! -f '${escapeForSingleQuotes(platformsDir.child(SDK_JAR_FILE_NAME).absolutePath)}' ]; then
                             cp "${'$'}STAGED_SDK_JAR" '${escapeForSingleQuotes(platformsDir.child(SDK_JAR_FILE_NAME).absolutePath)}'
                         fi
                         if [ ! -f '${escapeForSingleQuotes(platformsDir.child(SDK_JAR_FILE_NAME).absolutePath)}' ] && [ ! -f '${escapeForSingleQuotes(platformsDir.child(FRAMEWORK_FILE_NAME).absolutePath)}' ]; then
-                            curl -L '${escapeForSingleQuotes(FRAMEWORK_URL)}' -o '${escapeForSingleQuotes(platformsDir.child(FRAMEWORK_FILE_NAME).absolutePath)}'
+                            echo 'Neither staged android.jar nor staged framework APK is available' >&2
+                            exit 1
                         fi
         """.trimIndent()
 
@@ -417,6 +429,54 @@ object HSPatcherWorkspaceIntegration {
             return sdkJar
         }
         return platformsDir.child(FRAMEWORK_FILE_NAME)
+    }
+
+    private fun stageReandroidArtifacts(apkEditorJar: File, sdkJar: File, frameworkApk: File) {
+        apkEditorJar.parentFile?.mkdirs()
+        frameworkApk.parentFile?.mkdirs()
+
+        if (!apkEditorJar.isFile() || apkEditorJar.length() == 0L) {
+            downloadToFile(APK_EDITOR_URL, apkEditorJar)
+        }
+
+        val externalFilesDir = application?.getExternalFilesDir(null)
+        val stagedSdkJar = externalFilesDir?.let { File(it, STAGED_SDK_JAR_RELATIVE_PATH) }
+        if (!sdkJar.isFile() && stagedSdkJar?.isFile == true) {
+            stagedSdkJar.inputStream().use { input ->
+                BufferedOutputStream(sdkJar.outputStream()).use { output -> input.copyTo(output) }
+            }
+        }
+
+        if (!sdkJar.isFile() && (!frameworkApk.isFile() || frameworkApk.length() == 0L)) {
+            downloadToFile(FRAMEWORK_URL, frameworkApk)
+        }
+    }
+
+    private fun downloadToFile(url: String, destination: File) {
+        destination.parentFile?.mkdirs()
+        val tempFile = File(destination.absolutePath + ".part")
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.instanceFollowRedirects = true
+        connection.connectTimeout = 20_000
+        connection.readTimeout = 120_000
+        connection.requestMethod = "GET"
+        connection.connect()
+        try {
+            if (connection.responseCode !in 200..299) {
+                throw IllegalStateException("Download failed (${connection.responseCode}) for ${destination.name}")
+            }
+            BufferedInputStream(connection.inputStream).use { input ->
+                BufferedOutputStream(tempFile.outputStream()).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (!tempFile.renameTo(destination)) {
+                tempFile.copyTo(destination, overwrite = true)
+                tempFile.delete()
+            }
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun escapeForSingleQuotes(value: String): String {

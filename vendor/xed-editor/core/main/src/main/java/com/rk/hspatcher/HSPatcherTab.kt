@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.List
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -68,8 +69,8 @@ class HSPatcherTab : DrawerTab() {
 
             ToolItem(
                 icon = Icons.Outlined.Edit,
-                title = "APK Editor",
-                description = "Select an installed app → decode → edit workspace",
+                title = "APK Editor (Faster)",
+                description = "Use Frida Packer unpack first, then open the decoded workspace in Xed",
                 onClick = { launchJarWorkflow(context, "in.startv.hspatcher.ApkEditorActivity") }
             )
 
@@ -92,6 +93,26 @@ class HSPatcherTab : DrawerTab() {
                             context.startActivity(intent)
                         } else {
                             toast("No workspace found — use APK Editor first")
+                        }
+                    }
+                }
+            )
+
+            ToolItem(
+                icon = Icons.Outlined.Settings,
+                title = "REAndroid Framework (Slower)",
+                description = "Prepare APKEditor plus Android framework files inside Xed's Ubuntu path",
+                onClick = {
+                    scope.launch(Dispatchers.IO) {
+                        val result = HSPatcherWorkspaceIntegration.prepareFrameworkWorkspace()
+                        result.onSuccess { projectDir ->
+                            launch(Dispatchers.Main) {
+                                toast("REAndroid workspace ready")
+                            }
+                        }.onFailure { error ->
+                            launch(Dispatchers.Main) {
+                                toast(error.message ?: "Failed to prepare REAndroid workspace")
+                            }
                         }
                     }
                 }

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+        </intent>
+        <package android:name="com.apk.editor" />
+        <package android:name="com.apk.explorer" />
+        <package android:name="com.rk.xededitor" />
+    </queries>
+
+    <application>
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <activity
+            android:name=".AppListActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <activity
+            android:name=".ApkSignerActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <activity
+            android:name=".DbEditorActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <activity
+            android:name=".ApkEditorActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <activity
+            android:name=".CreditsActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <activity
+            android:name=".TextReplaceActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize"
+            android:label="Find/Replace"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
+        <provider
+            android:name=".HspFileProvider"
+            android:authorities="${applicationId}.provider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
+        <receiver
+            android:name=".InstallReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="${applicationId}.INSTALL_STATUS" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".PatchForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+</manifest>

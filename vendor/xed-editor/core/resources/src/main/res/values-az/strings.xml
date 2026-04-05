@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="restart_required">Yenidən başlatmaq lazımdır</string>
+    <string name="unsupported_content">Dəstəklənməyən məznun</string>
+    <string name="save">Yadda saxla</string>
+    <string name="share">Paylaş</string>
+    <string name="open_file">Faylı aç</string>
+    <string name="open_with">Bununla aç:</string>
+    <string name="undo">Geri qaytar</string>
+    <string name="settings">Parametrlər</string>
+    <string name="search">Axtar</string>
+    <string name="go_next">Sonrakı get</string>
+    <string name="go_prev">Əvvəlkinə qayıt.</string>
+    <string name="replace">Yerini dəyişdir</string>
+    <string name="new_folder">Yeni Qovluq</string>
+    <string name="rename">Yenidən adlandır</string>
+    <string name="save_as">Fərqli yadda saxla</string>
+    <string name="delete">Sil</string>
+    <string name="close_this">Bunu bağla</string>
+    <string name="close_others">Digərlərini bağla</string>
+    <string name="close_all">Hamısını bağla</string>
+    <string name="close">Bağla</string>
+    <string name="cancel">Ləğv et</string>
+    <string name="apply">Tətbiq et</string>
+    <string name="open_in_terminal">Terminalda aç</string>
+    <string name="download">Yüklə</string>
+    <string name="ok">OLDU</string>
+    <string name="error">Xəta</string>
+    <string name="permission_denied">Icazə rədd edildi</string>
+    <string name="manage_storage">Yaddaşı İdarə Et</string>
+    <string name="manage_storage_reason">Karbon-un yaddaşdakı fayllara düzəliş etməsi üçün icazə lazımdır. Zəhmət olmasa, bir sonrakı sistem parametrində girişə icazə verin.</string>
+    <string name="private_files">Şəxsi Fayllar</string>
+    <string name="private_files_desc">Karbon-un Şəxsi Faylları</string>
+    <string name="internal_storage">Daxili Yaddaş</string>
+    <string name="open_internal_storage">Daxili yaddaşı aç</string>
+</resources>

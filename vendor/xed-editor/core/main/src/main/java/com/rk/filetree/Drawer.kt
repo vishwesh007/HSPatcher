@@ -1,0 +1,762 @@
+package com.rk.filetree
+
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.os.storage.StorageManager
+import androidx.activity.compose.ManagedActivityResultLauncher
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailDefaults
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.rk.DefaultScope
+import com.rk.activities.main.MainActivity
+import com.rk.activities.main.fileTreeViewModel
+import com.rk.activities.main.gitViewModel
+import com.rk.components.AddDialogItem
+import com.rk.components.DoubleInputDialog
+import com.rk.file.FileObject
+import com.rk.file.FileWrapper
+import com.rk.file.child
+import com.rk.file.sandboxHomeDir
+import com.rk.file.toFileObject
+import com.rk.git.GitTab
+import com.rk.git.ProgressCoordinator
+import com.rk.hspatcher.HSPatcherWorkspaceIntegration
+import com.rk.icons.Icon
+import com.rk.icons.XedIcon
+import com.rk.resources.drawables
+import com.rk.resources.getString
+import com.rk.resources.strings
+import com.rk.settings.Settings
+import com.rk.settings.app.InbuiltFeatures
+import com.rk.utils.application
+import com.rk.utils.dialog
+import com.rk.utils.readObject
+import com.rk.utils.toast
+import com.rk.utils.writeObject
+import java.io.File
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+
+object DrawerPersistence {
+    private val saveMutex = Mutex()
+
+    private const val DRAWER_TABS = "drawerTabs"
+    private const val CURRENT_DRAWER_TAB = "currentDrawerTab"
+    private const val EXPANDED_FILE_TREE_NODES = "expandedFileTree"
+
+    suspend fun saveState() {
+        saveMutex.withLock {
+            val file = FileWrapper(application!!.filesDir.child(DRAWER_TABS))
+            val serializableList = ArrayList(drawerTabs)
+            file.writeObject(serializableList)
+
+            val currentTabFile = FileWrapper(application!!.filesDir.child(CURRENT_DRAWER_TAB))
+            if (currentDrawerTab != null) {
+                currentTabFile.writeObject(currentDrawerTab!!)
+            } else {
+                currentTabFile.delete()
+            }
+
+            val expandedNodeFile = FileWrapper(application!!.filesDir.child(EXPANDED_FILE_TREE_NODES))
+            fileTreeViewModel.get()?.getExpandedNodes()?.let { expandedNodeFile.writeObject(it) }
+        }
+    }
+
+    suspend fun restoreState() {
+        saveMutex.withLock {
+            runCatching {
+                    data class RestoredDrawerState(
+                        val tabs: List<DrawerTab>,
+                        val currentTab: DrawerTab?,
+                        val expandedNodes: Map<FileObject, Boolean>?,
+                    )
+
+                    val restoredState =
+                        withContext(Dispatchers.IO) {
+                            val tabsFile = FileWrapper(application!!.filesDir.child(DRAWER_TABS))
+                            val currentTabFile = FileWrapper(application!!.filesDir.child(CURRENT_DRAWER_TAB))
+                            val expandedNodeFile = FileWrapper(application!!.filesDir.child(EXPANDED_FILE_TREE_NODES))
+
+                            val loadedTabs =
+                                if (tabsFile.exists() && tabsFile.canRead()) {
+                                    tabsFile.readObject() as? ArrayList<DrawerTab> ?: emptyList()
+                                } else {
+                                    emptyList()
+                                }
+
+                            val currentTab =
+                                if (currentTabFile.exists() && currentTabFile.canRead()) {
+                                    currentTabFile.readObject() as? DrawerTab
+                                } else {
+                                    null
+                                }
+
+                            val expandedNodes =
+                                if (expandedNodeFile.exists() && expandedNodeFile.canRead()) {
+                                    expandedNodeFile.readObject() as? Map<FileObject, Boolean>
+                                } else {
+                                    null
+                                }
+
+                            RestoredDrawerState(loadedTabs, currentTab, expandedNodes)
+                        }
+
+                    // Update the existing state list on Main thread
+                    withContext(Dispatchers.Main) {
+                        drawerTabs.clear()
+                        drawerTabs.addAll(restoredState.tabs)
+                        restoredState.currentTab?.let(::selectTab)
+                        restoredState.expandedNodes?.let { nodes ->
+                            fileTreeViewModel.get()?.setExpandedNodes(nodes)
+                        }
+                    }
+                }
+                .onFailure {
+                    it.printStackTrace()
+                    toast(strings.project_restore_failed)
+                }
+        }
+    }
+}
+
+fun createServices() {
+    serviceTabs.clear()
+    serviceTabs.add(GitTab(gitViewModel.get()!!))
+    serviceTabs.add(com.rk.hspatcher.HSPatcherTab())
+}
+
+var drawerTabs = mutableStateListOf<DrawerTab>()
+var serviceTabs = mutableStateListOf<DrawerTab>()
+var currentDrawerTab by mutableStateOf<DrawerTab?>(null)
+var currentServiceTab by mutableStateOf<DrawerTab?>(null)
+
+@OptIn(DelicateCoroutinesApi::class)
+fun addProject(fileObject: FileObject, save: Boolean = false) {
+    val alreadyExistingProject = drawerTabs.find { it is FileTreeTab && it.root == fileObject }
+    if (alreadyExistingProject != null) {
+        selectTab(alreadyExistingProject)
+        return
+    }
+    val tab = FileTreeTab(fileObject)
+    tab.onAdded()
+    drawerTabs.add(tab)
+    selectTab(tab)
+    if (save) {
+        GlobalScope.launch(Dispatchers.IO) { DrawerPersistence.saveState() }
+    }
+}
+
+@OptIn(DelicateCoroutinesApi::class)
+fun addProject(tab: DrawerTab, save: Boolean = false) {
+    tab.onAdded()
+    drawerTabs.add(tab)
+    selectTab(tab)
+    if (save) {
+        GlobalScope.launch(Dispatchers.IO) { DrawerPersistence.saveState() }
+    }
+}
+
+@OptIn(DelicateCoroutinesApi::class)
+fun removeProject(fileObject: FileObject, save: Boolean = false) {
+    val index = drawerTabs.indexOfFirst { it is FileTreeTab && it.root == fileObject }
+    if (index == -1) return
+
+    if (currentDrawerTab == drawerTabs[index]) {
+        val tabBefore = drawerTabs.getOrNull(index - 1)
+        val tabAfter = drawerTabs.getOrNull(index + 1)
+        selectTab(tabBefore ?: tabAfter)
+    }
+
+    drawerTabs[index].onRemoved()
+    drawerTabs.removeAt(index)
+
+    if (save) {
+        GlobalScope.launch(Dispatchers.IO) { DrawerPersistence.saveState() }
+    }
+}
+
+@OptIn(DelicateCoroutinesApi::class)
+fun removeProject(tab: DrawerTab, save: Boolean = false) {
+    val index = drawerTabs.indexOf(tab)
+    if (index == -1) return
+
+    if (currentDrawerTab == drawerTabs[index]) {
+        val tabBefore = drawerTabs.getOrNull(index - 1)
+        val tabAfter = drawerTabs.getOrNull(index + 1)
+        selectTab(tabBefore ?: tabAfter)
+    }
+
+    drawerTabs[index].onRemoved()
+    drawerTabs.removeAt(index)
+
+    if (save) {
+        GlobalScope.launch(Dispatchers.IO) { DrawerPersistence.saveState() }
+    }
+}
+
+fun validateValue(value: String): String? {
+    return when {
+        value.isBlank() -> strings.value_empty_err.getString()
+        else -> null
+    }
+}
+
+fun selectTab(tab: DrawerTab?) {
+    currentDrawerTab = tab
+    currentServiceTab = null
+}
+
+fun selectServiceTab(tab: DrawerTab?) {
+    currentServiceTab = tab
+}
+
+var isLoading by mutableStateOf(true)
+
+@Composable
+fun DrawerContent(fullscreen: Boolean) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    val openFolder =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.OpenDocumentTree(),
+            onResult = { uri ->
+                uri?.let {
+                    runCatching {
+                            // Persist access permissions (required for Android 5.0+)
+                            context.contentResolver.takePersistableUriPermission(
+                                it,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                            )
+                        }
+                        .onFailure { it.printStackTrace() }
+
+                    scope.launch { addProject(it.toFileObject(expectedIsFile = false)) }
+                }
+            },
+        )
+
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (isLoading) {
+            CircularProgressIndicator()
+        } else {
+            Row(horizontalArrangement = Arrangement.Start, modifier = Modifier.fillMaxSize()) {
+                val scope = rememberCoroutineScope()
+                var showAddDialog by rememberSaveable { mutableStateOf(false) }
+                var closeProjectDialog by remember { mutableStateOf(false) }
+
+                // Git clone dialog
+                var showGitCloneDialog by remember { mutableStateOf(false) }
+
+                var repoURL by remember { mutableStateOf("") }
+                var repoBranch by remember { mutableStateOf("main") }
+
+                var repoURLError by remember { mutableStateOf<String?>(null) }
+                var repoBranchError by remember { mutableStateOf<String?>(null) }
+
+                // Git clone progress dialog
+                var showCloneProgressDialog by remember { mutableStateOf(false) }
+                var progress by remember { mutableIntStateOf(0) }
+                var maxProgress by remember { mutableIntStateOf(0) }
+                var message by remember { mutableStateOf(strings.cloning.getString()) }
+
+                val monitor = remember {
+                    object : ProgressCoordinator {
+                        private var cancelled = false
+
+                        override fun start(totalTasks: Int) {}
+
+                        override fun beginTask(title: String?, totalWork: Int) {
+                            message = title ?: strings.cloning.getString()
+                            maxProgress = totalWork
+                            progress = 0
+                        }
+
+                        override fun update(completed: Int) {
+                            progress += completed
+                        }
+
+                        override fun cancel() {
+                            cancelled = true
+                            hideDialog()
+                        }
+
+                        override fun endTask() {}
+
+                        override fun isCancelled(): Boolean = cancelled || Thread.currentThread().isInterrupted
+
+                        override fun showDialog() {
+                            showCloneProgressDialog = true
+                            progress = 0
+                            maxProgress = 0
+                            message = strings.cloning.getString()
+                        }
+
+                        override fun hideDialog() {
+                            showCloneProgressDialog = false
+                        }
+                    }
+                }
+
+                val cloneGitRepo =
+                    rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.OpenDocumentTree(),
+                        onResult = { uri ->
+                            uri?.let {
+                                runCatching {
+                                        context.contentResolver.takePersistableUriPermission(
+                                            it,
+                                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                                        )
+                                    }
+                                    .onFailure { it.printStackTrace() }
+                                scope.launch {
+                                    val fileObject =
+                                        it.toFileObject(expectedIsFile = false)
+                                            .createChild(
+                                                false,
+                                                repoURL.substringAfterLast("/").substringBeforeLast("."),
+                                            )
+                                    gitViewModel
+                                        .get()
+                                        ?.cloneRepository(
+                                            repoURL = repoURL,
+                                            repoBranch = repoBranch,
+                                            targetDir = File(fileObject!!.getAbsolutePath()),
+                                            progressCoordinator = monitor,
+                                            onComplete = { success ->
+                                                repoURL = ""
+                                                repoBranch = "main"
+                                                repoURLError = null
+                                                repoBranchError = null
+                                                if (success) {
+                                                    addProject(fileObject)
+                                                }
+                                            },
+                                        )
+                                }
+                            }
+                        },
+                    )
+
+                val lazyListState = rememberLazyListState()
+                val showHorizontalDivider by remember { derivedStateOf { lazyListState.canScrollForward } }
+
+                NavigationRail(
+                    modifier = Modifier.width(61.dp),
+                    windowInsets = if (fullscreen) WindowInsets() else NavigationRailDefaults.windowInsets,
+                ) {
+                    Column(modifier = Modifier.fillMaxHeight()) {
+                        LazyColumn(modifier = Modifier.weight(1f, fill = true), state = lazyListState) {
+                            items(drawerTabs) { tab ->
+                                if (!tab.isSupported()) return@items
+                                NavigationRailItem(
+                                    selected = currentDrawerTab == tab,
+                                    icon = { XedIcon(tab.getIcon()) },
+                                    onClick = {
+                                        if (currentDrawerTab == tab && currentServiceTab == null) {
+                                            closeProjectDialog = true
+                                        } else {
+                                            selectTab(tab)
+                                        }
+                                    },
+                                    label = { Text(tab.getName(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    colors =
+                                        NavigationRailItemDefaults.colors().let {
+                                            if (currentServiceTab == null) it
+                                            else
+                                                it.copy(
+                                                    selectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    selectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    selectedIndicatorColor =
+                                                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                                                )
+                                        },
+                                    enabled = tab.isEnabled(),
+                                )
+                            }
+
+                            item {
+                                NavigationRailItem(
+                                    selected = false,
+                                    icon = { Icon(imageVector = Icons.Outlined.Add, contentDescription = null) },
+                                    onClick = { showAddDialog = true },
+                                    label = { Text(stringResource(strings.add)) },
+                                )
+                            }
+                        }
+
+                        if (showHorizontalDivider) HorizontalDivider()
+
+                        Column(modifier = Modifier.wrapContentHeight().padding(vertical = 8.dp)) {
+                            serviceTabs.forEach { tab ->
+                                if (!tab.isSupported()) return@forEach
+                                NavigationRailItem(
+                                    selected = currentServiceTab == tab,
+                                    icon = { XedIcon(icon = tab.getIcon()) },
+                                    onClick = {
+                                        if (currentServiceTab == tab) {
+                                            selectServiceTab(null)
+                                        } else {
+                                            selectServiceTab(tab)
+                                        }
+                                    },
+                                    label = { Text(tab.getName(), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    enabled = tab.isEnabled(),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                VerticalDivider()
+
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    val activeDrawerTab = currentServiceTab ?: currentDrawerTab
+                    Crossfade(targetState = activeDrawerTab, label = "drawer content") { tab ->
+                        if (tab != null) {
+                            tab.Content(modifier = Modifier.fillMaxSize())
+                        } else {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Icon(
+                                    painter = painterResource(drawables.outline_folder),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    stringResource(strings.no_folder_opened),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(
+                                    onClick = {
+                                        selectServiceTab(
+                                            serviceTabs.firstOrNull { it is com.rk.hspatcher.HSPatcherTab }
+                                                ?: com.rk.hspatcher.HSPatcherTab().also {
+                                                    serviceTabs.add(it)
+                                                }
+                                        )
+                                    }
+                                ) {
+                                    Text("Open HSPatcher Tools")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (showAddDialog) {
+                    AddProjectDialog(
+                        onDismiss = { showAddDialog = false },
+                        openFolder = openFolder,
+                        onAddProject = { fileObject -> scope.launch { addProject(fileObject, true) } },
+                        showPrivateFileWarning = { callback ->
+                            dialog(
+                                title = strings.attention.getString(),
+                                msg = strings.warning_private_dir.getString(),
+                                onOk = { callback.invoke() },
+                            )
+                        },
+                        showGitCloneDialog = {
+                            showAddDialog = false
+                            showGitCloneDialog = true
+                        },
+                    )
+                }
+
+                if (showCloneProgressDialog) {
+                    AlertDialog(
+                        title = { Text(stringResource(strings.cloning)) },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Text(
+                                    text = "$message ($progress/$maxProgress)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                LinearProgressIndicator(
+                                    progress = { if (maxProgress > 0) progress.toFloat() / maxProgress else 0f }
+                                )
+                            }
+                        },
+                        onDismissRequest = {},
+                        confirmButton = {},
+                        dismissButton = { TextButton({ monitor.cancel() }) { Text(stringResource(strings.cancel)) } },
+                    )
+                }
+
+                if (showGitCloneDialog) {
+                    DoubleInputDialog(
+                        title = stringResource(strings.clone_repo),
+                        firstInputLabel = stringResource(strings.repo_url),
+                        firstInputValue = repoURL,
+                        onFirstInputValueChange = {
+                            repoURL = it
+                            repoURLError = validateValue(repoURL)
+                        },
+                        secondInputLabel = stringResource(strings.branch),
+                        secondInputValue = repoBranch,
+                        onSecondInputValueChange = {
+                            repoBranch = it
+                            repoBranchError = validateValue(repoBranch)
+                        },
+                        firstErrorMessage = repoURLError,
+                        secondErrorMessage = repoBranchError,
+                        onConfirm = {
+                            showGitCloneDialog = false
+                            cloneGitRepo.launch(null)
+                        },
+                        onDismiss = {
+                            showGitCloneDialog = false
+                            repoURL = ""
+                            repoBranch = "main"
+                            repoURLError = null
+                            repoBranchError = null
+                        },
+                        confirmText = stringResource(strings.ok),
+                        confirmEnabled = repoURLError == null && repoBranchError == null && repoURL.isNotBlank(),
+                    )
+                }
+
+                if (closeProjectDialog && currentDrawerTab != null) {
+                    ProjectCloseConfirmationDialog(
+                        projectName = currentDrawerTab!!.getName(),
+                        onConfirm = {
+                            closeProjectDialog = false
+                            removeProject(currentDrawerTab!!)
+                        },
+                        onDismiss = { closeProjectDialog = false },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddProjectDialog(
+    onDismiss: () -> Unit,
+    onAddProject: (FileObject) -> Unit,
+    openFolder: ManagedActivityResultLauncher<Uri?, Uri?>,
+    showPrivateFileWarning: (onOK: () -> Unit) -> Unit,
+    showGitCloneDialog: () -> Unit,
+) {
+    val context = LocalContext.current
+    val activity = context as? MainActivity
+    val lifecycleScope = remember { activity?.lifecycleScope ?: DefaultScope }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp, top = 0.dp)) {
+            AddDialogItem(
+                icon = Icon.DrawableRes(drawables.file_symlink),
+                title = stringResource(strings.open_directory),
+                description = stringResource(strings.open_dir_desc),
+                onClick = {
+                    openFolder.launch(null)
+                    onDismiss()
+                },
+            )
+
+            // Open Path option
+            val is11Plus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+            val isManager = is11Plus && Environment.isExternalStorageManager()
+            val legacyPermission =
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) !=
+                    PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                        PackageManager.PERMISSION_GRANTED
+
+            val storage = Environment.getExternalStorageDirectory()
+            if ((isManager || (!is11Plus && legacyPermission)) && storage.canWrite() && storage.canRead()) {
+                AddDialogItem(
+                    icon = Icon.DrawableRes(drawables.android),
+                    title = stringResource(strings.internal_storage),
+                    description = stringResource(strings.open_internal_storage),
+                    onClick = {
+                        addProject(FileWrapper(storage))
+                        onDismiss()
+                    },
+                )
+            }
+
+            if (isManager) {
+                val storageManager = context.getSystemService(StorageManager::class.java)
+                val volumes = storageManager.storageVolumes
+
+                volumes.forEach { volume ->
+                    val root = volume.directory ?: return@forEach
+                    if (root == storage) return@forEach
+                    if (!root.canRead() || !root.canWrite() || root.listFiles() == null) return@forEach
+
+                    val name = volume.getDescription(context)
+                    val removable = volume.isRemovable
+                    val description = if (removable) strings.open_removable_storage else strings.open_internal_storage
+
+                    AddDialogItem(
+                        icon = Icon.DrawableRes(drawables.sd_card),
+                        title = name,
+                        description = stringResource(description),
+                    ) {
+                        addProject(FileWrapper(root))
+                        onDismiss()
+                    }
+                }
+            }
+
+            if (InbuiltFeatures.debugMode.state.value) {
+                AddDialogItem(
+                    icon = Icon.DrawableRes(drawables.build),
+                    title = stringResource(strings.private_files),
+                    description = stringResource(strings.private_files_desc),
+                    onClick = {
+                        if (!Settings.has_shown_private_data_dir_warning) {
+                            showPrivateFileWarning {
+                                Settings.has_shown_private_data_dir_warning = true
+                                lifecycleScope.launch { onAddProject(FileWrapper(activity!!.filesDir.parentFile!!)) }
+                            }
+                        } else {
+                            lifecycleScope.launch { onAddProject(FileWrapper(activity!!.filesDir.parentFile!!)) }
+                        }
+                        onDismiss()
+                    },
+                )
+            }
+
+            // Clone repository option
+            if (InbuiltFeatures.git.state.value) {
+                AddDialogItem(
+                    icon = Icon.DrawableRes(drawables.git),
+                    title = stringResource(strings.clone_repo),
+                    description = stringResource(strings.clone_repo_desc),
+                    onClick = {
+                        showGitCloneDialog()
+                        onDismiss()
+                    },
+                )
+            }
+
+            AddDialogItem(
+                icon = Icon.DrawableRes(drawables.build),
+                title = "HSPatcher Tools",
+                description = "Open the merged HSPatcher toolkit",
+                onClick = {
+                    selectServiceTab(
+                        serviceTabs.firstOrNull { it is com.rk.hspatcher.HSPatcherTab }
+                            ?: com.rk.hspatcher.HSPatcherTab().also { serviceTabs.add(it) }
+                    )
+                    onDismiss()
+                },
+            )
+
+            AddDialogItem(
+                icon = Icon.DrawableRes(drawables.file_symlink),
+                title = "APK Editor Projects",
+                description = "Open the app-data folder that stores APKEditor.jar extracted workspaces",
+                onClick = {
+                    lifecycleScope.launch {
+                        onAddProject(FileWrapper(HSPatcherWorkspaceIntegration.createWorkspaceBaseDir(context)))
+                    }
+                    onDismiss()
+                },
+            )
+
+            HSPatcherWorkspaceIntegration.getLatestWorkspaceDir(context)?.let { latestWorkspace ->
+                AddDialogItem(
+                    icon = Icon.DrawableRes(drawables.build),
+                    title = "Latest APK Editor Project",
+                    description = latestWorkspace.name,
+                    onClick = {
+                        lifecycleScope.launch { onAddProject(FileWrapper(latestWorkspace)) }
+                        onDismiss()
+                    },
+                )
+            }
+
+            // Terminal Home option
+            AddDialogItem(
+                icon = Icon.DrawableRes(drawables.terminal),
+                title = stringResource(strings.terminal_home),
+                description = stringResource(strings.terminal_home_desc),
+                onClick = {
+                    if (!Settings.has_shown_terminal_dir_warning) {
+                        showPrivateFileWarning {
+                            Settings.has_shown_terminal_dir_warning = true
+                            lifecycleScope.launch { onAddProject(FileWrapper(sandboxHomeDir())) }
+                        }
+                    } else {
+                        lifecycleScope.launch { onAddProject(FileWrapper(sandboxHomeDir())) }
+                    }
+                    onDismiss()
+                },
+            )
+        }
+    }
+}

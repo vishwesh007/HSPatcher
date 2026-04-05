@@ -73,6 +73,58 @@ pwsh -ExecutionPolicy Bypass -File build.ps1 -Clean
 5. **zipalign** — Optimize APK alignment
 6. **apksigner** — Sign with v1+v2+v3
 
+## 📚 Gradle Import
+
+HSPatcher now also includes a Gradle library wrapper so another Android app can import the existing codebase instead of shelling out to the custom PowerShell build.
+
+### What the Gradle wrapper does
+- Builds HSPatcher as an Android library (`AAR`)
+- Reuses the existing `src/`, `res/`, `assets/`, and `libs/` folders without relocating files
+- Uses `AndroidManifest.importable.xml` so host apps do not inherit HSPatcher's standalone launcher, icon, label, or app theme
+- Publishes a local Maven repository under `build/repo`
+
+### Standalone Gradle tasks
+
+```powershell
+# Build the importable release AAR
+gradle assembleRelease
+
+# Publish to a local Maven-style repository at build/repo
+gradle publishReleasePublicationToLocalHspatcherRepository
+```
+
+### Import into another Gradle app
+
+Option 1: include HSPatcher as a project dependency
+
+```groovy
+include(":hspatcher")
+project(":hspatcher").projectDir = file("../HSPatcher")
+```
+
+```groovy
+dependencies {
+  implementation project(":hspatcher")
+}
+```
+
+Option 2: publish and consume the AAR
+
+```groovy
+repositories {
+  maven { url = uri("../HSPatcher/build/repo") }
+}
+
+dependencies {
+  implementation "in.startv:hspatcher:3.61.1"
+}
+```
+
+### Host-app integration notes
+- The importable manifest uses `${applicationId}.provider` and `${applicationId}.INSTALL_STATUS`, so the module adapts to the host app package automatically.
+- `MainActivity` is registered without a launcher intent filter in the importable manifest. Host apps should open it explicitly.
+- The original `AndroidManifest.xml` and `build.ps1` flow are still intact for the standalone APK build.
+
 ## 📁 Project Structure
 
 ```

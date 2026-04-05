@@ -5,30 +5,35 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Background circle -->
     <path
-        android:fillColor="#FF121212"
+        android:fillColor="#FF09141A"
         android:pathData="M54,54m-54,0a54,54 0,1 1,108 0a54,54 0,1 1,-108 0" />
 
-    <!-- Shield shape -->
     <path
-        android:fillColor="#FF1B5E20"
-        android:pathData="M54,18 L82,30 L82,54 C82,72 68,86 54,92 C40,86 26,72 26,54 L26,30 Z" />
+        android:fillColor="#FF13313A"
+        android:pathData="M54,16 L83,28 L83,54 C83,73 68,87 54,93 C40,87 25,73 25,54 L25,28 Z" />
 
-    <!-- Shield inner -->
     <path
-        android:fillColor="#FF2E7D32"
-        android:pathData="M54,22 L78,32 L78,54 C78,70 66,82 54,88 C42,82 30,70 30,54 L30,32 Z" />
+        android:fillColor="#FF0D2128"
+        android:pathData="M54,20 L79,30 L79,53 C79,70 66,83 54,89 C42,83 29,70 29,53 L29,30 Z" />
 
-    <!-- Lightning bolt -->
     <path
-        android:fillColor="#FF00E676"
-        android:pathData="M58,32 L44,58 L54,58 L50,78 L68,48 L56,48 Z" />
+        android:fillColor="#FF39D9B4"
+        android:pathData="M54,24 L74,33 L74,52 C74,66 63,77 54,82 C45,77 34,66 34,52 L34,33 Z" />
 
-    <!-- Small gear/cog accent top-right -->
     <path
-        android:fillColor="#FF00E676"
-        android:strokeColor="#FF00E676"
-        android:strokeWidth="1.5"
-        android:pathData="M76,24 L78,20 L80,24 L84,22 L82,26 L86,28 L82,30 L84,34 L80,32 L78,36 L76,32 L72,34 L74,30 L70,28 L74,26 L72,22 Z" />
+        android:fillColor="#99FFFFFF"
+        android:pathData="M54,28 L68,34 L68,38 L40,38 L40,34 Z" />
+
+    <path
+        android:fillColor="#FFFFD66B"
+        android:pathData="M57,35 L47,54 L54,54 L50,71 L64,46 L56,46 Z" />
+
+    <path
+        android:fillColor="#FF0D2128"
+        android:pathData="M74,18 L76,15 L78,18 L82,17 L81,21 L84,24 L81,27 L82,31 L78,30 L76,33 L74,30 L70,31 L71,27 L68,24 L71,21 L70,17 Z" />
+
+    <path
+        android:fillColor="#FFFFD66B"
+        android:pathData="M74,19 L75.1,17 L76.2,19 L78.5,18.7 L77.8,20.8 L79.6,22.4 L77.6,23.6 L78,25.9 L76,25.1 L74,25.9 L74.4,23.6 L72.4,22.4 L74.2,20.8 L73.5,18.7 Z" />
 </vector>

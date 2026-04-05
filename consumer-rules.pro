@@ -1,0 +1,1 @@
+# Consumer rules for hosts that embed the HSPatcher library.

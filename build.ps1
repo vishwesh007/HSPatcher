@@ -196,6 +196,16 @@ if (Test-Path $assetsDir) {
     & jar -uf $unsignedApk "assets/extra.zip" 2>&1
     Write-Host "  Added assets/extra.zip" -ForegroundColor Green
 
+    $bundledEditorDir = Join-Path $PROJECT "assets\apkeditor"
+    if (Test-Path $bundledEditorDir) {
+        Get-ChildItem $bundledEditorDir -Filter "*.apk" | ForEach-Object {
+            $assetPath = "assets/apkeditor/$($_.Name)"
+            & jar -uf $unsignedApk $assetPath 2>&1
+            $assetSizeMB = [math]::Round($_.Length / 1MB, 1)
+            Write-Host "  Added bundled editor asset $($_.Name) ($assetSizeMB MB)" -ForegroundColor Green
+        }
+    }
+
     # Add SignatureKiller native libs
     $sigkillDir = Join-Path $PROJECT "assets\sigkill"
     if (Test-Path $sigkillDir) {

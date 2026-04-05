@@ -12,6 +12,8 @@ android {
     namespace = "com.rk.application"
     compileSdk = 36
 
+    val localHspatcherKeystore = rootProject.file("../../hspatcher.jks")
+
     defaultConfig {
         applicationId = "in.startv.hspatcher"
         minSdk = 26
@@ -22,7 +24,7 @@ android {
         // versioning
         versionCode = 400
         versionName = "4.0.0"
-        resValue("string", "app_name", "HSPatcher")
+        resValue("string", "app_name", "Frida Packer")
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -47,38 +49,52 @@ android {
 
     signingConfigs {
         create("release") {
-            val isGitHubActions = System.getenv("GITHUB_ACTIONS") == "true"
+            if (localHspatcherKeystore.exists()) {
+                storeFile = localHspatcherKeystore
+                storePassword = "hspatcher123"
+                keyAlias = "hspatcher"
+                keyPassword = "hspatcher123"
+            } else {
+                val isGitHubActions = System.getenv("GITHUB_ACTIONS") == "true"
 
-            val propertiesFilePath =
-                if (isGitHubActions) {
-                    "/tmp/signing.properties"
-                } else {
-                    "/home/rohit/Android/xed-signing/signing.properties"
-                }
-
-            val propertiesFile = File(propertiesFilePath)
-            if (propertiesFile.exists()) {
-                val properties = Properties()
-                properties.load(propertiesFile.inputStream())
-                keyAlias = properties["keyAlias"] as String?
-                keyPassword = properties["keyPassword"] as String?
-                storeFile =
+                val propertiesFilePath =
                     if (isGitHubActions) {
-                        File("/tmp/xed.keystore")
+                        "/tmp/signing.properties"
                     } else {
-                        (properties["storeFile"] as String?)?.let { File(it) }
+                        "/home/rohit/Android/xed-signing/signing.properties"
                     }
 
-                storePassword = properties["storePassword"] as String?
-            } else {
-                println("Signing properties file not found at $propertiesFilePath")
+                val propertiesFile = File(propertiesFilePath)
+                if (propertiesFile.exists()) {
+                    val properties = Properties()
+                    properties.load(propertiesFile.inputStream())
+                    keyAlias = properties["keyAlias"] as String?
+                    keyPassword = properties["keyPassword"] as String?
+                    storeFile =
+                        if (isGitHubActions) {
+                            File("/tmp/xed.keystore")
+                        } else {
+                            (properties["storeFile"] as String?)?.let { File(it) }
+                        }
+
+                    storePassword = properties["storePassword"] as String?
+                } else {
+                    println("Signing properties file not found at $propertiesFilePath")
+                }
             }
         }
         getByName("debug") {
-            storeFile = file(layout.buildDirectory.dir("../testkey.keystore"))
-            storePassword = "testkey"
-            keyAlias = "testkey"
-            keyPassword = "testkey"
+            if (localHspatcherKeystore.exists()) {
+                storeFile = localHspatcherKeystore
+                storePassword = "hspatcher123"
+                keyAlias = "hspatcher"
+                keyPassword = "hspatcher123"
+            } else {
+                storeFile = file(layout.buildDirectory.dir("../testkey.keystore"))
+                storePassword = "testkey"
+                keyAlias = "testkey"
+                keyPassword = "testkey"
+            }
         }
     }
 
@@ -93,9 +109,9 @@ android {
         }
 
         debug {
-            applicationIdSuffix = ".debug"
             versionNameSuffix = "-DEBUG"
-            resValue("string", "app_name", "HSPatcher-Debug")
+            resValue("string", "app_name", "Frida Packer")
+            signingConfig = signingConfigs.getByName("debug")
         }
 
         create("benchmark") {

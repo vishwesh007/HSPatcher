@@ -58,3 +58,4 @@ patch_net201.py
 # Instruction files (user communication)
 instructions.txt
 INSTRUCTIONS.txt
+.gradle-dist/
